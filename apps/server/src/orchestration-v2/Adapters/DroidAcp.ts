@@ -8,6 +8,7 @@ import {
   findDroidSessionFile,
   readDroidSubagentSession,
   readDroidSubagentSteps,
+  readDroidWakeReply,
 } from "../../provider/acp/DroidSessionTranscript.ts";
 import type { AcpAdapterV2Flavor, AcpAdapterV2SubagentUpdate } from "./AcpAdapterV2.ts";
 
@@ -57,6 +58,47 @@ export function extractDroidSubagentUpdate(
     result: status === "running" ? null : text(output.replace(REPORT_HEADER, "")),
   };
 }
+
+// Droid's own wake turn is a model turn, so it can run tools first. Past this, the wake is dropped
+// rather than left waiting on a parent session that may never answer.
+const WAKE_REPLY_TIMEOUT = Duration.minutes(5);
+
+/**
+ * Resolves with Droid's reply to its own "Background task completed" turn in the parent session, or
+ * `undefined` when there is none (empty reply, unreadable file, or the timeout above). The watcher
+ * starts before the first read so a reply landing between the two is still seen.
+ */
+export const awaitDroidWakeReply =
+  (input: {
+    readonly fileSystem: FileSystem.FileSystem;
+    readonly environment: NodeJS.ProcessEnv;
+  }): NonNullable<AcpAdapterV2Flavor["awaitParentWakeReply"]> =>
+  ({ rootSessionId, childSessionId }) =>
+    Effect.gen(function* () {
+      const file = yield* findDroidSessionFile({
+        sessionId: rootSessionId,
+        environment: input.environment,
+      });
+      if (file === undefined) return undefined;
+      const reply = yield* Stream.merge(
+        input.fileSystem.watch(file).pipe(Stream.debounce(Duration.millis(200))),
+        Stream.make(undefined),
+      ).pipe(
+        Stream.mapEffect(() =>
+          readDroidWakeReply({
+            sessionId: rootSessionId,
+            childSessionId,
+            environment: input.environment,
+          }),
+        ),
+        Stream.filter((text) => text !== undefined),
+        Stream.take(1),
+        Stream.runHead,
+        Effect.timeoutOption(WAKE_REPLY_TIMEOUT),
+      );
+      if (reply._tag === "None" || reply.value._tag === "None") return undefined;
+      return reply.value.value ?? undefined;
+    }).pipe(Effect.catch(() => Effect.succeed(undefined)));
 
 export const readDroidSubagentStepsFor =
   (input: {

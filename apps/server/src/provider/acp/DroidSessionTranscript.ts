@@ -166,6 +166,78 @@ function subagentSteps(
   });
 }
 
+// A parent session can be tens of MB, and the wake turn is always at its end.
+const WAKE_TAIL_BYTES = 1_048_576;
+
+const readSessionTailRows = Effect.fn("readDroidSessionTailRows")(
+  function* (input: { readonly sessionId: string; readonly environment: NodeJS.ProcessEnv }) {
+    const file = yield* findDroidSessionFile(input);
+    if (file === undefined) return [];
+    const tail = yield* Effect.tryPromise(async () => {
+      const handle = await NodeFSP.open(file, "r");
+      try {
+        const { size } = await handle.stat();
+        const start = Math.max(0, size - WAKE_TAIL_BYTES);
+        const buffer = Buffer.alloc(size - start);
+        await handle.read(buffer, 0, buffer.length, start);
+        const text = buffer.toString("utf8");
+        // Reading from mid-file starts inside a line, which cannot decode.
+        return start === 0 ? text : text.slice(text.indexOf("\n") + 1);
+      } finally {
+        await handle.close();
+      }
+    });
+    return tail.split("\n").flatMap((line) => {
+      const row = decodeRow(line);
+      return row._tag === "Some" ? [row.value] : [];
+    });
+  },
+  Effect.catch(() => Effect.succeed([])),
+);
+
+const isInjectedReminder = (row: typeof SessionRow.Type) =>
+  row.message?.role === "user" &&
+  row.message.content.every((part) => part.text?.startsWith("<system-reminder>") === true);
+
+/**
+ * When a background worker ends, Droid appends a "Background task completed" message to the parent's
+ * own session and runs a turn on it. Over ACP that turn is only visible if a prompt was still open;
+ * after the prompt returned, nothing is sent. This reads that reply from the file:
+ * - `undefined`: the message or its turn outcome is not in the file yet.
+ * - `null`: nothing to mirror, either the message landed inside a turn ACP already carried, or the
+ *   turn has no reply text. Tool calls in the turn are not included.
+ * - otherwise the reply text of a turn that began right after an earlier turn ended.
+ */
+export const readDroidWakeReply = Effect.fn("readDroidWakeReply")(function* (input: {
+  readonly sessionId: string;
+  readonly childSessionId: string;
+  readonly environment: NodeJS.ProcessEnv;
+}) {
+  const rows = yield* readSessionTailRows({
+    sessionId: input.sessionId,
+    environment: input.environment,
+  });
+  const wakeIndex = rows.findLastIndex(
+    (row) =>
+      row.message?.role === "user" &&
+      row.message.content.some(
+        (part) =>
+          part.text?.startsWith("Background task") === true &&
+          part.text.includes(`task_id: ${input.childSessionId}`),
+      ),
+  );
+  if (wakeIndex === -1) return undefined;
+  const turn = rows.slice(wakeIndex + 1);
+  const outcomeIndex = turn.findIndex((row) => row.type === "agent_turn_outcome");
+  if (outcomeIndex === -1) return undefined;
+  const before = rows.slice(0, wakeIndex).findLast((row) => !isInjectedReminder(row));
+  if (before?.type !== "agent_turn_outcome") return null;
+  const reply = messageTexts(turn.slice(0, outcomeIndex))
+    .flatMap((message) => (message.role === "assistant" ? [message.text] : []))
+    .join("\n\n");
+  return reply.trim().length === 0 ? null : reply;
+});
+
 /** What the worker did, for showing in its thread once it has ended. */
 export const readDroidSubagentSteps = Effect.fn("readDroidSubagentSteps")(function* (input: {
   readonly sessionId: string;

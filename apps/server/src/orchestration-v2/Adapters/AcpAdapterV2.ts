@@ -328,6 +328,15 @@ export interface AcpAdapterV2Flavor {
     | undefined
   >;
   /**
+   * For agents that react to a finished subagent on their own while idle but send none of it over
+   * ACP: resolves with the reply to show as a continuation run once a subagent that outlived the root
+   * turn has ended, or `undefined` when there is nothing to show. Needs `enablePostSettleContinuation`.
+   */
+  readonly awaitParentWakeReply?: (input: {
+    readonly rootSessionId: string;
+    readonly childSessionId: string;
+  }) => Effect.Effect<string | undefined>;
+  /**
    * For agents that never stream a subagent's work over ACP: what the subagent did, read from its
    * own session once it has ended. Empty when that cannot be read.
    */
@@ -5374,6 +5383,35 @@ export function makeAcpAdapterV2(
           return true;
         });
 
+        const mirrorParentWakeReply = Effect.fnUntraced(function* (childSessionId: string) {
+          const rootSessionId = yield* Ref.get(activeSessionId);
+          if (
+            flavor.awaitParentWakeReply === undefined ||
+            !postSettleContinuationEnabled ||
+            rootSessionId === null
+          ) {
+            return;
+          }
+          yield* flavor.awaitParentWakeReply({ rootSessionId, childSessionId }).pipe(
+            Effect.flatMap((text) =>
+              text === undefined
+                ? Effect.void
+                : Ref.update(wakeBuffer, (current) => [
+                    ...current,
+                    {
+                      sessionId: rootSessionId,
+                      update: {
+                        sessionUpdate: "agent_message_chunk" as const,
+                        content: { type: "text" as const, text },
+                      },
+                    },
+                  ]).pipe(Effect.andThen(offerContinuationRun(rootSessionId))),
+            ),
+            Effect.forkIn(sessionScope),
+            Effect.asVoid,
+          );
+        });
+
         const finishSubagentFromNotice = Effect.fnUntraced(function* (notice: {
           readonly childSessionId: string;
           readonly status: "completed" | "failed" | "cancelled";
@@ -5420,6 +5458,7 @@ export function makeAcpAdapterV2(
             if (notice.result !== null && known.assistantText.length === 0) {
               yield* emitSubagentAssistant(known, notice.result);
             }
+            yield* mirrorParentWakeReply(notice.childSessionId);
           }
           yield* updateCarryoverSubagentStatus(
             notice.childSessionId,
@@ -7262,7 +7301,11 @@ export function makeAcpAdapterV2(
                 return;
               }
               if (!context.finalized) {
-                if (hasDeferredBackgroundWork(context)) {
+                if (flavor.deferFinalizeForBackgroundWork !== true) {
+                  // No deferred-finalize window to wait out: the drain above already
+                  // projected everything this continuation carries.
+                  yield* finalizeTurn(context, "completed");
+                } else if (hasDeferredBackgroundWork(context)) {
                   yield* rearmDeferredFinalize(context);
                 } else {
                   yield* scheduleDeferredFinalize(context);

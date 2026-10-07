@@ -5618,6 +5618,137 @@ describe("AcpAdapterV2", () => {
     }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
+  it.effect("shows the agent's own reply to a finished subagent as a continuation run", () =>
+    Effect.gen(function* () {
+      const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const idAllocator = yield* IdAllocator.IdAllocatorV2;
+      const path = yield* Path.Path;
+      const serverConfig = yield* ServerConfig.ServerConfig;
+      const selfInvocation = yield* resolveSelfInvocation();
+      const mockAgentPath = yield* path.fromFileUrl(
+        new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
+      );
+      const instanceId = ProviderInstanceId.make("acp-test");
+      const workerEnd = yield* Deferred.make<{ status: "completed"; result: string | null }>();
+      const offered = yield* Deferred.make<ProviderContinuationRequest>();
+      const wakeInputs: Array<{ rootSessionId: string; childSessionId: string }> = [];
+      const adapter = makeAcpAdapterV2({
+        crypto: yield* Crypto.Crypto,
+        instanceId,
+        flavor: {
+          driver: ACP_TEST_DRIVER,
+          capabilities: AcpProviderCapabilitiesV2,
+          enablePostSettleContinuation: true,
+          extractSubagentUpdate: (toolCall) =>
+            toolCall.toolCallId === "tool-call-generic-1"
+              ? {
+                  nativeTaskId: "task-generic-1",
+                  prompt: "background worker",
+                  title: "background worker",
+                  model: null,
+                  status: "running",
+                  childSessionId: "worker-session-1",
+                  result: null,
+                }
+              : undefined,
+          awaitSubagentEnd: () => Deferred.await(workerEnd),
+          awaitParentWakeReply: (input) =>
+            Effect.sync(() => wakeInputs.push(input)).pipe(Effect.as("DROID_WAKE_REPLY")),
+          makeRuntime: makeMockRuntime({
+            childProcessSpawner,
+            mockAgentPath,
+            environment: { T3_ACP_EMIT_GENERIC_TOOL_PLACEHOLDERS: "1" },
+          }),
+        },
+        fileSystem,
+        idAllocator,
+        serverConfig,
+        selfInvocation,
+        continuationRequests: {
+          offer: (request) => Deferred.succeed(offered, request).pipe(Effect.asVoid),
+        },
+      });
+      const threadId = ThreadId.make("thread-acp-subagent-wake-reply");
+      const runtimePolicy = ProviderAdapterV2RuntimePolicy.make({
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        cwd: process.cwd(),
+      });
+      const modelSelection = { instanceId, model: "default" } as const;
+      const runtime = yield* adapter.openSession({
+        threadId,
+        providerSessionId: ProviderSessionId.make("provider-session-acp-subagent-wake-reply"),
+        modelSelection,
+        runtimePolicy,
+      });
+      const events = yield* Queue.unbounded<ProviderAdapterV2Event>();
+      yield* runtime.events.pipe(
+        Stream.runForEach((event) => Queue.offer(events, event)),
+        Effect.forkScoped,
+      );
+      const providerThread = yield* runtime.ensureThread({
+        threadId,
+        modelSelection,
+        runtimePolicy,
+      });
+      const now = yield* DateTime.now;
+      yield* runtime.startTurn(
+        makeTurnInput({ threadId, providerThread, instanceId, runtimePolicy, now }),
+      );
+      const rootTurnId = idAllocator.derive.providerTurn({
+        driver: ACP_TEST_DRIVER,
+        nativeTurnId: acpScopedNativeId(instanceId, "mock-session-1:turn:1"),
+      });
+      let rootTerminal = false;
+      while (!rootTerminal) {
+        const event = yield* Queue.take(events);
+        rootTerminal = event.type === "turn.terminal" && event.providerTurnId === rootTurnId;
+      }
+      assert.deepEqual(wakeInputs, [], "nothing to mirror while the worker still runs");
+
+      yield* Deferred.succeed(workerEnd, { status: "completed", result: "WORKER_REPORT" });
+      const request = yield* Deferred.await(offered);
+      assert.deepEqual(wakeInputs, [
+        { rootSessionId: "mock-session-1", childSessionId: "worker-session-1" },
+      ]);
+      assert.isUndefined(request.delivery, "the reply is buffered wake output, not a new prompt");
+      assert.equal(request.threadId, threadId);
+
+      const continuationNow = yield* DateTime.now;
+      yield* runtime.startTurn(
+        makeTurnInput({
+          threadId,
+          providerThread,
+          instanceId,
+          runtimePolicy,
+          now: continuationNow,
+          ordinal: 2,
+          messageCreatedBy: "agent",
+          messageCreationSource: "provider",
+          messageText: "Background task completed.",
+        }),
+      );
+      const continuationTurnId = idAllocator.derive.providerTurn({
+        driver: ACP_TEST_DRIVER,
+        nativeTurnId: acpScopedNativeId(instanceId, "mock-session-1:turn:2"),
+      });
+      const assistantTexts: Array<string> = [];
+      let continuationStatus: string | null = null;
+      while (continuationStatus === null) {
+        const event = yield* Queue.take(events);
+        if (event.type === "message.updated" && event.message.role === "assistant") {
+          assistantTexts.push(event.message.text);
+        }
+        if (event.type === "turn.terminal" && event.providerTurnId === continuationTurnId) {
+          continuationStatus = event.status;
+        }
+      }
+      assert.equal(continuationStatus, "completed");
+      assert.include(assistantTexts, "DROID_WAKE_REPLY");
+    }).pipe(Effect.provide(layerTest), Effect.scoped),
+  );
+
   it.effect(
     "pins hasPendingBackgroundWork while carryover holds a live subagent after root settle",
     () =>

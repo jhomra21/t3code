@@ -5,6 +5,7 @@ import {
 } from "./DevinAcp.ts";
 import {
   awaitDroidSubagentEnd,
+  awaitDroidWakeReply,
   extractDroidSubagentUpdate,
   readDroidSubagentStepsFor,
 } from "./DroidAcp.ts";
@@ -37,6 +38,7 @@ import * as AcpRegistryRuntimeCoordinator from "../../provider/acp/AcpRegistryRu
 import * as AcpSessionRuntime from "../../provider/acp/AcpSessionRuntime.ts";
 import { makeAcpNativeLoggerFactory } from "../../provider/acp/AcpNativeLogging.ts";
 import * as ProviderEventLoggers from "../../provider/ProviderEventLoggers.ts";
+import * as ProviderContinuationRequests from "@t3tools/provider-core/server/continuationRequests";
 import { mergeProviderInstanceEnvironment } from "@t3tools/provider-core/server/instanceEnvironment";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import { makeProviderFailure } from "@t3tools/provider-core/server/failure";
@@ -72,6 +74,7 @@ export interface AcpRegistryAdapterV2Options {
   readonly runtimeCoordinator?: AcpRegistryRuntimeCoordinator.AcpRegistryRuntimeCoordinator["Service"];
   readonly serverConfig: ServerConfig.ServerConfig["Service"];
   readonly nativeLogging?: Parameters<typeof makeAcpAdapterV2>[0]["nativeLogging"];
+  readonly continuationRequests?: Parameters<typeof makeAcpAdapterV2>[0]["continuationRequests"];
   readonly makeRuntime?: (
     input: AcpAdapterV2RuntimeInput,
   ) => Effect.Effect<
@@ -226,6 +229,11 @@ export function makeAcpRegistryAdapterV2(options: AcpRegistryAdapterV2Options) {
             environment: options.environment,
           }),
           readSubagentSteps: readDroidSubagentStepsFor({ environment: options.environment }),
+          awaitParentWakeReply: awaitDroidWakeReply({
+            fileSystem: options.fileSystem,
+            environment: options.environment,
+          }),
+          enablePostSettleContinuation: true,
         }
       : {}),
     makeRuntime: options.makeRuntime ?? makeAcpRegistryRuntime(options),
@@ -279,6 +287,9 @@ export function makeAcpRegistryAdapterV2(options: AcpRegistryAdapterV2Options) {
         }
       : {}),
     ...(options.nativeLogging === undefined ? {} : { nativeLogging: options.nativeLogging }),
+    ...(registryAgentId !== "factory-droid" || options.continuationRequests === undefined
+      ? {}
+      : { continuationRequests: options.continuationRequests }),
   });
 }
 
@@ -309,6 +320,7 @@ export const AcpRegistryAdapterV2Driver: ProviderAdapterDriver<
       const idAllocator = yield* IdAllocator.IdAllocatorV2;
       const providerEventLoggers = yield* ProviderEventLoggers.ProviderEventLoggers;
       const serverConfig = yield* ServerConfig.ServerConfig;
+      const continuationRequests = yield* ProviderContinuationRequests.ProviderContinuationRequests;
       const makeNativeLogger = yield* makeAcpNativeLoggerFactory();
       const resolver = yield* AcpRegistrySupport.AcpRegistryCatalog;
       const runtimeCoordinator = yield* Effect.serviceOption(
@@ -328,6 +340,7 @@ export const AcpRegistryAdapterV2Driver: ProviderAdapterDriver<
           : {}),
         serverConfig,
         selfInvocation,
+        continuationRequests,
         nativeLogging: (threadId) =>
           makeNativeLogger({
             nativeEventLogger: providerEventLoggers.native,
