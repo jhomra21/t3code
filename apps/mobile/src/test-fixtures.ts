@@ -58,15 +58,19 @@ export function makeThreadShellFixture(
 ): EnvironmentThreadShell {
   const environmentId = overrides.environmentId ?? EnvironmentId.make("environment-test");
   const raw = makeRawThreadShell({
-    id: overrides.id,
-    projectId: overrides.projectId,
-    title: overrides.title,
-    providerInstanceId: overrides.providerInstanceId,
-    modelSelection: overrides.modelSelection,
-    runtimeMode: overrides.runtimeMode,
-    interactionMode: overrides.interactionMode,
-    branch: overrides.branch,
-    worktreePath: overrides.worktreePath,
+    ...(overrides.id === undefined ? {} : { id: overrides.id }),
+    ...(overrides.projectId === undefined ? {} : { projectId: overrides.projectId }),
+    ...(overrides.title === undefined ? {} : { title: overrides.title }),
+    ...(overrides.providerInstanceId === undefined
+      ? {}
+      : { providerInstanceId: overrides.providerInstanceId }),
+    ...(overrides.modelSelection === undefined ? {} : { modelSelection: overrides.modelSelection }),
+    ...(overrides.runtimeMode === undefined ? {} : { runtimeMode: overrides.runtimeMode }),
+    ...(overrides.interactionMode === undefined
+      ? {}
+      : { interactionMode: overrides.interactionMode }),
+    ...(overrides.branch === undefined ? {} : { branch: overrides.branch }),
+    ...(overrides.worktreePath === undefined ? {} : { worktreePath: overrides.worktreePath }),
   });
   return { ...presentThreadShell(environmentId, raw), ...overrides };
 }

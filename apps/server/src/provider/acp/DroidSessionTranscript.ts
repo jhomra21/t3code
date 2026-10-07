@@ -1,4 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off
+import * as NodeFS from "node:fs";
 import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
@@ -239,18 +240,47 @@ export const readDroidWakeReply = Effect.fn("readDroidWakeReply")(function* (inp
  * The model a worker ran on, from the settings file beside its session file. Droid names a custom
  * model `custom:<display name>-<index>`, and only the display name is worth showing.
  */
+const displayDroidModel = (model: string | undefined) => {
+  const trimmed = model?.trim();
+  return trimmed === undefined || trimmed.length === 0
+    ? undefined
+    : trimmed.replace(/^custom:/u, "").replace(/-\d+$/u, "");
+};
+
 const readSubagentModel = (file: string) =>
   Effect.tryPromise(() =>
     NodeFSP.readFile(file.replace(/\.jsonl$/u, ".settings.json"), "utf8"),
   ).pipe(
-    Effect.map((content) => {
-      const model = Option.getOrUndefined(decodeSettings(content))?.model?.trim();
-      return model === undefined || model.length === 0
-        ? undefined
-        : model.replace(/^custom:/u, "").replace(/-\d+$/u, "");
-    }),
+    Effect.map((content) =>
+      displayDroidModel(Option.getOrUndefined(decodeSettings(content))?.model),
+    ),
     Effect.catch(() => Effect.succeed(undefined)),
   );
+
+/**
+ * The model a custom droid is pinned to, from `model:` in its definition's frontmatter. Known the
+ * moment the worker launches, long before its own session file shows a model. Undefined for a
+ * droid with no pinned model or no personal definition.
+ */
+export const readDroidDefinitionModel = (input: {
+  readonly environment: NodeJS.ProcessEnv;
+  readonly droidName: string;
+}): string | undefined => {
+  if (!/^[\w.-]+$/u.test(input.droidName)) return undefined;
+  const home =
+    input.environment.FACTORY_HOME_OVERRIDE ?? input.environment.HOME ?? NodeOS.homedir();
+  try {
+    const source = NodeFS.readFileSync(
+      NodePath.join(home, ".factory", "droids", `${input.droidName}.md`),
+      "utf8",
+    );
+    const frontmatter = /^---\r?\n([\s\S]*?)\r?\n---/u.exec(source)?.[1] ?? "";
+    const line = /^model:\s*(.+)$/mu.exec(frontmatter)?.[1];
+    return displayDroidModel(line?.trim().replace(/^(["'])(.*)\1$/u, "$2"));
+  } catch {
+    return undefined;
+  }
+};
 
 export interface DroidSubagentWork {
   readonly model: string | undefined;

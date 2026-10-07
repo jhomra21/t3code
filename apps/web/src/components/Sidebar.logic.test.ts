@@ -446,6 +446,47 @@ describe("sidebar thread lineage helpers", () => {
     ).toEqual([parentId, fork.id]);
   });
 
+  it("lists a Droid subagent only while it works, and never another provider's subagent", () => {
+    const parentId = ThreadId.make("thread-parent");
+    const environmentId = EnvironmentId.make("environment-local");
+    const projectId = ProjectId.make("project-1");
+    const lineage = {
+      rootThreadId: parentId,
+      parentThreadId: parentId,
+      relationshipToParent: "subagent" as const,
+    };
+    const runtime = (status: "running" | "completed") => ({
+      status,
+      activeRunId: null,
+      providerInstanceId: ProviderInstanceId.make("x"),
+      providerName: null,
+      lastError: null,
+      lastErrorClass: null,
+      usageLimitResetAt: null,
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    });
+    const make = (id: string, provider: string, status: "running" | "completed") =>
+      makeThreadFixture({
+        id: ThreadId.make(id),
+        environmentId,
+        projectId,
+        lineage,
+        providerInstanceId: ProviderInstanceId.make(provider),
+        runtime: runtime(status),
+      });
+
+    expect(
+      filterSidebarV2VisibleThreads(
+        [
+          make("droid-running", "acpRegistry_factory_droid", "running"),
+          make("droid-done", "acpRegistry_factory_droid", "completed"),
+          make("codex-running", "codex", "running"),
+        ],
+        null,
+      ).map((thread) => thread.id),
+    ).toEqual(["droid-running"]);
+  });
+
   it("identifies subagent threads so the sidebar can hide them", () => {
     const parentId = ThreadId.make("thread-parent");
     const subagent = makeThreadFixture({

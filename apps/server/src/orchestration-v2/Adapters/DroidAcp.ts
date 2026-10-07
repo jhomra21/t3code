@@ -7,6 +7,7 @@ import type { AcpToolCallState } from "../../provider/acp/AcpRuntimeModel.ts";
 import {
   findDroidSessionFile,
   followDroidSubagent,
+  readDroidDefinitionModel,
   readDroidSubagentWork,
   type DroidSubagentWork,
   readDroidWakeReply,
@@ -35,8 +36,26 @@ const REPORT_HEADER = /^session_id: \S+\nUse this report as the source of record
  * a launch note, so that is the worker starting, not finishing. Droid sends no
  * ACP update when it later ends.
  */
-export function extractDroidSubagentUpdate(
+export const extractDroidSubagentUpdate = (input: {
+  readonly environment: NodeJS.ProcessEnv;
+}): NonNullable<AcpAdapterV2Flavor["extractSubagentUpdate"]> => {
+  // Updates repeat per tool call, and a definition read per update is wasted work.
+  const modelByDroid = new Map<string, string | undefined>();
+  const modelOf = (droidName: string) => {
+    if (!modelByDroid.has(droidName)) {
+      modelByDroid.set(
+        droidName,
+        readDroidDefinitionModel({ environment: input.environment, droidName }),
+      );
+    }
+    return modelByDroid.get(droidName) ?? null;
+  };
+  return (tool) => extractDroidSubagentUpdateFrom(tool, modelOf);
+};
+
+function extractDroidSubagentUpdateFrom(
   tool: AcpToolCallState,
+  modelOf: (droidName: string) => string | null,
 ): AcpAdapterV2SubagentUpdate | undefined {
   // Not the title: a later update without one is rewritten to a generic "Tool".
   const input = tool.data.rawInput;
@@ -54,7 +73,7 @@ export function extractDroidSubagentUpdate(
     childSessionId: SESSION_ID.exec(output)?.[1] ?? null,
     prompt: text(input.prompt) ?? text(input.description) ?? "",
     title: text(input.description) ?? text(input.subagent_type),
-    model: null,
+    model: modelOf(input.subagent_type),
     status,
     result: status === "running" ? null : text(output.replace(REPORT_HEADER, "")),
   };

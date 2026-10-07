@@ -2253,6 +2253,92 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
     }),
   );
 
+  it.effect("reports a run-less subagent thread's status from its root turn", () =>
+    Effect.gen(function* () {
+      const projectionStore = yield* ProjectionStore.ProjectionStoreV2;
+      const now = yield* DateTime.now;
+      const parentId = ThreadId.make("thread:subagent-shell-parent");
+      const threadId = ThreadId.make("thread:subagent-shell-child");
+      const rootNodeId = NodeId.make("node:subagent-shell-child-root");
+      yield* projectionStore.apply({
+        id: EventId.make("event:subagent-shell:thread"),
+        type: "thread.created",
+        threadId,
+        occurredAt: now,
+        payload: {
+          createdBy: "agent",
+          creationSource: "provider",
+          id: threadId,
+          projectId: ProjectId.make("project:subagent-shell"),
+          title: "Worker",
+          providerInstanceId,
+          modelSelection,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: null,
+          activeProviderThreadId: null,
+          lineage: {
+            parentThreadId: parentId,
+            relationshipToParent: "subagent",
+            rootThreadId: parentId,
+          },
+          forkedFrom: null,
+          createdAt: now,
+          updatedAt: now,
+          archivedAt: null,
+          settledOverride: null,
+          settledAt: null,
+          lastVisitedAt: null,
+          deletedAt: null,
+        },
+      });
+      const rootNode = (status: "running" | "completed") => ({
+        id: rootNodeId,
+        threadId,
+        runId: null,
+        parentNodeId: null,
+        rootNodeId,
+        kind: "root_turn" as const,
+        status,
+        countsForRun: false,
+        providerThreadId: null,
+        providerTurnId: null,
+        nativeItemRef: null,
+        runtimeRequestId: null,
+        checkpointScopeId: null,
+        startedAt: now,
+        completedAt: status === "completed" ? now : null,
+      });
+      const shellsOf = Effect.gen(function* () {
+        const sql = (yield* projectionStore.getShellSnapshot()).threads.find(
+          (thread) => thread.id === threadId,
+        );
+        const single = yield* projectionStore.getThreadShell(threadId);
+        const memory = ProjectionStore.threadShellFromProjection(
+          yield* projectionStore.getThreadProjection(threadId),
+        );
+        return [sql, single, memory];
+      });
+
+      for (const status of ["running", "completed"] as const) {
+        yield* projectionStore.apply({
+          id: EventId.make(`event:subagent-shell:root:${status}`),
+          type: "node.updated",
+          threadId,
+          nodeId: rootNodeId,
+          driver,
+          occurredAt: now,
+          payload: rootNode(status),
+        });
+        for (const shell of yield* shellsOf) {
+          assert.equal(shell?.status, status);
+          assert.equal(shell?.activityRunStatus ?? null, status === "running" ? "running" : null);
+        }
+      }
+    }),
+  );
+
   it.effect("selects only threads with runtime state that needs recovery", () =>
     Effect.gen(function* () {
       const projectionStore = yield* ProjectionStore.ProjectionStoreV2;

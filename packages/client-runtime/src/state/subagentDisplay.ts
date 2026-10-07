@@ -8,6 +8,25 @@ import { formatModelSlugName, resolveSelectableModel } from "@t3tools/shared/mod
 import { fileBasename } from "@t3tools/shared/path";
 import { isTerminalSubagentStatus } from "./subagentRuntime.ts";
 
+/**
+ * Whether a thread belongs in thread lists. A subagent normally lives inside
+ * its parent, but Factory Droid subagents run on their own, so one is listed
+ * while it works.
+ */
+export function isThreadListed(thread: {
+  readonly lineage: { readonly relationshipToParent: string | null };
+  readonly providerInstanceId: string;
+  readonly runtime: { readonly status: string } | null;
+}): boolean {
+  if (thread.lineage.relationshipToParent !== "subagent") return true;
+  return (
+    thread.providerInstanceId.includes("factory_droid") &&
+    (thread.runtime?.status === "starting" ||
+      thread.runtime?.status === "running" ||
+      thread.runtime?.status === "waiting")
+  );
+}
+
 /** Summarizes one adjacent group, without changing its member identities or order. */
 export function subagentGroupSummary(
   members: ReadonlyArray<{ readonly status: OrchestrationV2TurnItemStatus }>,

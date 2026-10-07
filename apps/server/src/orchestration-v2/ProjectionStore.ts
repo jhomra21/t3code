@@ -967,6 +967,8 @@ type ShellThreadRow = {
   readonly has_actionable_proposed_plan: number;
   readonly item_count: number;
   readonly runless_item_count: number;
+  readonly runless_root_status: string | null;
+  readonly runless_root_started_at: string | null;
 };
 
 type ShellRunRow = {
@@ -1420,6 +1422,16 @@ export function threadShellFromProjection(
             DateTime.toEpochMillis(right.updatedAt) - DateTime.toEpochMillis(left.updatedAt),
         )[0] ?? null,
     );
+  const runlessRootNode =
+    latestRun === null && projection.thread.lineage.relationshipToParent === "subagent"
+      ? projection.nodes.findLast((node) => node.kind === "root_turn" && node.runId === null)
+      : undefined;
+  const runlessRoot = runlessRootNode
+    ? runlessRootShellStatus(
+        runlessRootNode.status,
+        runlessRootNode.startedAt === null ? null : DateTime.formatIso(runlessRootNode.startedAt),
+      )
+    : null;
   const userMessages = projection.messages
     .filter((message) => message.role === "user")
     .toSorted(
@@ -1468,10 +1480,14 @@ export function threadShellFromProjection(
     latestRunStartedAt: latestRun?.startedAt ?? null,
     latestRunCompletedAt: latestRun?.completedAt ?? null,
     activeRunId: activeRun?.id ?? null,
-    activityRunStatus: activityRun?.status ?? null,
+    activityRunStatus: runlessRoot?.activityRunStatus ?? activityRun?.status ?? null,
     activityRunStartedAt:
-      activityRun === null ? null : orchestrationV2RunWorkStartedAt(activityRun),
-    status: latestRun?.status ?? "idle",
+      runlessRoot !== null
+        ? runlessRoot.activityRunStartedAt
+        : activityRun === null
+          ? null
+          : orchestrationV2RunWorkStartedAt(activityRun),
+    status: runlessRoot?.status ?? latestRun?.status ?? "idle",
     ...threadErrorSummary(
       latestRootProviderFailure(latestRun, projection.turnItems),
       providerSession?.lastError ?? null,
@@ -1615,6 +1631,38 @@ function shellStatusFromStoredRunStatus(status: string | null): OrchestrationV2S
       return status;
     default:
       return "failed";
+  }
+}
+
+/**
+ * Shell status and activity of a run-less subagent thread, from its root turn
+ * node. Null when the thread has runs of its own or no root turn yet.
+ */
+function runlessRootShellStatus(
+  status: string | null,
+  startedAt: string | null,
+): {
+  readonly status: OrchestrationV2ShellThreadStatus;
+  readonly activityRunStatus: "starting" | "running" | "waiting" | null;
+  readonly activityRunStartedAt: DateTime.Utc | null;
+} | null {
+  const started = startedAt === null ? null : DateTime.makeUnsafe(startedAt);
+  switch (status) {
+    case null:
+      return null;
+    case "pending":
+      return { status: "starting", activityRunStatus: "starting", activityRunStartedAt: started };
+    case "running":
+    case "waiting":
+      return { status, activityRunStatus: status, activityRunStartedAt: started };
+    case "idle":
+    case "completed":
+    case "failed":
+    case "cancelled":
+    case "interrupted":
+      return { status, activityRunStatus: null, activityRunStartedAt: null };
+    default:
+      return { status: "failed", activityRunStatus: null, activityRunStartedAt: null };
   }
 }
 
@@ -5236,8 +5284,22 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                 FROM orchestration_v2_projection_turn_items i
                 WHERE i.thread_id = t.thread_id
                   AND i.run_id IS NULL
-              ) AS runless_item_count
+              ) AS runless_item_count,
+              runless_root.status AS runless_root_status,
+              runless_root.started_at AS runless_root_started_at
             FROM orchestration_v2_projection_threads t
+            -- A subagent thread has no runs; its work is a runless root turn that
+            -- follows the subagent (see deriveProviderSubagentStatus).
+            LEFT JOIN orchestration_v2_projection_nodes runless_root ON runless_root.node_id = (
+              SELECT candidate.node_id
+              FROM orchestration_v2_projection_nodes candidate
+              WHERE json_extract(t.payload_json, '$.lineage.relationshipToParent') = 'subagent'
+                AND candidate.thread_id = t.thread_id
+                AND candidate.run_id IS NULL
+                AND candidate.kind = 'root_turn'
+              ORDER BY candidate.started_at DESC, candidate.node_id DESC
+              LIMIT 1
+            )
             -- The newest run not waiting in a held queue, matching latestUnheldRun.
             LEFT JOIN orchestration_v2_projection_runs presented ON presented.run_id = (
               SELECT candidate.run_id
@@ -5616,6 +5678,13 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                 : DateTime.makeUnsafe(row.blocking_run_completed_at);
           }
         }
+        const runlessRoot =
+          latestRunId === null
+            ? runlessRootShellStatus(row.runless_root_status, row.runless_root_started_at)
+            : null;
+        if (runlessRoot !== null) {
+          latestRunStatus = runlessRoot.status;
+        }
         const pendingBackgroundTasks = [
           ...derivePendingBackgroundWork({
             latestRun:
@@ -5642,16 +5711,20 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           latestRunCompletedAt,
           activeRunId: row.active_run_id === null ? null : RunId.make(row.active_run_id),
           activityRunStartedAt:
-            row.activity_run_started_at === null
-              ? null
-              : DateTime.makeUnsafe(row.activity_run_started_at),
+            runlessRoot !== null
+              ? runlessRoot.activityRunStartedAt
+              : row.activity_run_started_at === null
+                ? null
+                : DateTime.makeUnsafe(row.activity_run_started_at),
           activityRunStatus:
-            row.activity_run_status === "preparing" ||
-            row.activity_run_status === "starting" ||
-            row.activity_run_status === "running" ||
-            row.activity_run_status === "waiting"
-              ? row.activity_run_status
-              : null,
+            runlessRoot !== null
+              ? runlessRoot.activityRunStatus
+              : row.activity_run_status === "preparing" ||
+                  row.activity_run_status === "starting" ||
+                  row.activity_run_status === "running" ||
+                  row.activity_run_status === "waiting"
+                ? row.activity_run_status
+                : null,
           ...threadErrorSummary(
             terminalFailureItem?.type === "error" ? terminalFailureItem.failure : null,
             row.last_error,

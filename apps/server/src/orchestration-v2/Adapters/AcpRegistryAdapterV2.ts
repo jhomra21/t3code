@@ -223,7 +223,7 @@ export function makeAcpRegistryAdapterV2(options: AcpRegistryAdapterV2Options) {
             ...AcpProviderCapabilitiesV2,
             subagents: { ...AcpProviderCapabilitiesV2.subagents, supportsSubagents: true },
           },
-          extractSubagentUpdate: extractDroidSubagentUpdate,
+          extractSubagentUpdate: extractDroidSubagentUpdate({ environment: options.environment }),
           awaitSubagentEnd: awaitDroidSubagentEnd({
             fileSystem: options.fileSystem,
             environment: options.environment,
