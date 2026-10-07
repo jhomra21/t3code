@@ -3,6 +3,7 @@ import {
   normalizeDevinToolCall,
   extractDevinSubagentUpdate,
 } from "./DevinAcp.ts";
+import { extractDroidSubagentUpdate } from "./DroidAcp.ts";
 import {
   AcpRegistrySettings,
   defaultInstanceIdForDriver,
@@ -205,6 +206,17 @@ export function makeAcpRegistryAdapterV2(options: AcpRegistryAdapterV2Options) {
           normalizeSessionUpdate: normalizeDevinSessionUpdate,
           normalizeToolCall: normalizeDevinToolCall,
           extractSubagentUpdate: extractDevinSubagentUpdate,
+        }
+      : {}),
+    // Per-agent exception, explicitly approved by the user of this fork: Droid
+    // reports subagents only as `Task` tool calls.
+    ...(registryAgentId === "factory-droid"
+      ? {
+          capabilities: {
+            ...AcpProviderCapabilitiesV2,
+            subagents: { ...AcpProviderCapabilitiesV2.subagents, supportsSubagents: true },
+          },
+          extractSubagentUpdate: extractDroidSubagentUpdate,
         }
       : {}),
     makeRuntime: options.makeRuntime ?? makeAcpRegistryRuntime(options),
