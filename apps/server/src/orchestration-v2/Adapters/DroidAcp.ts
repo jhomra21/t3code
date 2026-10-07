@@ -6,9 +6,8 @@ import * as Stream from "effect/Stream";
 import type { AcpToolCallState } from "../../provider/acp/AcpRuntimeModel.ts";
 import {
   findDroidSessionFile,
-  readDroidSubagentModel,
   readDroidSubagentSession,
-  readDroidSubagentSteps,
+  readDroidSubagentWork,
   readDroidWakeReply,
 } from "../../provider/acp/DroidSessionTranscript.ts";
 import type { AcpAdapterV2Flavor, AcpAdapterV2SubagentUpdate } from "./AcpAdapterV2.ts";
@@ -85,13 +84,7 @@ export const awaitDroidWakeReply =
         input.fileSystem.watch(file).pipe(Stream.debounce(Duration.millis(200))),
         Stream.make(undefined),
       ).pipe(
-        Stream.mapEffect(() =>
-          readDroidWakeReply({
-            sessionId: rootSessionId,
-            childSessionId,
-            environment: input.environment,
-          }),
-        ),
+        Stream.mapEffect(() => readDroidWakeReply({ file, childSessionId })),
         Stream.filter((text) => text !== undefined),
         Stream.take(1),
         Stream.runHead,
@@ -101,19 +94,12 @@ export const awaitDroidWakeReply =
       return reply.value.value ?? undefined;
     }).pipe(Effect.catch(() => Effect.succeed(undefined)));
 
-export const readDroidSubagentModelFor =
+export const readDroidSubagentWorkFor =
   (input: {
     readonly environment: NodeJS.ProcessEnv;
-  }): NonNullable<AcpAdapterV2Flavor["readSubagentModel"]> =>
+  }): NonNullable<AcpAdapterV2Flavor["readSubagentWork"]> =>
   ({ childSessionId }) =>
-    readDroidSubagentModel({ sessionId: childSessionId, environment: input.environment });
-
-export const readDroidSubagentStepsFor =
-  (input: {
-    readonly environment: NodeJS.ProcessEnv;
-  }): NonNullable<AcpAdapterV2Flavor["readSubagentSteps"]> =>
-  ({ childSessionId }) =>
-    readDroidSubagentSteps({ sessionId: childSessionId, environment: input.environment });
+    readDroidSubagentWork({ sessionId: childSessionId, environment: input.environment });
 
 /**
  * Resolves when a background worker's own session file ends its turn. The
@@ -137,17 +123,15 @@ export const awaitDroidSubagentEnd =
         input.fileSystem.watch(file).pipe(Stream.debounce(Duration.millis(200))),
         Stream.make(undefined),
       ).pipe(
-        Stream.mapEffect(() =>
-          readDroidSubagentSession({
-            sessionId: childSessionId,
-            environment: input.environment,
-            startedAtMillis,
-          }),
-        ),
+        Stream.mapEffect(() => readDroidSubagentSession({ file, startedAtMillis })),
         Stream.filter((session) => session.outcome !== undefined),
         Stream.take(1),
         Stream.runHead,
       );
       if (end._tag === "None" || end.value.outcome === undefined) return undefined;
-      return { status: end.value.outcome, result: end.value.assistantMessages.at(-1) ?? null };
+      return {
+        status: end.value.outcome,
+        result: end.value.assistantMessages.at(-1) ?? null,
+        work: end.value.work,
+      };
     }).pipe(Effect.catch(() => Effect.succeed(undefined)));

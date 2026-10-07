@@ -324,7 +324,12 @@ export interface AcpAdapterV2Flavor {
     readonly childSessionId: string;
     readonly startedAtMillis: number;
   }) => Effect.Effect<
-    | { readonly status: "completed" | "failed" | "cancelled"; readonly result: string | null }
+    | {
+        readonly status: "completed" | "failed" | "cancelled";
+        readonly result: string | null;
+        /** What `readSubagentWork` would return, when observing the end already read it. */
+        readonly work?: AcpAdapterV2SubagentWork | undefined;
+      }
     | undefined
   >;
   /**
@@ -337,19 +342,12 @@ export interface AcpAdapterV2Flavor {
     readonly childSessionId: string;
   }) => Effect.Effect<string | undefined>;
   /**
-   * For agents that never report which model a subagent ran on over ACP: the model, read from its own
-   * session once it has ended. `undefined` when that cannot be read.
-   */
-  readonly readSubagentModel?: (input: {
-    readonly childSessionId: string;
-  }) => Effect.Effect<string | undefined>;
-  /**
-   * For agents that never stream a subagent's work over ACP: what the subagent did, read from its
+   * For agents that never report a subagent's model or stream its work over ACP: both, read from its
    * own session once it has ended. Empty when that cannot be read.
    */
-  readonly readSubagentSteps?: (input: {
+  readonly readSubagentWork?: (input: {
     readonly childSessionId: string;
-  }) => Effect.Effect<ReadonlyArray<AcpAdapterV2SubagentStep>>;
+  }) => Effect.Effect<AcpAdapterV2SubagentWork>;
   readonly supportsCompaction?: boolean;
   readonly runtimeHarness?: string;
   readonly registerExtensions?: (
@@ -506,6 +504,11 @@ export type AcpAdapterV2SubagentStep =
       readonly output: string | null;
       readonly isError: boolean;
     };
+
+export interface AcpAdapterV2SubagentWork {
+  readonly model: string | undefined;
+  readonly steps: ReadonlyArray<AcpAdapterV2SubagentStep>;
+}
 
 export interface AcpAdapterV2SubagentUpdate {
   readonly nativeTaskId: string;
@@ -1446,7 +1449,9 @@ interface ActiveAcpSubagent {
   childSessionId: string | null;
   /** Set once `flavor.awaitSubagentEnd` has been started for this subagent. */
   endWatched: boolean;
-  /** Set once `flavor.readSubagentSteps` has been projected into the child thread. */
+  /** What the worker did, when reading it for the end check already had it. */
+  work?: AcpAdapterV2SubagentWork | undefined;
+  /** Set once the worker's work has been projected into the child thread. */
   stepsProjected: boolean;
   assistantText: string;
   readonly assistantMessages: Map<string, string>;
@@ -2746,18 +2751,18 @@ export function makeAcpAdapterV2(
         const projectSubagentSteps = Effect.fnUntraced(function* (subagent: ActiveAcpSubagent) {
           const { childSessionId } = subagent;
           if (
-            flavor.readSubagentSteps === undefined ||
+            flavor.readSubagentWork === undefined ||
             childSessionId === null ||
             subagent.stepsProjected
           ) {
             return;
           }
           subagent.stepsProjected = true;
-          if (subagent.task.model === null && flavor.readSubagentModel !== undefined) {
-            const model = yield* flavor.readSubagentModel({ childSessionId });
-            if (model !== undefined) subagent.task = { ...subagent.task, model };
+          const { model, steps } =
+            subagent.work ?? (yield* flavor.readSubagentWork({ childSessionId }));
+          if (subagent.task.model === null && model !== undefined) {
+            subagent.task = { ...subagent.task, model };
           }
-          const steps = yield* flavor.readSubagentSteps({ childSessionId });
           const nativeTaskId = subagent.task.nativeTaskRef?.nativeId ?? String(subagent.task.id);
           let stepNumber = 0;
           for (const step of steps) {
@@ -5427,6 +5432,7 @@ export function makeAcpAdapterV2(
           readonly childSessionId: string;
           readonly status: "completed" | "failed" | "cancelled";
           readonly result: string | null;
+          readonly work?: AcpAdapterV2SubagentWork | undefined;
         }) {
           const context = yield* Ref.get(activeTurn);
           const subagent =
@@ -5438,6 +5444,7 @@ export function makeAcpAdapterV2(
                 candidate.childSessionId === notice.childSessionId ||
                 candidate.task.nativeTaskRef?.nativeId === notice.childSessionId,
             );
+          if (known !== undefined && notice.work !== undefined) known.work = notice.work;
           if (known !== undefined && acpSubagentStatusBlocksTurnSettlement(known.task.status)) {
             yield* recordWakeReport(notice.childSessionId, {
               kind: "subagent",

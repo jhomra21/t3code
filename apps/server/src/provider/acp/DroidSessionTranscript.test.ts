@@ -33,9 +33,8 @@ const readReply = (rows: ReadonlyArray<object>, workerId = WORKER_ID) =>
   }).pipe(
     Effect.flatMap(({ home }) =>
       readDroidWakeReply({
-        sessionId: SESSION_ID,
+        file: NodePath.join(home, ".factory", "sessions", "-project", `${SESSION_ID}.jsonl`),
         childSessionId: workerId,
-        environment: { FACTORY_HOME_OVERRIDE: home },
       }).pipe(Effect.ensuring(Effect.promise(() => NodeFSP.rm(home, { recursive: true })))),
     ),
   );

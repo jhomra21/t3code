@@ -7,8 +7,7 @@ import {
   awaitDroidSubagentEnd,
   awaitDroidWakeReply,
   extractDroidSubagentUpdate,
-  readDroidSubagentModelFor,
-  readDroidSubagentStepsFor,
+  readDroidSubagentWorkFor,
 } from "./DroidAcp.ts";
 import {
   AcpRegistrySettings,
@@ -229,8 +228,7 @@ export function makeAcpRegistryAdapterV2(options: AcpRegistryAdapterV2Options) {
             fileSystem: options.fileSystem,
             environment: options.environment,
           }),
-          readSubagentModel: readDroidSubagentModelFor({ environment: options.environment }),
-          readSubagentSteps: readDroidSubagentStepsFor({ environment: options.environment }),
+          readSubagentWork: readDroidSubagentWorkFor({ environment: options.environment }),
           awaitParentWakeReply: awaitDroidWakeReply({
             fileSystem: options.fileSystem,
             environment: options.environment,

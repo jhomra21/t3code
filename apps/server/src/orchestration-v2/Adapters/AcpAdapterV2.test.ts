@@ -90,6 +90,7 @@ import {
   type AcpAdapterV2Flavor,
   type AcpAdapterV2RuntimeInput,
   type AcpAdapterV2SubagentUpdate,
+  type AcpAdapterV2SubagentWork,
 } from "./AcpAdapterV2.ts";
 
 import { makeGrokAdapterV2 } from "./GrokAdapterV2.ts";
@@ -5491,8 +5492,13 @@ describe("AcpAdapterV2", () => {
         new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
       );
       const instanceId = ProviderInstanceId.make("acp-test");
-      const workerEnd = yield* Deferred.make<{ status: "completed"; result: string | null }>();
+      const workerEnd = yield* Deferred.make<{
+        status: "completed";
+        result: string | null;
+        work: AcpAdapterV2SubagentWork;
+      }>();
       const watched: Array<string> = [];
+      const workReads: Array<string> = [];
       const adapter = makeAcpAdapterV2({
         crypto: yield* Crypto.Crypto,
         instanceId,
@@ -5515,27 +5521,10 @@ describe("AcpAdapterV2", () => {
             Effect.sync(() => watched.push(childSessionId)).pipe(
               Effect.andThen(Deferred.await(workerEnd)),
             ),
-          readSubagentModel: () => Effect.succeed("GPT-6 Luna"),
-          readSubagentSteps: () =>
-            Effect.succeed([
-              {
-                kind: "tool",
-                id: "call-1",
-                name: "Execute",
-                input: { command: "ls" },
-                output: "a.txt",
-                isError: false,
-              },
-              {
-                kind: "tool",
-                id: "call-2",
-                name: "Read",
-                input: { file_path: "a.txt" },
-                output: null,
-                isError: false,
-              },
-              { kind: "message", text: "WORKER_REPORT" },
-            ]),
+          readSubagentWork: () =>
+            Effect.sync(() => workReads.push("read")).pipe(
+              Effect.as({ model: undefined, steps: [] }),
+            ),
           makeRuntime: makeMockRuntime({
             childProcessSpawner,
             mockAgentPath,
@@ -5593,7 +5582,32 @@ describe("AcpAdapterV2", () => {
       assert.deepEqual(statusesBeforeSettle.at(-1), "running");
       assert.deepEqual(watched, ["worker-session-1"]);
 
-      yield* Deferred.succeed(workerEnd, { status: "completed", result: "WORKER_REPORT" });
+      yield* Deferred.succeed(workerEnd, {
+        status: "completed",
+        result: "WORKER_REPORT",
+        work: {
+          model: "GPT-6 Luna",
+          steps: [
+            {
+              kind: "tool",
+              id: "call-1",
+              name: "Execute",
+              input: { command: "ls" },
+              output: "a.txt",
+              isError: false,
+            },
+            {
+              kind: "tool",
+              id: "call-2",
+              name: "Read",
+              input: { file_path: "a.txt" },
+              output: null,
+              isError: false,
+            },
+            { kind: "message", text: "WORKER_REPORT" },
+          ],
+        },
+      });
       let finalStatus: string | null = null;
       let finalResult: string | null | undefined;
       const childReplies: Array<string> = [];
@@ -5619,6 +5633,7 @@ describe("AcpAdapterV2", () => {
       assert.deepEqual(childTools, ["Execute:completed", "Read:running"]);
       assert.deepEqual(childReplies, ["WORKER_REPORT"]);
       assert.deepEqual(watched, ["worker-session-1"]);
+      assert.deepEqual(workReads, [], "the end check already carried the worker's work");
     }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 

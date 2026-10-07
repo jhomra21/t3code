@@ -4,6 +4,7 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
 const isSessionId = Schema.is(Schema.String.check(Schema.isUUID()));
@@ -60,15 +61,37 @@ export const findDroidSessionFile = Effect.fn("findDroidSessionFile")(
   Effect.catch(() => Effect.succeed(undefined)),
 );
 
+const decodeRows = (content: string) =>
+  content.split("\n").flatMap((line) => {
+    const row = decodeRow(line);
+    return row._tag === "Some" ? [row.value] : [];
+  });
+
 const readSessionRows = Effect.fn("readDroidSessionRows")(
-  function* (input: { readonly sessionId: string; readonly environment: NodeJS.ProcessEnv }) {
-    const file = yield* findDroidSessionFile(input);
-    if (file === undefined) return [];
-    const content = yield* Effect.tryPromise(() => NodeFSP.readFile(file, "utf8"));
-    return content.split("\n").flatMap((line) => {
-      const row = decodeRow(line);
-      return row._tag === "Some" ? [row.value] : [];
+  function* (file: string) {
+    return decodeRows(yield* Effect.tryPromise(() => NodeFSP.readFile(file, "utf8")));
+  },
+  Effect.catch(() => Effect.succeed([])),
+);
+
+/** Only the end of a file, so a check that needs the last rows does not read all of a long session. */
+const readSessionTailRows = Effect.fn("readDroidSessionTailRows")(
+  function* (file: string, tailBytes: number) {
+    const tail = yield* Effect.tryPromise(async () => {
+      const handle = await NodeFSP.open(file, "r");
+      try {
+        const { size } = await handle.stat();
+        const start = Math.max(0, size - tailBytes);
+        const buffer = Buffer.alloc(size - start);
+        await handle.read(buffer, 0, buffer.length, start);
+        const text = buffer.toString("utf8");
+        // Reading from mid-file starts inside a line, which cannot decode.
+        return start === 0 ? text : text.slice(text.indexOf("\n") + 1);
+      } finally {
+        await handle.close();
+      }
     });
+    return decodeRows(tail);
   },
   Effect.catch(() => Effect.succeed([])),
 );
@@ -92,7 +115,8 @@ export const readDroidTranscript = Effect.fn("readDroidTranscript")(function* (i
   readonly sessionId: string;
   readonly environment: NodeJS.ProcessEnv;
 }) {
-  return messageTexts(yield* readSessionRows(input));
+  const file = yield* findDroidSessionFile(input);
+  return file === undefined ? [] : messageTexts(yield* readSessionRows(file));
 });
 
 export type DroidSubagentStep =
@@ -171,32 +195,8 @@ function subagentSteps(
 
 // A parent session can be tens of MB, and the wake turn is always at its end.
 const WAKE_TAIL_BYTES = 1_048_576;
-
-const readSessionTailRows = Effect.fn("readDroidSessionTailRows")(
-  function* (input: { readonly sessionId: string; readonly environment: NodeJS.ProcessEnv }) {
-    const file = yield* findDroidSessionFile(input);
-    if (file === undefined) return [];
-    const tail = yield* Effect.tryPromise(async () => {
-      const handle = await NodeFSP.open(file, "r");
-      try {
-        const { size } = await handle.stat();
-        const start = Math.max(0, size - WAKE_TAIL_BYTES);
-        const buffer = Buffer.alloc(size - start);
-        await handle.read(buffer, 0, buffer.length, start);
-        const text = buffer.toString("utf8");
-        // Reading from mid-file starts inside a line, which cannot decode.
-        return start === 0 ? text : text.slice(text.indexOf("\n") + 1);
-      } finally {
-        await handle.close();
-      }
-    });
-    return tail.split("\n").flatMap((line) => {
-      const row = decodeRow(line);
-      return row._tag === "Some" ? [row.value] : [];
-    });
-  },
-  Effect.catch(() => Effect.succeed([])),
-);
+// Enough for the last few rows, which is all that tells whether a worker's turn has ended.
+const END_TAIL_BYTES = 16_384;
 
 const isInjectedReminder = (row: typeof SessionRow.Type) =>
   row.message?.role === "user" &&
@@ -212,14 +212,10 @@ const isInjectedReminder = (row: typeof SessionRow.Type) =>
  * - otherwise the reply text of a turn that began right after an earlier turn ended.
  */
 export const readDroidWakeReply = Effect.fn("readDroidWakeReply")(function* (input: {
-  readonly sessionId: string;
+  readonly file: string;
   readonly childSessionId: string;
-  readonly environment: NodeJS.ProcessEnv;
 }) {
-  const rows = yield* readSessionTailRows({
-    sessionId: input.sessionId,
-    environment: input.environment,
-  });
+  const rows = yield* readSessionTailRows(input.file, WAKE_TAIL_BYTES);
   const wakeIndex = rows.findLastIndex(
     (row) =>
       row.message?.role === "user" &&
@@ -242,62 +238,74 @@ export const readDroidWakeReply = Effect.fn("readDroidWakeReply")(function* (inp
 });
 
 /**
- * The model a worker ran on, from its settings file next to the session file. Droid names a custom
- * model `custom:<display name>-<index>`; only the display name is worth showing.
+ * What a worker did and which model it ran on, for showing in its thread once it has ended. The
+ * model comes from the settings file beside the session file. Droid names a custom model
+ * `custom:<display name>-<index>`, and only the display name is worth showing.
  */
-export const readDroidSubagentModel = Effect.fn("readDroidSubagentModel")(
-  function* (input: { readonly sessionId: string; readonly environment: NodeJS.ProcessEnv }) {
-    const file = yield* findDroidSessionFile(input);
-    if (file === undefined) return undefined;
-    const settings = decodeSettings(
-      yield* Effect.tryPromise(() =>
-        NodeFSP.readFile(file.replace(/\.jsonl$/u, ".settings.json"), "utf8"),
-      ),
-    );
-    const model = settings._tag === "Some" ? settings.value.model?.trim() : undefined;
-    if (model === undefined || model.length === 0) return undefined;
-    return model.replace(/^custom:/u, "").replace(/-\d+$/u, "");
-  },
-  Effect.catch(() => Effect.succeed(undefined)),
-);
+const subagentWork = Effect.fn("subagentWork")(function* (
+  file: string,
+  rows: ReadonlyArray<typeof SessionRow.Type>,
+) {
+  const settings = yield* Effect.tryPromise(() =>
+    NodeFSP.readFile(file.replace(/\.jsonl$/u, ".settings.json"), "utf8"),
+  ).pipe(
+    Effect.map(decodeSettings),
+    Effect.catch(() => Effect.succeed(Option.none())),
+  );
+  const model = Option.getOrUndefined(settings)?.model?.trim();
+  return {
+    model:
+      model === undefined || model.length === 0
+        ? undefined
+        : model.replace(/^custom:/u, "").replace(/-\d+$/u, ""),
+    steps: subagentSteps(rows),
+  };
+});
 
-/** What the worker did, for showing in its thread once it has ended. */
-export const readDroidSubagentSteps = Effect.fn("readDroidSubagentSteps")(function* (input: {
+/** `subagentWork` for a worker whose ending was not observed, which reads its session file itself. */
+export const readDroidSubagentWork = Effect.fn("readDroidSubagentWork")(function* (input: {
   readonly sessionId: string;
   readonly environment: NodeJS.ProcessEnv;
 }) {
-  return subagentSteps(yield* readSessionRows(input));
+  const file = yield* findDroidSessionFile(input);
+  if (file === undefined) return { model: undefined, steps: [] };
+  return yield* subagentWork(file, yield* readSessionRows(file));
 });
 
 /**
  * A worker's own session, which Droid never streams over ACP. `outcome` is set only once the file
  * ends on a turn outcome (or session end) for a turn that began at or after `startedAtMillis`, so a
  * running worker, or a resumed one whose file still ends on an earlier turn, reports none.
+ *
+ * This runs on every write while the worker works, so it first looks only at the file's tail and
+ * reads the whole file once the last row says the turn has ended.
  */
 export const readDroidSubagentSession = Effect.fn("readDroidSubagentSession")(function* (input: {
-  readonly sessionId: string;
-  readonly environment: NodeJS.ProcessEnv;
+  readonly file: string;
   readonly startedAtMillis: number;
 }) {
-  const rows = yield* readSessionRows(input);
-  const last = rows.at(-1);
+  const last = (yield* readSessionTailRows(input.file, END_TAIL_BYTES)).at(-1);
+  if (last?.type !== "session_end" && last?.type !== "agent_turn_outcome") {
+    return { outcome: undefined, assistantMessages: [], work: undefined };
+  }
+  const rows = yield* readSessionRows(input.file);
   const lastUserAt = rows.findLast((row) => row.message?.role === "user")?.timestamp;
   const currentTurn = lastUserAt !== undefined && Date.parse(lastUserAt) >= input.startedAtMillis;
   const outcome = !currentTurn
     ? undefined
-    : last?.type === "session_end"
+    : last.type === "session_end"
       ? ("completed" as const)
-      : last?.type === "agent_turn_outcome"
-        ? last.reason === "completed"
-          ? ("completed" as const)
-          : last.reason === "cancelled"
-            ? ("cancelled" as const)
-            : ("failed" as const)
-        : undefined;
+      : last.reason === "completed"
+        ? ("completed" as const)
+        : last.reason === "cancelled"
+          ? ("cancelled" as const)
+          : ("failed" as const);
   return {
     outcome,
     assistantMessages: messageTexts(rows).flatMap((message) =>
       message.role === "assistant" ? [message.text] : [],
     ),
+    // Handed back with the outcome so showing the worker's thread does not read the file again.
+    work: outcome === undefined ? undefined : yield* subagentWork(input.file, rows),
   };
 });
