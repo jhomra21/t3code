@@ -18,9 +18,9 @@ function text(value: unknown): string | null {
 export function extractDroidSubagentUpdate(
   tool: AcpToolCallState,
 ): AcpAdapterV2SubagentUpdate | undefined {
-  if (tool.title !== "Task") return undefined;
+  // Not the title: a later update without one is rewritten to a generic "Tool".
   const input = tool.data.rawInput;
-  if (!isRecord(input) || !("subagent_type" in input)) return undefined;
+  if (!isRecord(input) || typeof input.subagent_type !== "string") return undefined;
   const status =
     tool.status === "completed" ? "completed" : tool.status === "failed" ? "failed" : "running";
   return {
@@ -30,6 +30,11 @@ export function extractDroidSubagentUpdate(
     title: text(input.description) ?? text(input.subagent_type),
     model: null,
     status,
-    result: status === "running" ? null : (tool.detail ?? null),
+    result:
+      status === "running"
+        ? null
+        : isRecord(tool.data.rawOutput)
+          ? text(tool.data.rawOutput.text)
+          : null,
   };
 }
