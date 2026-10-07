@@ -1276,7 +1276,13 @@ export const make = Effect.fn("effect-acp/AcpClient.make")(function* (
               rpc[AGENT_METHODS.session_set_config_option](
                 payload as AcpSchemaV1.SetSessionConfigOptionRequest,
               ),
-            ).pipe(Effect.map((response) => response as AcpSchema.SetSessionConfigOptionResponse))
+            ).pipe(
+              Effect.map((response) =>
+                "configOptions" in response
+                  ? (response as AcpSchema.SetSessionConfigOptionResponse)
+                  : { configOptions: [] },
+              ),
+            )
           : callRpc(
               AGENT_METHODS.session_set_config_option,
               rpc[AGENT_METHODS.session_set_config_option]({
@@ -1287,7 +1293,9 @@ export const make = Effect.fn("effect-acp/AcpClient.make")(function* (
               Effect.map((response) => ({
                 configOptions:
                   normalizeConfigOptions(
-                    (response as AcpSchemaV2.SetSessionConfigOptionResponse).configOptions,
+                    "configOptions" in response
+                      ? (response as AcpSchemaV2.SetSessionConfigOptionResponse).configOptions
+                      : undefined,
                   ) ?? [],
               })),
             ),

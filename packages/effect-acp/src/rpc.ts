@@ -257,9 +257,11 @@ const CompatSetSessionConfigOptionRpc = Rpc.make(AGENT_METHODS.session_set_confi
     AcpSchema.SetSessionConfigOptionRequest,
     AcpSchemaV1.SetSessionConfigOptionRequest,
   ]),
+  // Factory Droid acknowledges the change with `{}`, so an empty reply is accepted last.
   success: Schema.Union([
     AcpSchemaV1.SetSessionConfigOptionResponse,
     AcpSchema.SetSessionConfigOptionResponse,
+    Schema.Struct({}),
   ]),
   error: AcpSchema.Error,
 });
