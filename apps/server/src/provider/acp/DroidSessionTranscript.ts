@@ -16,7 +16,16 @@ const SessionRow = Schema.Struct({
     Schema.Struct({
       role: Schema.Literals(["user", "assistant"]),
       content: Schema.Array(
-        Schema.Struct({ type: Schema.String, text: Schema.optionalKey(Schema.String) }),
+        Schema.Struct({
+          type: Schema.String,
+          text: Schema.optionalKey(Schema.String),
+          id: Schema.optionalKey(Schema.String),
+          name: Schema.optionalKey(Schema.String),
+          input: Schema.optionalKey(Schema.Unknown),
+          tool_use_id: Schema.optionalKey(Schema.String),
+          content: Schema.optionalKey(Schema.Unknown),
+          is_error: Schema.optionalKey(Schema.Boolean),
+        }),
       ),
     }),
   ),
@@ -81,6 +90,88 @@ export const readDroidTranscript = Effect.fn("readDroidTranscript")(function* (i
   readonly environment: NodeJS.ProcessEnv;
 }) {
   return messageTexts(yield* readSessionRows(input));
+});
+
+export type DroidSubagentStep =
+  | { readonly kind: "message"; readonly text: string }
+  | {
+      readonly kind: "tool";
+      readonly id: string;
+      readonly name: string;
+      readonly input: unknown;
+      /** `null` while the call has no result in the file yet. */
+      readonly output: string | null;
+      readonly isError: boolean;
+    };
+
+// Tool output travels to every client, and one diff or file read can be hundreds of KB.
+const MAX_TOOL_OUTPUT_CHARS = 20_000;
+
+/** A tool result is a string, or a list of parts of which only text is kept (images are base64). */
+function toolResultText(content: unknown): string {
+  const text =
+    typeof content === "string"
+      ? content
+      : !Array.isArray(content)
+        ? ""
+        : content
+            .flatMap((part) =>
+              typeof part === "object" &&
+              part !== null &&
+              "text" in part &&
+              typeof part.text === "string"
+                ? [part.text]
+                : [],
+            )
+            .join("\n");
+  return text.length <= MAX_TOOL_OUTPUT_CHARS
+    ? text
+    : `${text.slice(0, MAX_TOOL_OUTPUT_CHARS)}\n… truncated ${text.length - MAX_TOOL_OUTPUT_CHARS} characters`;
+}
+
+/**
+ * The worker's replies and tool calls in order. User text is skipped: it is the injected context and
+ * the Task prompt, which the parent already holds. Thinking is skipped.
+ */
+function subagentSteps(
+  rows: ReadonlyArray<typeof SessionRow.Type>,
+): ReadonlyArray<DroidSubagentStep> {
+  const parts = rows.flatMap((row) => (row.message === undefined ? [] : row.message.content));
+  const results = new Map(
+    parts.flatMap((part) =>
+      part.type === "tool_result" && part.tool_use_id !== undefined
+        ? [[part.tool_use_id, part] as const]
+        : [],
+    ),
+  );
+  return rows.flatMap((row) => {
+    if (row.message?.role !== "assistant") return [];
+    return row.message.content.flatMap((part): ReadonlyArray<DroidSubagentStep> => {
+      if (part.type === "text" && part.text !== undefined && part.text.trim().length > 0) {
+        return [{ kind: "message", text: part.text }];
+      }
+      if (part.type !== "tool_use" || part.id === undefined) return [];
+      const result = results.get(part.id);
+      return [
+        {
+          kind: "tool",
+          id: part.id,
+          name: part.name ?? "Tool",
+          input: part.input ?? null,
+          output: result === undefined ? null : toolResultText(result.content),
+          isError: result?.is_error === true,
+        },
+      ];
+    });
+  });
+}
+
+/** What the worker did, for showing in its thread once it has ended. */
+export const readDroidSubagentSteps = Effect.fn("readDroidSubagentSteps")(function* (input: {
+  readonly sessionId: string;
+  readonly environment: NodeJS.ProcessEnv;
+}) {
+  return subagentSteps(yield* readSessionRows(input));
 });
 
 /**

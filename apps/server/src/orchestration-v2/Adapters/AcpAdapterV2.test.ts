@@ -5515,6 +5515,26 @@ describe("AcpAdapterV2", () => {
             Effect.sync(() => watched.push(childSessionId)).pipe(
               Effect.andThen(Deferred.await(workerEnd)),
             ),
+          readSubagentSteps: () =>
+            Effect.succeed([
+              {
+                kind: "tool",
+                id: "call-1",
+                name: "Execute",
+                input: { command: "ls" },
+                output: "a.txt",
+                isError: false,
+              },
+              {
+                kind: "tool",
+                id: "call-2",
+                name: "Read",
+                input: { file_path: "a.txt" },
+                output: null,
+                isError: false,
+              },
+              { kind: "message", text: "WORKER_REPORT" },
+            ]),
           makeRuntime: makeMockRuntime({
             childProcessSpawner,
             mockAgentPath,
@@ -5575,7 +5595,8 @@ describe("AcpAdapterV2", () => {
       yield* Deferred.succeed(workerEnd, { status: "completed", result: "WORKER_REPORT" });
       let finalStatus: string | null = null;
       let finalResult: string | null | undefined;
-      let childReply: string | null = null;
+      const childReplies: Array<string> = [];
+      const childTools: Array<string> = [];
       while (finalStatus !== "completed") {
         const event = yield* Queue.take(events);
         if (event.type === "turn_item.updated" && event.turnItem.type === "subagent") {
@@ -5583,11 +5604,16 @@ describe("AcpAdapterV2", () => {
           finalResult = event.turnItem.result;
         }
         if (event.type === "message.updated" && event.message.role === "assistant") {
-          childReply = event.message.text;
+          childReplies.push(event.message.text);
+        }
+        if (event.type === "turn_item.updated" && event.turnItem.type === "dynamic_tool") {
+          childTools.push(`${event.turnItem.toolName}:${event.turnItem.status}`);
         }
       }
       assert.equal(finalResult, "WORKER_REPORT");
-      assert.equal(childReply, "WORKER_REPORT");
+      // The worker's steps are in its thread, and its final reply is there once, not again as the result.
+      assert.deepEqual(childTools, ["Execute:completed", "Read:running"]);
+      assert.deepEqual(childReplies, ["WORKER_REPORT"]);
       assert.deepEqual(watched, ["worker-session-1"]);
     }).pipe(Effect.provide(layerTest), Effect.scoped),
   );

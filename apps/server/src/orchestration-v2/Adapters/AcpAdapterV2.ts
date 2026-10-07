@@ -327,6 +327,13 @@ export interface AcpAdapterV2Flavor {
     | { readonly status: "completed" | "failed" | "cancelled"; readonly result: string | null }
     | undefined
   >;
+  /**
+   * For agents that never stream a subagent's work over ACP: what the subagent did, read from its
+   * own session once it has ended. Empty when that cannot be read.
+   */
+  readonly readSubagentSteps?: (input: {
+    readonly childSessionId: string;
+  }) => Effect.Effect<ReadonlyArray<AcpAdapterV2SubagentStep>>;
   readonly supportsCompaction?: boolean;
   readonly runtimeHarness?: string;
   readonly registerExtensions?: (
@@ -471,6 +478,18 @@ export function acpProviderItemNativeId(input: {
     ? acpScopedNativeId(input.instanceId, input.nativeId)
     : input.nativeId;
 }
+
+export type AcpAdapterV2SubagentStep =
+  | { readonly kind: "message"; readonly text: string }
+  | {
+      readonly kind: "tool";
+      readonly id: string;
+      readonly name: string;
+      readonly input: unknown;
+      /** `null` while the call has no result. */
+      readonly output: string | null;
+      readonly isError: boolean;
+    };
 
 export interface AcpAdapterV2SubagentUpdate {
   readonly nativeTaskId: string;
@@ -1411,6 +1430,8 @@ interface ActiveAcpSubagent {
   childSessionId: string | null;
   /** Set once `flavor.awaitSubagentEnd` has been started for this subagent. */
   endWatched: boolean;
+  /** Set once `flavor.readSubagentSteps` has been projected into the child thread. */
+  stepsProjected: boolean;
   assistantText: string;
   readonly assistantMessages: Map<string, string>;
   readonly childItemOrdinals: Map<string, number>;
@@ -2706,6 +2727,55 @@ export function makeAcpAdapterV2(
           }
         });
 
+        const projectSubagentSteps = Effect.fnUntraced(function* (subagent: ActiveAcpSubagent) {
+          const { childSessionId } = subagent;
+          if (
+            flavor.readSubagentSteps === undefined ||
+            childSessionId === null ||
+            subagent.stepsProjected
+          ) {
+            return;
+          }
+          subagent.stepsProjected = true;
+          const steps = yield* flavor.readSubagentSteps({ childSessionId });
+          const nativeTaskId = subagent.task.nativeTaskRef?.nativeId ?? String(subagent.task.id);
+          let stepNumber = 0;
+          for (const step of steps) {
+            stepNumber += 1;
+            if (step.kind === "message") {
+              yield* emitSubagentAssistant(subagent, step.text, "replace", `step-${stepNumber}`);
+              continue;
+            }
+            const key = `${nativeTaskId}:tool:${step.id}`;
+            const now = yield* DateTime.now;
+            const status = step.isError ? "failed" : step.output === null ? "running" : "completed";
+            yield* emitProviderEvent({
+              type: "turn_item.updated",
+              driver,
+              turnItem: {
+                id: providerTurnItemId(key),
+                threadId: subagent.childThreadId,
+                runId: null,
+                nodeId: subagent.childRootNodeId,
+                providerThreadId: subagent.task.providerThreadId,
+                providerTurnId: null,
+                nativeItemRef: { driver, nativeId: key, strength: "strong" },
+                parentItemId: null,
+                ordinal: resolveSubagentChildOrdinal(subagent, key),
+                status,
+                title: step.name,
+                startedAt: now,
+                completedAt: completedAtForStatus(status, now),
+                updatedAt: now,
+                type: "dynamic_tool",
+                toolName: step.name,
+                input: step.input ?? null,
+                output: step.output,
+              },
+            });
+          }
+        });
+
         // Assigned after finishSubagentFromNotice, which it calls back into.
         let startSubagentEndWatch: (subagent: ActiveAcpSubagent) => Effect.Effect<void> = () =>
           Effect.void;
@@ -2807,6 +2877,7 @@ export function makeAcpAdapterV2(
             nextChildOrdinal: 101,
             terminalStatusProjected: false,
             endWatched: false,
+            stepsProjected: false,
           };
           subagent.task = task;
           context.subagents.set(nativeTaskId, subagent);
@@ -2899,12 +2970,11 @@ export function makeAcpAdapterV2(
             );
           }
 
-          if (
-            taskStatus !== "running" &&
-            subagent.assistantText.length === 0 &&
-            update.result !== null
-          ) {
-            yield* emitSubagentAssistant(subagent, update.result);
+          if (taskStatus !== "running") {
+            yield* projectSubagentSteps(subagent);
+            if (subagent.assistantText.length === 0 && update.result !== null) {
+              yield* emitSubagentAssistant(subagent, update.result);
+            }
           }
           const result = update.result ?? subagent.task.result ?? (subagent.assistantText || null);
           subagent.task = {
@@ -5345,13 +5415,11 @@ export function makeAcpAdapterV2(
           // The root turn already settled: the subagent is carryover. Project
           // its end while the completed root still owns the run.
           const carryover = yield* Ref.get(carryoverSubagents);
-          if (
-            known !== undefined &&
-            acpSubagentStatusBlocksTurnSettlement(known.task.status) &&
-            notice.result !== null &&
-            known.assistantText.length === 0
-          ) {
-            yield* emitSubagentAssistant(known, notice.result);
+          if (known !== undefined && acpSubagentStatusBlocksTurnSettlement(known.task.status)) {
+            yield* projectSubagentSteps(known);
+            if (notice.result !== null && known.assistantText.length === 0) {
+              yield* emitSubagentAssistant(known, notice.result);
+            }
           }
           yield* updateCarryoverSubagentStatus(
             notice.childSessionId,

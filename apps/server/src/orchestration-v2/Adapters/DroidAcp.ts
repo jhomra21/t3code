@@ -7,6 +7,7 @@ import type { AcpToolCallState } from "../../provider/acp/AcpRuntimeModel.ts";
 import {
   findDroidSessionFile,
   readDroidSubagentSession,
+  readDroidSubagentSteps,
 } from "../../provider/acp/DroidSessionTranscript.ts";
 import type { AcpAdapterV2Flavor, AcpAdapterV2SubagentUpdate } from "./AcpAdapterV2.ts";
 
@@ -56,6 +57,13 @@ export function extractDroidSubagentUpdate(
     result: status === "running" ? null : text(output.replace(REPORT_HEADER, "")),
   };
 }
+
+export const readDroidSubagentStepsFor =
+  (input: {
+    readonly environment: NodeJS.ProcessEnv;
+  }): NonNullable<AcpAdapterV2Flavor["readSubagentSteps"]> =>
+  ({ childSessionId }) =>
+    readDroidSubagentSteps({ sessionId: childSessionId, environment: input.environment });
 
 /**
  * Resolves when a background worker's own session file ends its turn. The
