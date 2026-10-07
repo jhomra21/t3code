@@ -5515,6 +5515,7 @@ describe("AcpAdapterV2", () => {
             Effect.sync(() => watched.push(childSessionId)).pipe(
               Effect.andThen(Deferred.await(workerEnd)),
             ),
+          readSubagentModel: () => Effect.succeed("GPT-6 Luna"),
           readSubagentSteps: () =>
             Effect.succeed([
               {
@@ -5597,8 +5598,10 @@ describe("AcpAdapterV2", () => {
       let finalResult: string | null | undefined;
       const childReplies: Array<string> = [];
       const childTools: Array<string> = [];
+      let finalModel: string | null | undefined;
       while (finalStatus !== "completed") {
         const event = yield* Queue.take(events);
+        if (event.type === "subagent.updated") finalModel = event.subagent.model;
         if (event.type === "turn_item.updated" && event.turnItem.type === "subagent") {
           finalStatus = event.turnItem.status;
           finalResult = event.turnItem.result;
@@ -5611,6 +5614,7 @@ describe("AcpAdapterV2", () => {
         }
       }
       assert.equal(finalResult, "WORKER_REPORT");
+      assert.equal(finalModel, "GPT-6 Luna");
       // The worker's steps are in its thread, and its final reply is there once, not again as the result.
       assert.deepEqual(childTools, ["Execute:completed", "Read:running"]);
       assert.deepEqual(childReplies, ["WORKER_REPORT"]);

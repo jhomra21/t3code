@@ -31,6 +31,9 @@ const SessionRow = Schema.Struct({
   ),
 });
 const decodeRow = Schema.decodeUnknownOption(Schema.fromJsonString(SessionRow));
+const decodeSettings = Schema.decodeUnknownOption(
+  Schema.fromJsonString(Schema.Struct({ model: Schema.optional(Schema.String) })),
+);
 
 /** Droid keeps each session under a directory named for its project, so the id alone is searched. */
 export const findDroidSessionFile = Effect.fn("findDroidSessionFile")(
@@ -237,6 +240,26 @@ export const readDroidWakeReply = Effect.fn("readDroidWakeReply")(function* (inp
     .join("\n\n");
   return reply.trim().length === 0 ? null : reply;
 });
+
+/**
+ * The model a worker ran on, from its settings file next to the session file. Droid names a custom
+ * model `custom:<display name>-<index>`; only the display name is worth showing.
+ */
+export const readDroidSubagentModel = Effect.fn("readDroidSubagentModel")(
+  function* (input: { readonly sessionId: string; readonly environment: NodeJS.ProcessEnv }) {
+    const file = yield* findDroidSessionFile(input);
+    if (file === undefined) return undefined;
+    const settings = decodeSettings(
+      yield* Effect.tryPromise(() =>
+        NodeFSP.readFile(file.replace(/\.jsonl$/u, ".settings.json"), "utf8"),
+      ),
+    );
+    const model = settings._tag === "Some" ? settings.value.model?.trim() : undefined;
+    if (model === undefined || model.length === 0) return undefined;
+    return model.replace(/^custom:/u, "").replace(/-\d+$/u, "");
+  },
+  Effect.catch(() => Effect.succeed(undefined)),
+);
 
 /** What the worker did, for showing in its thread once it has ended. */
 export const readDroidSubagentSteps = Effect.fn("readDroidSubagentSteps")(function* (input: {

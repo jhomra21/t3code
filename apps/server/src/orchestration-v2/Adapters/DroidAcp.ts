@@ -6,6 +6,7 @@ import * as Stream from "effect/Stream";
 import type { AcpToolCallState } from "../../provider/acp/AcpRuntimeModel.ts";
 import {
   findDroidSessionFile,
+  readDroidSubagentModel,
   readDroidSubagentSession,
   readDroidSubagentSteps,
   readDroidWakeReply,
@@ -99,6 +100,13 @@ export const awaitDroidWakeReply =
       if (reply._tag === "None" || reply.value._tag === "None") return undefined;
       return reply.value.value ?? undefined;
     }).pipe(Effect.catch(() => Effect.succeed(undefined)));
+
+export const readDroidSubagentModelFor =
+  (input: {
+    readonly environment: NodeJS.ProcessEnv;
+  }): NonNullable<AcpAdapterV2Flavor["readSubagentModel"]> =>
+  ({ childSessionId }) =>
+    readDroidSubagentModel({ sessionId: childSessionId, environment: input.environment });
 
 export const readDroidSubagentStepsFor =
   (input: {

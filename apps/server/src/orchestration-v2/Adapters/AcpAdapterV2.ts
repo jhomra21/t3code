@@ -337,6 +337,13 @@ export interface AcpAdapterV2Flavor {
     readonly childSessionId: string;
   }) => Effect.Effect<string | undefined>;
   /**
+   * For agents that never report which model a subagent ran on over ACP: the model, read from its own
+   * session once it has ended. `undefined` when that cannot be read.
+   */
+  readonly readSubagentModel?: (input: {
+    readonly childSessionId: string;
+  }) => Effect.Effect<string | undefined>;
+  /**
    * For agents that never stream a subagent's work over ACP: what the subagent did, read from its
    * own session once it has ended. Empty when that cannot be read.
    */
@@ -2746,6 +2753,10 @@ export function makeAcpAdapterV2(
             return;
           }
           subagent.stepsProjected = true;
+          if (subagent.task.model === null && flavor.readSubagentModel !== undefined) {
+            const model = yield* flavor.readSubagentModel({ childSessionId });
+            if (model !== undefined) subagent.task = { ...subagent.task, model };
+          }
           const steps = yield* flavor.readSubagentSteps({ childSessionId });
           const nativeTaskId = subagent.task.nativeTaskRef?.nativeId ?? String(subagent.task.id);
           let stepNumber = 0;
