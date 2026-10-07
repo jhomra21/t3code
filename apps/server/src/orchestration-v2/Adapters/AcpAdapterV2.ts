@@ -315,6 +315,18 @@ export interface AcpAdapterV2Flavor {
   ) => Effect.Effect<void>;
   /** Batch launches without child completion signals become idle when the root turn ends. */
   readonly subagentsIdleOnTurnCompletion?: boolean;
+  /**
+   * For agents that never announce a subagent's end over ACP: resolves when the
+   * running subagent's own session ends, or with `undefined` when that cannot be
+   * observed. Only called for a running subagent that has a child session id.
+   */
+  readonly awaitSubagentEnd?: (input: {
+    readonly childSessionId: string;
+    readonly startedAtMillis: number;
+  }) => Effect.Effect<
+    | { readonly status: "completed" | "failed" | "cancelled"; readonly result: string | null }
+    | undefined
+  >;
   readonly supportsCompaction?: boolean;
   readonly runtimeHarness?: string;
   readonly registerExtensions?: (
@@ -1397,6 +1409,8 @@ interface ActiveAcpSubagent {
   readonly providerTurnId: OrchestrationV2ProviderTurn["id"];
   readonly parentProviderThreadId: ProviderThreadId;
   childSessionId: string | null;
+  /** Set once `flavor.awaitSubagentEnd` has been started for this subagent. */
+  endWatched: boolean;
   assistantText: string;
   readonly assistantMessages: Map<string, string>;
   readonly childItemOrdinals: Map<string, number>;
@@ -2692,6 +2706,10 @@ export function makeAcpAdapterV2(
           }
         });
 
+        // Assigned after finishSubagentFromNotice, which it calls back into.
+        let startSubagentEndWatch: (subagent: ActiveAcpSubagent) => Effect.Effect<void> = () =>
+          Effect.void;
+
         const emitSubagent = Effect.fnUntraced(function* (
           context: ActiveAcpTurn,
           update: AcpAdapterV2SubagentUpdate,
@@ -2788,6 +2806,7 @@ export function makeAcpAdapterV2(
             childItemOrdinals: new Map(),
             nextChildOrdinal: 101,
             terminalStatusProjected: false,
+            endWatched: false,
           };
           subagent.task = task;
           context.subagents.set(nativeTaskId, subagent);
@@ -2969,6 +2988,9 @@ export function makeAcpAdapterV2(
           });
           if (acpSubagentStatusIsTerminal(taskStatus)) {
             subagent.terminalStatusProjected = true;
+          } else if (!subagent.endWatched && subagent.childSessionId !== null) {
+            subagent.endWatched = true;
+            yield* startSubagentEndWatch(subagent);
           }
         });
 
@@ -5323,6 +5345,14 @@ export function makeAcpAdapterV2(
           // The root turn already settled: the subagent is carryover. Project
           // its end while the completed root still owns the run.
           const carryover = yield* Ref.get(carryoverSubagents);
+          if (
+            known !== undefined &&
+            acpSubagentStatusBlocksTurnSettlement(known.task.status) &&
+            notice.result !== null &&
+            known.assistantText.length === 0
+          ) {
+            yield* emitSubagentAssistant(known, notice.result);
+          }
           yield* updateCarryoverSubagentStatus(
             notice.childSessionId,
             notice.status,
@@ -5335,6 +5365,28 @@ export function makeAcpAdapterV2(
             },
           );
         });
+
+        startSubagentEndWatch = (subagent) =>
+          Effect.gen(function* () {
+            const { childSessionId } = subagent;
+            const { startedAt } = subagent.task;
+            if (flavor.awaitSubagentEnd === undefined || childSessionId === null) return;
+            if (startedAt === null) return;
+            yield* flavor
+              .awaitSubagentEnd({
+                childSessionId,
+                startedAtMillis: DateTime.toEpochMillis(startedAt),
+              })
+              .pipe(
+                Effect.flatMap((end) =>
+                  end === undefined
+                    ? Effect.void
+                    : finishSubagentFromNotice({ childSessionId, ...end }),
+                ),
+                Effect.forkIn(sessionScope),
+                Effect.asVoid,
+              );
+          });
 
         applyFinalizedActiveTurnSubagentTerminal = Effect.fnUntraced(function* (
           context: ActiveAcpTurn,

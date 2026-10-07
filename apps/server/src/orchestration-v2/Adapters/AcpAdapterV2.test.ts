@@ -5479,6 +5479,119 @@ describe("AcpAdapterV2", () => {
       }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
+  it.effect("finishes a running subagent from its own session after the root turn settled", () =>
+    Effect.gen(function* () {
+      const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const idAllocator = yield* IdAllocator.IdAllocatorV2;
+      const path = yield* Path.Path;
+      const serverConfig = yield* ServerConfig.ServerConfig;
+      const selfInvocation = yield* resolveSelfInvocation();
+      const mockAgentPath = yield* path.fromFileUrl(
+        new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
+      );
+      const instanceId = ProviderInstanceId.make("acp-test");
+      const workerEnd = yield* Deferred.make<{ status: "completed"; result: string | null }>();
+      const watched: Array<string> = [];
+      const adapter = makeAcpAdapterV2({
+        crypto: yield* Crypto.Crypto,
+        instanceId,
+        flavor: {
+          driver: ACP_TEST_DRIVER,
+          capabilities: AcpProviderCapabilitiesV2,
+          extractSubagentUpdate: (toolCall) =>
+            toolCall.toolCallId === "tool-call-generic-1"
+              ? {
+                  nativeTaskId: "task-generic-1",
+                  prompt: "background worker",
+                  title: "background worker",
+                  model: null,
+                  status: "running",
+                  childSessionId: "worker-session-1",
+                  result: null,
+                }
+              : undefined,
+          awaitSubagentEnd: ({ childSessionId }) =>
+            Effect.sync(() => watched.push(childSessionId)).pipe(
+              Effect.andThen(Deferred.await(workerEnd)),
+            ),
+          makeRuntime: makeMockRuntime({
+            childProcessSpawner,
+            mockAgentPath,
+            environment: { T3_ACP_EMIT_GENERIC_TOOL_PLACEHOLDERS: "1" },
+          }),
+        },
+        fileSystem,
+        idAllocator,
+        serverConfig,
+        selfInvocation,
+      });
+      const threadId = ThreadId.make("thread-acp-subagent-session-end");
+      const runtimePolicy = ProviderAdapterV2RuntimePolicy.make({
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        cwd: process.cwd(),
+      });
+      const modelSelection = { instanceId, model: "default" } as const;
+      const runtime = yield* adapter.openSession({
+        threadId,
+        providerSessionId: ProviderSessionId.make("provider-session-acp-subagent-session-end"),
+        modelSelection,
+        runtimePolicy,
+      });
+      const events = yield* Queue.unbounded<ProviderAdapterV2Event>();
+      yield* runtime.events.pipe(
+        Stream.runForEach((event) => Queue.offer(events, event)),
+        Effect.forkScoped,
+      );
+      const providerThread = yield* runtime.ensureThread({
+        threadId,
+        modelSelection,
+        runtimePolicy,
+      });
+      const now = yield* DateTime.now;
+      yield* runtime.startTurn(
+        makeTurnInput({ threadId, providerThread, instanceId, runtimePolicy, now }),
+      );
+      const providerTurnId = idAllocator.derive.providerTurn({
+        driver: ACP_TEST_DRIVER,
+        nativeTurnId: acpScopedNativeId(instanceId, "mock-session-1:turn:1"),
+      });
+      const statusesBeforeSettle: Array<string> = [];
+      let rootTerminal = false;
+      while (!rootTerminal) {
+        const event = yield* Queue.take(events);
+        if (event.type === "turn_item.updated" && event.turnItem.type === "subagent") {
+          statusesBeforeSettle.push(event.turnItem.status);
+        }
+        if (event.type === "turn.terminal" && event.providerTurnId === providerTurnId) {
+          rootTerminal = true;
+        }
+      }
+      // The worker was still running when the parent turn ended.
+      assert.deepEqual(statusesBeforeSettle.at(-1), "running");
+      assert.deepEqual(watched, ["worker-session-1"]);
+
+      yield* Deferred.succeed(workerEnd, { status: "completed", result: "WORKER_REPORT" });
+      let finalStatus: string | null = null;
+      let finalResult: string | null | undefined;
+      let childReply: string | null = null;
+      while (finalStatus !== "completed") {
+        const event = yield* Queue.take(events);
+        if (event.type === "turn_item.updated" && event.turnItem.type === "subagent") {
+          finalStatus = event.turnItem.status;
+          finalResult = event.turnItem.result;
+        }
+        if (event.type === "message.updated" && event.message.role === "assistant") {
+          childReply = event.message.text;
+        }
+      }
+      assert.equal(finalResult, "WORKER_REPORT");
+      assert.equal(childReply, "WORKER_REPORT");
+      assert.deepEqual(watched, ["worker-session-1"]);
+    }).pipe(Effect.provide(layerTest), Effect.scoped),
+  );
+
   it.effect(
     "pins hasPendingBackgroundWork while carryover holds a live subagent after root settle",
     () =>

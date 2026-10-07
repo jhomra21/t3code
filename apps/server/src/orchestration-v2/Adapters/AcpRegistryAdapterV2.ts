@@ -3,7 +3,7 @@ import {
   normalizeDevinToolCall,
   extractDevinSubagentUpdate,
 } from "./DevinAcp.ts";
-import { extractDroidSubagentUpdate } from "./DroidAcp.ts";
+import { awaitDroidSubagentEnd, extractDroidSubagentUpdate } from "./DroidAcp.ts";
 import {
   AcpRegistrySettings,
   defaultInstanceIdForDriver,
@@ -217,6 +217,10 @@ export function makeAcpRegistryAdapterV2(options: AcpRegistryAdapterV2Options) {
             subagents: { ...AcpProviderCapabilitiesV2.subagents, supportsSubagents: true },
           },
           extractSubagentUpdate: extractDroidSubagentUpdate,
+          awaitSubagentEnd: awaitDroidSubagentEnd({
+            fileSystem: options.fileSystem,
+            environment: options.environment,
+          }),
         }
       : {}),
     makeRuntime: options.makeRuntime ?? makeAcpRegistryRuntime(options),
