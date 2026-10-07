@@ -5497,7 +5497,21 @@ describe("AcpAdapterV2", () => {
         result: string | null;
         work: AcpAdapterV2SubagentWork;
       }>();
+      const liveWork: AcpAdapterV2SubagentWork = {
+        model: "GPT-6 Luna",
+        steps: [
+          {
+            kind: "tool",
+            id: "call-1",
+            name: "Execute",
+            input: { command: "ls" },
+            output: null,
+            isError: false,
+          },
+        ],
+      };
       const watched: Array<string> = [];
+      const liveGate = yield* Deferred.make<void>();
       const workReads: Array<string> = [];
       const adapter = makeAcpAdapterV2({
         crypto: yield* Crypto.Crypto,
@@ -5517,8 +5531,12 @@ describe("AcpAdapterV2", () => {
                   result: null,
                 }
               : undefined,
-          awaitSubagentEnd: ({ childSessionId }) =>
+          awaitSubagentEnd: ({ childSessionId, onWork }) =>
             Effect.sync(() => watched.push(childSessionId)).pipe(
+              Effect.andThen(Deferred.await(liveGate)),
+              // The same progress twice: only the first may reach the thread.
+              Effect.andThen(onWork(liveWork)),
+              Effect.andThen(onWork(liveWork)),
               Effect.andThen(Deferred.await(workerEnd)),
             ),
           readSubagentWork: () =>
@@ -5582,6 +5600,7 @@ describe("AcpAdapterV2", () => {
       assert.deepEqual(statusesBeforeSettle.at(-1), "running");
       assert.deepEqual(watched, ["worker-session-1"]);
 
+      yield* Deferred.succeed(liveGate, undefined);
       yield* Deferred.succeed(workerEnd, {
         status: "completed",
         result: "WORKER_REPORT",
@@ -5630,7 +5649,11 @@ describe("AcpAdapterV2", () => {
       assert.equal(finalResult, "WORKER_REPORT");
       assert.equal(finalModel, "GPT-6 Luna");
       // The worker's steps are in its thread, and its final reply is there once, not again as the result.
-      assert.deepEqual(childTools, ["Execute:completed", "Read:running"]);
+      assert.deepEqual(
+        childTools,
+        ["Execute:running", "Execute:completed", "Read:running"],
+        "the tool shows as running while the worker works, then completes once",
+      );
       assert.deepEqual(childReplies, ["WORKER_REPORT"]);
       assert.deepEqual(watched, ["worker-session-1"]);
       assert.deepEqual(workReads, [], "the end check already carried the worker's work");

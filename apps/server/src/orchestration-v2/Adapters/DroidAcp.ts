@@ -6,8 +6,9 @@ import * as Stream from "effect/Stream";
 import type { AcpToolCallState } from "../../provider/acp/AcpRuntimeModel.ts";
 import {
   findDroidSessionFile,
-  readDroidSubagentSession,
+  followDroidSubagent,
   readDroidSubagentWork,
+  type DroidSubagentWork,
   readDroidWakeReply,
 } from "../../provider/acp/DroidSessionTranscript.ts";
 import type { AcpAdapterV2Flavor, AcpAdapterV2SubagentUpdate } from "./AcpAdapterV2.ts";
@@ -112,18 +113,28 @@ export const awaitDroidSubagentEnd =
     readonly fileSystem: FileSystem.FileSystem;
     readonly environment: NodeJS.ProcessEnv;
   }): NonNullable<AcpAdapterV2Flavor["awaitSubagentEnd"]> =>
-  ({ childSessionId, startedAtMillis }) =>
+  ({ childSessionId, startedAtMillis, onWork }) =>
     Effect.gen(function* () {
       const file = yield* findDroidSessionFile({
         sessionId: childSessionId,
         environment: input.environment,
       });
       if (file === undefined) return undefined;
+      const follow = followDroidSubagent({ file, startedAtMillis });
+      let reported: DroidSubagentWork | undefined;
       const end = yield* Stream.merge(
         input.fileSystem.watch(file).pipe(Stream.debounce(Duration.millis(200))),
         Stream.make(undefined),
       ).pipe(
-        Stream.mapEffect(() => readDroidSubagentSession({ file, startedAtMillis })),
+        Stream.mapEffect(() =>
+          follow.pipe(
+            Effect.tap((session) => {
+              if (session.work === reported) return Effect.void;
+              reported = session.work;
+              return onWork(session.work);
+            }),
+          ),
+        ),
         Stream.filter((session) => session.outcome !== undefined),
         Stream.take(1),
         Stream.runHead,

@@ -195,8 +195,6 @@ function subagentSteps(
 
 // A parent session can be tens of MB, and the wake turn is always at its end.
 const WAKE_TAIL_BYTES = 1_048_576;
-// Enough for the last few rows, which is all that tells whether a worker's turn has ended.
-const END_TAIL_BYTES = 16_384;
 
 const isInjectedReminder = (row: typeof SessionRow.Type) =>
   row.message?.role === "user" &&
@@ -238,74 +236,110 @@ export const readDroidWakeReply = Effect.fn("readDroidWakeReply")(function* (inp
 });
 
 /**
- * What a worker did and which model it ran on, for showing in its thread once it has ended. The
- * model comes from the settings file beside the session file. Droid names a custom model
- * `custom:<display name>-<index>`, and only the display name is worth showing.
+ * The model a worker ran on, from the settings file beside its session file. Droid names a custom
+ * model `custom:<display name>-<index>`, and only the display name is worth showing.
  */
-const subagentWork = Effect.fn("subagentWork")(function* (
-  file: string,
-  rows: ReadonlyArray<typeof SessionRow.Type>,
-) {
-  const settings = yield* Effect.tryPromise(() =>
+const readSubagentModel = (file: string) =>
+  Effect.tryPromise(() =>
     NodeFSP.readFile(file.replace(/\.jsonl$/u, ".settings.json"), "utf8"),
   ).pipe(
-    Effect.map(decodeSettings),
-    Effect.catch(() => Effect.succeed(Option.none())),
-  );
-  const model = Option.getOrUndefined(settings)?.model?.trim();
-  return {
-    model:
-      model === undefined || model.length === 0
+    Effect.map((content) => {
+      const model = Option.getOrUndefined(decodeSettings(content))?.model?.trim();
+      return model === undefined || model.length === 0
         ? undefined
-        : model.replace(/^custom:/u, "").replace(/-\d+$/u, ""),
-    steps: subagentSteps(rows),
-  };
-});
+        : model.replace(/^custom:/u, "").replace(/-\d+$/u, "");
+    }),
+    Effect.catch(() => Effect.succeed(undefined)),
+  );
 
-/** `subagentWork` for a worker whose ending was not observed, which reads its session file itself. */
+export interface DroidSubagentWork {
+  readonly model: string | undefined;
+  readonly steps: ReadonlyArray<DroidSubagentStep>;
+}
+
+/** `DroidSubagentWork` for a worker whose ending was not observed, which reads its file itself. */
 export const readDroidSubagentWork = Effect.fn("readDroidSubagentWork")(function* (input: {
   readonly sessionId: string;
   readonly environment: NodeJS.ProcessEnv;
 }) {
   const file = yield* findDroidSessionFile(input);
   if (file === undefined) return { model: undefined, steps: [] };
-  return yield* subagentWork(file, yield* readSessionRows(file));
+  const [rows, model] = yield* Effect.all([readSessionRows(file), readSubagentModel(file)], {
+    concurrency: 2,
+  });
+  return { model, steps: subagentSteps(rows) };
 });
 
+/** Appended bytes up to the last complete line, so a row Droid is still writing is read next time. */
+const readAppended = (file: string, offset: number) =>
+  Effect.tryPromise(async () => {
+    const handle = await NodeFSP.open(file, "r");
+    try {
+      const { size } = await handle.stat();
+      if (size < offset) return { restarted: true, text: "", consumed: 0 };
+      const buffer = Buffer.alloc(size - offset);
+      await handle.read(buffer, 0, buffer.length, offset);
+      const complete = buffer.lastIndexOf(0x0a) + 1;
+      return {
+        restarted: false,
+        text: buffer.subarray(0, complete).toString("utf8"),
+        consumed: complete,
+      };
+    } finally {
+      await handle.close();
+    }
+  }).pipe(Effect.catch(() => Effect.succeed({ restarted: false, text: "", consumed: 0 })));
+
 /**
- * A worker's own session, which Droid never streams over ACP. `outcome` is set only once the file
- * ends on a turn outcome (or session end) for a turn that began at or after `startedAtMillis`, so a
- * running worker, or a resumed one whose file still ends on an earlier turn, reports none.
+ * Follows a worker's own session, which Droid never streams over ACP. Each call to the returned
+ * effect reads only what was appended since the last one, so the file is never re-read from the
+ * start however long the worker runs.
  *
- * This runs on every write while the worker works, so it first looks only at the file's tail and
- * reads the whole file once the last row says the turn has ended.
+ * `outcome` is set only once the file ends on a turn outcome (or session end) for a turn that began
+ * at or after `startedAtMillis`, so a running worker, or a resumed one whose file still ends on an
+ * earlier turn, reports none. `work` is what the worker has done so far, and is only recomputed
+ * when rows were appended.
  */
-export const readDroidSubagentSession = Effect.fn("readDroidSubagentSession")(function* (input: {
+export const followDroidSubagent = (input: {
   readonly file: string;
   readonly startedAtMillis: number;
-}) {
-  const last = (yield* readSessionTailRows(input.file, END_TAIL_BYTES)).at(-1);
-  if (last?.type !== "session_end" && last?.type !== "agent_turn_outcome") {
-    return { outcome: undefined, assistantMessages: [], work: undefined };
-  }
-  const rows = yield* readSessionRows(input.file);
-  const lastUserAt = rows.findLast((row) => row.message?.role === "user")?.timestamp;
-  const currentTurn = lastUserAt !== undefined && Date.parse(lastUserAt) >= input.startedAtMillis;
-  const outcome = !currentTurn
-    ? undefined
-    : last.type === "session_end"
-      ? ("completed" as const)
-      : last.reason === "completed"
-        ? ("completed" as const)
-        : last.reason === "cancelled"
-          ? ("cancelled" as const)
-          : ("failed" as const);
-  return {
-    outcome,
-    assistantMessages: messageTexts(rows).flatMap((message) =>
-      message.role === "assistant" ? [message.text] : [],
-    ),
-    // Handed back with the outcome so showing the worker's thread does not read the file again.
-    work: outcome === undefined ? undefined : yield* subagentWork(input.file, rows),
-  };
-});
+}) => {
+  const rows: Array<typeof SessionRow.Type> = [];
+  let offset = 0;
+  let model: string | undefined;
+  let work: DroidSubagentWork = { model: undefined, steps: [] };
+  return Effect.gen(function* () {
+    const appended = yield* readAppended(input.file, offset);
+    if (appended.restarted) {
+      rows.length = 0;
+      offset = 0;
+    }
+    const added = decodeRows(appended.text);
+    offset += appended.consumed;
+    rows.push(...added);
+    if (model === undefined && rows.length > 0) model = yield* readSubagentModel(input.file);
+    if (added.length > 0 || appended.restarted) work = { model, steps: subagentSteps(rows) };
+    else if (work.model !== model) work = { model, steps: work.steps };
+    const last = rows.at(-1);
+    const lastUserAt = rows.findLast((row) => row.message?.role === "user")?.timestamp;
+    const currentTurn = lastUserAt !== undefined && Date.parse(lastUserAt) >= input.startedAtMillis;
+    const outcome =
+      !currentTurn || (last?.type !== "session_end" && last?.type !== "agent_turn_outcome")
+        ? undefined
+        : last.type === "session_end" || last.reason === "completed"
+          ? ("completed" as const)
+          : last.reason === "cancelled"
+            ? ("cancelled" as const)
+            : ("failed" as const);
+    return {
+      outcome,
+      work,
+      assistantMessages:
+        outcome === undefined
+          ? []
+          : messageTexts(rows).flatMap((message) =>
+              message.role === "assistant" ? [message.text] : [],
+            ),
+    };
+  });
+};

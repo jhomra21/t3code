@@ -323,6 +323,8 @@ export interface AcpAdapterV2Flavor {
   readonly awaitSubagentEnd?: (input: {
     readonly childSessionId: string;
     readonly startedAtMillis: number;
+    /** Called with the worker's work so far each time it grows, while it is still running. */
+    readonly onWork: (work: AcpAdapterV2SubagentWork) => Effect.Effect<void>;
   }) => Effect.Effect<
     | {
         readonly status: "completed" | "failed" | "cancelled";
@@ -1449,10 +1451,10 @@ interface ActiveAcpSubagent {
   childSessionId: string | null;
   /** Set once `flavor.awaitSubagentEnd` has been started for this subagent. */
   endWatched: boolean;
-  /** What the worker did, when reading it for the end check already had it. */
-  work?: AcpAdapterV2SubagentWork | undefined;
-  /** Set once the worker's work has been projected into the child thread. */
-  stepsProjected: boolean;
+  /** The latest work read from the worker's own session, so projecting it never reads it again. */
+  latestWork?: AcpAdapterV2SubagentWork | undefined;
+  /** Step position to what was last projected for it, so only new or changed steps are emitted. */
+  readonly projectedSteps: Map<number, string>;
   assistantText: string;
   readonly assistantMessages: Map<string, string>;
   readonly childItemOrdinals: Map<string, number>;
@@ -2748,32 +2750,33 @@ export function makeAcpAdapterV2(
           }
         });
 
-        const projectSubagentSteps = Effect.fnUntraced(function* (subagent: ActiveAcpSubagent) {
-          const { childSessionId } = subagent;
-          if (
-            flavor.readSubagentWork === undefined ||
-            childSessionId === null ||
-            subagent.stepsProjected
-          ) {
-            return;
-          }
-          subagent.stepsProjected = true;
-          const { model, steps } =
-            subagent.work ?? (yield* flavor.readSubagentWork({ childSessionId }));
-          if (subagent.task.model === null && model !== undefined) {
-            subagent.task = { ...subagent.task, model };
+        /** Emits the steps in `work` that are new or changed since the last call; safe to repeat. */
+        const projectSubagentWork = Effect.fnUntraced(function* (
+          subagent: ActiveAcpSubagent,
+          work: AcpAdapterV2SubagentWork,
+        ) {
+          if (subagent.task.model === null && work.model !== undefined) {
+            subagent.task = { ...subagent.task, model: work.model };
           }
           const nativeTaskId = subagent.task.nativeTaskRef?.nativeId ?? String(subagent.task.id);
-          let stepNumber = 0;
-          for (const step of steps) {
-            stepNumber += 1;
+          for (const [index, step] of work.steps.entries()) {
+            const status =
+              step.kind === "message"
+                ? "completed"
+                : step.isError
+                  ? "failed"
+                  : step.output === null
+                    ? "running"
+                    : "completed";
+            const signature = `${status}:${step.kind === "tool" ? (step.output?.length ?? 0) : 0}`;
+            if (subagent.projectedSteps.get(index) === signature) continue;
+            subagent.projectedSteps.set(index, signature);
             if (step.kind === "message") {
-              yield* emitSubagentAssistant(subagent, step.text, "replace", `step-${stepNumber}`);
+              yield* emitSubagentAssistant(subagent, step.text, "replace", `step-${index + 1}`);
               continue;
             }
             const key = `${nativeTaskId}:tool:${step.id}`;
             const now = yield* DateTime.now;
-            const status = step.isError ? "failed" : step.output === null ? "running" : "completed";
             yield* emitProviderEvent({
               type: "turn_item.updated",
               driver,
@@ -2799,6 +2802,14 @@ export function makeAcpAdapterV2(
               },
             });
           }
+        });
+
+        /** For a worker that has ended: the work already followed, or one read of its session. */
+        const projectSubagentSteps = Effect.fnUntraced(function* (subagent: ActiveAcpSubagent) {
+          const { childSessionId } = subagent;
+          if (flavor.readSubagentWork === undefined || childSessionId === null) return;
+          subagent.latestWork ??= yield* flavor.readSubagentWork({ childSessionId });
+          yield* projectSubagentWork(subagent, subagent.latestWork);
         });
 
         // Assigned after finishSubagentFromNotice, which it calls back into.
@@ -2902,7 +2913,7 @@ export function makeAcpAdapterV2(
             nextChildOrdinal: 101,
             terminalStatusProjected: false,
             endWatched: false,
-            stepsProjected: false,
+            projectedSteps: new Map(),
           };
           subagent.task = task;
           context.subagents.set(nativeTaskId, subagent);
@@ -5444,7 +5455,7 @@ export function makeAcpAdapterV2(
                 candidate.childSessionId === notice.childSessionId ||
                 candidate.task.nativeTaskRef?.nativeId === notice.childSessionId,
             );
-          if (known !== undefined && notice.work !== undefined) known.work = notice.work;
+          if (known !== undefined && notice.work !== undefined) known.latestWork = notice.work;
           if (known !== undefined && acpSubagentStatusBlocksTurnSettlement(known.task.status)) {
             yield* recordWakeReport(notice.childSessionId, {
               kind: "subagent",
@@ -5501,6 +5512,10 @@ export function makeAcpAdapterV2(
               .awaitSubagentEnd({
                 childSessionId,
                 startedAtMillis: DateTime.toEpochMillis(startedAt),
+                onWork: (work) => {
+                  subagent.latestWork = work;
+                  return projectSubagentWork(subagent, work);
+                },
               })
               .pipe(
                 Effect.flatMap((end) =>
