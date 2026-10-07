@@ -114,6 +114,13 @@ export interface ProviderInstance {
       readonly cwd: string;
       readonly sessionId: string;
     }) => Effect.Effect<void, AcpRegistryOperationError>;
+    readonly loadSessionHistory: (input: {
+      readonly cwd: string;
+      readonly sessionId: string;
+    }) => Effect.Effect<
+      ReadonlyArray<{ readonly role: "user" | "assistant"; readonly text: string }>,
+      AcpRegistryOperationError
+    >;
     readonly listProviders: (
       cwd: string,
     ) => Effect.Effect<AcpRegistryListProvidersResult, AcpRegistryOperationError>;

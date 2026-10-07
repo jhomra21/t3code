@@ -88,6 +88,13 @@ export function t3AcpPromptWithInstructions(input: {
   return `<t3_code_instructions>\n${instructions.join("\n\n")}\n</t3_code_instructions>\n\n<user_request>\n${input.prompt}\n</user_request>`;
 }
 
+export function stripT3AcpPromptScaffolding(text: string): string {
+  const request = /<user_request>([\s\S]*?)<\/user_request>/.exec(text);
+  const source = request?.[1] ?? text;
+  const withoutReminders = source.replaceAll(/<system-reminder>[\s\S]*?<\/system-reminder>/g, "");
+  return request === null && withoutReminders === text ? text : withoutReminders.trim();
+}
+
 /**
  * Providers without a system/developer-instruction channel receive this
  * context in the first prompt. Keep the wrapper explicit so it cannot be

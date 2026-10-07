@@ -90,8 +90,11 @@ running. Commands the agent names with a `$` prefix appear in T3 Code's `$` skil
 
 When an agent advertises ACP session listing and import support, expand its provider card,
 choose a project, and select **List sessions**. Importing one creates a deterministic T3 thread
-backed by that native session. Importing the same agent session again returns the existing thread,
-including when another client performs the import.
+backed by that native session. Importing also copies the session's past user and assistant
+messages into the thread, up to the newest 1,000. Tool activity is not copied. The history is
+whatever the agent replays when T3 loads the session, which some agents trim. For Factory Droid,
+T3 reads the full transcript from Droid's own session file instead. Importing the same
+agent session again returns the existing thread, including when another client performs the import.
 
 The thread keeps the native session's title and last-update value as provider metadata without
 overwriting a title you set in T3 Code. Agents that report ACP context usage drive the composer's

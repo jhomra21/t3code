@@ -288,6 +288,83 @@ export type AcpParsedSessionEvent =
       readonly rawPayload: unknown;
     };
 
+/** Reads one `session/load` replay notification as a message fragment; other updates are not history. */
+export function parseLoadedHistoryUpdate(params: EffectAcpSchema.SessionNotification):
+  | {
+      readonly role: "user" | "assistant" | "thought";
+      readonly messageId: string | null;
+      readonly text: string;
+      readonly replace: boolean;
+    }
+  | undefined {
+  const update = params.update;
+  switch (update.sessionUpdate) {
+    case "user_message_chunk":
+    case "agent_message_chunk":
+    case "agent_thought_chunk": {
+      return {
+        role:
+          update.sessionUpdate === "user_message_chunk"
+            ? "user"
+            : update.sessionUpdate === "agent_thought_chunk"
+              ? "thought"
+              : "assistant",
+        messageId: update.messageId ?? null,
+        text: acpContentBlockDisplayText(update.content) ?? "",
+        replace: false,
+      };
+    }
+    case "user_message":
+    case "agent_message":
+    case "agent_thought": {
+      return {
+        role:
+          update.sessionUpdate === "user_message"
+            ? "user"
+            : update.sessionUpdate === "agent_thought"
+              ? "thought"
+              : "assistant",
+        messageId: update.messageId ?? null,
+        text: (update.content ?? [])
+          .flatMap((content) => {
+            const display = acpContentBlockDisplayText(content);
+            return display === undefined ? [] : [display];
+          })
+          .join("\n"),
+        replace: true,
+      };
+    }
+    default:
+      return undefined;
+  }
+}
+
+export function loadedHistoryMessageIdentity(input: {
+  readonly sessionId: string;
+  readonly role: "user" | "assistant" | "thought";
+  readonly messageId: string | null;
+  readonly loadingRole: "user" | "assistant" | "thought" | null;
+  readonly loadingMessageId: string | null;
+  readonly loadingIndex: number;
+}): {
+  readonly loadingIndex: number;
+  readonly loadingMessageId: string | null;
+  readonly nativeItemId: string;
+} {
+  const startsNew =
+    input.loadingRole !== input.role ||
+    (input.messageId !== null && input.loadingMessageId !== input.messageId);
+  const loadingIndex = startsNew ? input.loadingIndex + 1 : input.loadingIndex;
+  return {
+    loadingIndex,
+    loadingMessageId: input.messageId ?? (startsNew ? null : input.loadingMessageId),
+    nativeItemId:
+      input.messageId === null
+        ? `${input.sessionId}:history:${input.role}:${loadingIndex}`
+        : `${input.sessionId}:history:${input.role}:message:${input.messageId}`,
+  };
+}
+
 const boundedContentMetadata = (value: string | null | undefined, maximumLength: number): string =>
   value?.trim().slice(0, maximumLength) ?? "";
 

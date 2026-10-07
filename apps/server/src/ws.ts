@@ -1440,8 +1440,8 @@ const layerWsRpc = (
       ) {
         return yield* acpRegistryRuntimeCoordinator.withSessionMutation(
           Effect.gen(function* () {
-            yield* acpRegistryProject(input.projectId);
-            const { instance } = yield* acpSessionManager(input.instanceId);
+            const project = yield* acpRegistryProject(input.projectId);
+            const { instance, manager } = yield* acpSessionManager(input.instanceId);
             const providerSnapshot = yield* instance.snapshot.getSnapshot;
             if (
               providerSnapshot.nativeSessions?.canLoad !== true &&
@@ -1469,6 +1469,21 @@ const layerWsRpc = (
             );
             if (existing !== null) return { threadId, imported: false } as const;
 
+            const history = yield* manager
+              .loadSessionHistory({
+                cwd: project.workspaceRoot,
+                sessionId: input.sessionId,
+              })
+              .pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new AcpRegistryOperationError({
+                      reason: "session_import_failed",
+                      message: "Could not load the ACP session history.",
+                      cause,
+                    }),
+                ),
+              );
             const provider = (yield* providerRegistry.getProviders).find(
               (candidate) => candidate.instanceId === input.instanceId,
             );
@@ -1523,6 +1538,22 @@ const layerWsRpc = (
                 cause: launched.failure,
               });
             }
+            yield* agentSessionImporter
+              .writeAcpSessionHistory({
+                threadId,
+                updatedAt: input.updatedAt ?? null,
+                messages: history,
+              })
+              .pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new AcpRegistryOperationError({
+                      reason: "session_import_failed",
+                      message: "Could not persist the ACP session history.",
+                      cause,
+                    }),
+                ),
+              );
             return { threadId, imported: true } as const;
           }),
         );

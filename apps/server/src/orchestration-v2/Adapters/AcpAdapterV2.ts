@@ -71,6 +71,7 @@ import {
   embeddedTerminalIdsFromSessionUpdate,
   extractMcpToolCallIdentity,
   mergeToolCallState,
+  loadedHistoryMessageIdentity,
   parsePermissionRequest,
   parseSessionUpdateEvent,
   toolCallVisibleOutputChanged,
@@ -3678,15 +3679,15 @@ export function makeAcpAdapterV2(
                 update.messageId
                   ? update.messageId
                   : null;
-              const startsNew =
-                current.loadingRole !== role ||
-                (sourceMessageId !== null && current.loadingMessageId !== sourceMessageId);
-              const loadingIndex = startsNew ? current.loadingIndex + 1 : current.loadingIndex;
-              const nativeItemId =
-                sourceMessageId === null
-                  ? `${notification.sessionId}:history:${role}:${loadingIndex}`
-                  : `${notification.sessionId}:history:${role}:message:${sourceMessageId}`;
-              const messageId = providerMessageId(nativeItemId);
+              const identity = loadedHistoryMessageIdentity({
+                sessionId: notification.sessionId,
+                role,
+                messageId: sourceMessageId,
+                loadingRole: current.loadingRole,
+                loadingMessageId: current.loadingMessageId,
+                loadingIndex: current.loadingIndex,
+              });
+              const messageId = providerMessageId(identity.nativeItemId);
               const key = String(messageId);
               const previous = current.messages.get(key);
               const messages = new Map(current.messages);
@@ -3708,8 +3709,8 @@ export function makeAcpAdapterV2(
                 order: current.order.includes(key) ? current.order : [...current.order, key],
                 messages,
                 loadingRole: role,
-                loadingMessageId: sourceMessageId ?? (startsNew ? null : current.loadingMessageId),
-                loadingIndex,
+                loadingMessageId: identity.loadingMessageId,
+                loadingIndex: identity.loadingIndex,
               };
             });
           });

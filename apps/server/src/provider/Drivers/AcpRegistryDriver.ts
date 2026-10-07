@@ -49,6 +49,7 @@ import {
   type AcpRegistryConfigurationProbeResult,
   type AcpRegistryLiveConfiguration,
   deleteAcpRegistrySession,
+  loadAcpRegistrySessionHistory,
   disableAcpRegistryProvider,
   listAcpRegistrySessions,
   listAcpRegistryProviders,
@@ -825,6 +826,16 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
           deleteSession: ({ cwd, sessionId }) =>
             provideAcpManagementServices(
               deleteAcpRegistrySession({
+                instanceId,
+                settings: effectiveConfig,
+                cwd,
+                environment: processEnvironment,
+                sessionId,
+              }),
+            ),
+          loadSessionHistory: ({ cwd, sessionId }) =>
+            provideAcpManagementServices(
+              loadAcpRegistrySessionHistory({
                 instanceId,
                 settings: effectiveConfig,
                 cwd,

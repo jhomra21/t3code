@@ -15,6 +15,7 @@ import * as Crypto from "effect/Crypto";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Stream from "effect/Stream";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
@@ -29,6 +30,13 @@ import { parseSessionModeState } from "./AcpRuntimeModel.ts";
 import { acpProviderOptionDescriptors } from "./AcpSessionConfig.ts";
 import * as AcpRegistryRuntimeCoordinator from "./AcpRegistryRuntimeCoordinator.ts";
 import * as AcpSessionRuntime from "./AcpSessionRuntime.ts";
+import {
+  acpContentBlockDisplayText,
+  loadedHistoryMessageIdentity,
+  parseLoadedHistoryUpdate,
+} from "./AcpRuntimeModel.ts";
+import { stripT3AcpPromptScaffolding } from "../T3OrchestrationInstructions.ts";
+import { readDroidTranscript } from "./DroidSessionTranscript.ts";
 
 const MAX_AUTH_METHODS = 32;
 const MAX_MODELS = 256;
@@ -37,6 +45,9 @@ const MAX_NAME_LENGTH = 160;
 const MAX_DESCRIPTION_LENGTH = 1_024;
 const MAX_COMMANDS = 128;
 const MAX_COMMAND_LINE_LENGTH = 2_048;
+const MAX_IMPORTED_ACP_MESSAGES = 1_000;
+const MAX_IMPORTED_ACP_REPLAY_BYTES = 8 * 1024 * 1024;
+const MAX_IMPORTED_ACP_HISTORY_BYTES = 4 * 1024 * 1024;
 // Covers a cold package command launch and ACP initialization after registry
 // preparation globally installs the exact package.
 const PROBE_TIMEOUT_SECONDS = 60;
@@ -455,7 +466,7 @@ export const probeAcpRegistryConfiguration = Effect.fn("AcpRegistryProbe.probeCo
 const MANAGEMENT_TIMEOUT = Duration.seconds(60);
 
 const makeAcpRegistryManagementRuntime = Effect.fn("AcpRegistryProbe.makeManagementRuntime")(
-  function* (input: AcpRegistryManagementInput) {
+  function* (input: AcpRegistryManagementInput, resumeSessionId?: string) {
     const catalog = yield* AcpRegistrySupport.AcpRegistryCatalog;
     const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     const crypto = yield* Crypto.Crypto;
@@ -477,6 +488,7 @@ const makeAcpRegistryManagementRuntime = Effect.fn("AcpRegistryProbe.makeManagem
         },
         clientInfo: { name: "t3-code-session-manager", version: "0.0.0" },
         authenticateOnAuthRequired: false,
+        ...(resumeSessionId === undefined ? {} : { resumeSessionId }),
         ...(input.settings.authMethodId ? { authMethodId: input.settings.authMethodId } : {}),
       }).pipe(
         Layer.provide(
@@ -635,6 +647,124 @@ export const listAcpRegistrySessions = Effect.fn("AcpRegistryProbe.listSessions"
           ),
       }),
       Effect.mapError((error) => managementFailure("list", error)),
+    ),
+);
+
+export const loadAcpRegistrySessionHistory = Effect.fn("AcpRegistryProbe.loadSessionHistory")(
+  function* (input: AcpRegistryManagementInput & { readonly sessionId: string }) {
+    type HistoryMessage = { readonly role: "user" | "assistant"; readonly text: string };
+    const history = new Map<string, HistoryMessage>();
+    let loadingRole: "user" | "assistant" | "thought" | null = null;
+    let loadingMessageId: string | null = null;
+    let loadingIndex = 0;
+    let replayBytes = 0;
+    const onSessionUpdate = (notification: EffectAcpSchema.SessionNotification) =>
+      Effect.sync(() => {
+        const fragment = parseLoadedHistoryUpdate(notification);
+        if (fragment === undefined || (fragment.text.length === 0 && !fragment.replace)) return;
+        const identity = loadedHistoryMessageIdentity({
+          sessionId: notification.sessionId,
+          role: fragment.role,
+          messageId: fragment.messageId,
+          loadingRole,
+          loadingMessageId,
+          loadingIndex,
+        });
+        loadingRole = fragment.role;
+        loadingMessageId = identity.loadingMessageId;
+        loadingIndex = identity.loadingIndex;
+        if (fragment.role === "thought" || replayBytes >= MAX_IMPORTED_ACP_REPLAY_BYTES) return;
+        const previous = history.get(identity.nativeItemId);
+        const text = fragment.replace ? fragment.text : `${previous?.text ?? ""}${fragment.text}`;
+        const remainingBytes = MAX_IMPORTED_ACP_REPLAY_BYTES - replayBytes;
+        const chunk = Buffer.from(text, "utf8");
+        replayBytes += Buffer.byteLength(fragment.text, "utf8");
+        history.set(identity.nativeItemId, {
+          role: fragment.role,
+          text:
+            chunk.byteLength > remainingBytes
+              ? chunk.subarray(0, remainingBytes).toString("utf8")
+              : text,
+        });
+      });
+    const runtime = yield* makeAcpRegistryManagementRuntime(input, input.sessionId);
+    yield* runtime.handleSessionUpdate(onSessionUpdate);
+    yield* Effect.forkScoped(
+      Stream.runForEach(runtime.getEvents(), (event) =>
+        event._tag === "EventStreamBarrier"
+          ? Deferred.succeed(event.acknowledge, undefined).pipe(Effect.asVoid)
+          : Effect.void,
+      ),
+    );
+    const loaded = yield* runtime.start();
+    yield* runtime.drainEvents;
+    yield* runtime.closeSession(loaded.sessionId).pipe(Effect.ignore);
+
+    const replayed = Array.from(history.values());
+    const transcript = yield* readDroidTranscript({
+      sessionId: input.sessionId,
+      environment: input.environment,
+    });
+    const messages = (transcript.length > replayed.length ? transcript : replayed).flatMap(
+      (message) => {
+        const text =
+          message.role === "user" ? stripT3AcpPromptScaffolding(message.text) : message.text.trim();
+        return text.length === 0 ? [] : [{ role: message.role, text }];
+      },
+    );
+    const firstUserMessage = messages.find((message) => message.role === "user");
+    const newestMessages = messages.slice(-MAX_IMPORTED_ACP_MESSAGES);
+    const retained = [
+      ...(firstUserMessage !== undefined && newestMessages[0] !== firstUserMessage
+        ? [firstUserMessage]
+        : []),
+      ...newestMessages,
+    ];
+    let retainedBytes = 0;
+    const bounded: Array<HistoryMessage> = [];
+    for (const message of retained) {
+      const messageBytes = Buffer.byteLength(message.text, "utf8");
+      if (
+        bounded.length >= MAX_IMPORTED_ACP_MESSAGES + 1 ||
+        retainedBytes + messageBytes > MAX_IMPORTED_ACP_HISTORY_BYTES
+      ) {
+        if (message === firstUserMessage && bounded.length === 0) {
+          bounded.push({
+            role: message.role,
+            text: Buffer.from(message.text, "utf8")
+              .subarray(0, MAX_IMPORTED_ACP_HISTORY_BYTES)
+              .toString("utf8"),
+          });
+        }
+        continue;
+      }
+      bounded.push(message);
+      retainedBytes += messageBytes;
+    }
+    return bounded;
+  },
+  (effect) =>
+    effect.pipe(
+      Effect.scoped,
+      Effect.timeoutOrElse({
+        duration: MANAGEMENT_TIMEOUT,
+        orElse: () =>
+          Effect.fail(
+            new AcpRegistryOperationError({
+              reason: "session_import_failed",
+              message: "The ACP session history request timed out.",
+            }),
+          ),
+      }),
+      Effect.mapError((error) =>
+        error._tag === "AcpRegistryOperationError"
+          ? error
+          : new AcpRegistryOperationError({
+              reason: "session_import_failed",
+              message: "Could not load the ACP session history.",
+              cause: error,
+            }),
+      ),
     ),
 );
 

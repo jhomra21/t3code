@@ -89,7 +89,10 @@ function dateTime(value: string): DateTime.Utc {
 function messageEvents(input: {
   readonly threadId: ThreadId;
   readonly index: number;
-  readonly message: AgentSessionScanner.AgentSessionThreadMessage;
+  readonly message: Pick<
+    AgentSessionScanner.AgentSessionThreadMessage,
+    "role" | "text" | "createdAt"
+  >;
 }): ReadonlyArray<OrchestrationV2DomainEvent> {
   const ordinal = input.index + 1;
   const suffix = String(input.index).padStart(6, "0");
@@ -396,7 +399,32 @@ const make = Effect.gen(function* () {
     return { importedCount, skippedCount } satisfies AgentSessionImportResult;
   });
 
-  return { importRecentAgentThreads };
+  const writeAcpSessionHistory = Effect.fn("writeAcpSessionHistoryV2")(function* (input: {
+    readonly threadId: ThreadId;
+    readonly updatedAt: string | null;
+    readonly messages: ReadonlyArray<{
+      readonly role: "user" | "assistant";
+      readonly text: string;
+    }>;
+  }) {
+    const now = yield* DateTime.now;
+    const fallback = DateTime.formatIso(now);
+    const createdAt = Option.match(
+      Option.fromNullishOr(input.updatedAt).pipe(Option.flatMap((value) => DateTime.make(value))),
+      { onNone: () => fallback, onSome: DateTime.formatIso },
+    );
+    // Deleting a thread is a soft delete, so a re-import reuses the thread id and the events of the
+    // earlier import are still stored. Event ids must be unique per import.
+    const importKey = DateTime.toEpochMillis(now);
+    const events = input.messages
+      .flatMap((message, index) =>
+        messageEvents({ threadId: input.threadId, index, message: { ...message, createdAt } }),
+      )
+      .map((event) => ({ ...event, id: EventId.make(`${event.id}:${importKey}`) }));
+    if (events.length > 0) yield* eventSink.write({ events });
+  });
+
+  return { importRecentAgentThreads, writeAcpSessionHistory };
 });
 
 type AgentSessionImporterShape = Effect.Success<typeof make>;

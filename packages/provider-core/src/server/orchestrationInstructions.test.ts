@@ -5,6 +5,7 @@ import {
   t3AcpPromptWithInstructions,
   t3OrchestrationPromptForFirstRun,
   t3OrchestrationSystemPrompt,
+  stripT3AcpPromptScaffolding,
 } from "./orchestrationInstructions.ts";
 
 describe("T3 orchestration provider instructions", () => {
@@ -49,6 +50,22 @@ describe("T3 orchestration provider instructions", () => {
   it("only exposes the system prompt when the T3 MCP server is attached", () => {
     assert.equal(t3OrchestrationSystemPrompt(false), undefined);
     assert.equal(t3OrchestrationSystemPrompt(true), T3_CODE_ORCHESTRATION_INSTRUCTIONS);
+  });
+
+  it("strips T3 prompt wrappers and agent reminders from imported user messages", () => {
+    assert.equal(
+      stripT3AcpPromptScaffolding(
+        "<t3_code_instructions>hidden</t3_code_instructions>\n\n<user_request>\nDo the work.\n</user_request>\n\n<runtime_info>hidden</runtime_info><system-reminder>hidden</system-reminder>",
+      ),
+      "Do the work.",
+    );
+    assert.equal(
+      stripT3AcpPromptScaffolding(
+        "<user_request>\n<system-reminder>only wrapper</system-reminder>\n</user_request>",
+      ),
+      "",
+    );
+    assert.equal(stripT3AcpPromptScaffolding("ordinary request"), "ordinary request");
   });
 
   it("gives ACP sessions provider-neutral mode, browser, and orchestration guidance", () => {
