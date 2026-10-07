@@ -96,6 +96,26 @@ describe("V2 client presentation", () => {
     expect(shell.branchPullRequest).toEqual(branchPullRequest);
   });
 
+  it("keeps a run-less thread's working status before it has a provider thread", () => {
+    const working = presentThreadShell(environmentId, {
+      ...v2ThreadShell,
+      latestRunId: null,
+      activeProviderThreadId: null,
+      status: "running",
+      activityRunStatus: "running",
+    });
+    const idle = presentThreadShell(environmentId, {
+      ...v2ThreadShell,
+      latestRunId: null,
+      activeProviderThreadId: null,
+      status: "idle",
+      activityRunStatus: null,
+    });
+
+    expect(working.runtime?.status).toBe("running");
+    expect(idle.runtime).toBeNull();
+  });
+
   it("presents provider errors carried by failed thread shells", () => {
     const runId = RunId.make("run-failed");
     const shell = presentThreadShell(environmentId, {
