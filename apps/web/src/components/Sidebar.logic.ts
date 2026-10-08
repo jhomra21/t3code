@@ -1395,7 +1395,8 @@ export function sortLogicalProjectsForSidebar<
 
 export function sortSidebarV2ProjectGroups<
   TProject extends LogicalSidebarProject,
-  TThread extends ScopedSidebarThread & Pick<SidebarThreadSummary, "lineage">,
+  TThread extends ScopedSidebarThread &
+    Pick<SidebarThreadSummary, "lineage" | "providerInstanceId" | "runtime">,
 >(
   projects: readonly TProject[],
   threads: readonly TThread[],

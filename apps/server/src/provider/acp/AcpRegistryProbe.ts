@@ -30,12 +30,8 @@ import { parseSessionModeState } from "./AcpRuntimeModel.ts";
 import { acpProviderOptionDescriptors } from "./AcpSessionConfig.ts";
 import * as AcpRegistryRuntimeCoordinator from "./AcpRegistryRuntimeCoordinator.ts";
 import * as AcpSessionRuntime from "./AcpSessionRuntime.ts";
-import {
-  acpContentBlockDisplayText,
-  loadedHistoryMessageIdentity,
-  parseLoadedHistoryUpdate,
-} from "./AcpRuntimeModel.ts";
-import { stripT3AcpPromptScaffolding } from "../T3OrchestrationInstructions.ts";
+import { loadedHistoryMessageIdentity, parseLoadedHistoryUpdate } from "./AcpRuntimeModel.ts";
+import { stripT3AcpPromptScaffolding } from "@t3tools/provider-core/server/orchestrationInstructions";
 import { readDroidTranscript } from "./DroidSessionTranscript.ts";
 
 const MAX_AUTH_METHODS = 32;
