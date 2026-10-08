@@ -517,6 +517,7 @@ export interface AcpAdapterV2SubagentUpdate {
   readonly prompt: string;
   readonly title: string | null;
   readonly model: string | null;
+  readonly effort?: string | undefined;
   readonly status:
     | "pending"
     | "running"
@@ -2893,6 +2894,9 @@ export function makeAcpAdapterV2(
               startedAt: now,
             }),
             model: update.model?.trim() || existing?.task.model || null,
+            ...((update.effort ?? existing?.task.effort) === undefined
+              ? {}
+              : { effort: update.effort ?? existing?.task.effort }),
             status: taskStatus,
             result: update.result ?? existing?.task.result ?? null,
             completedAt: acpSubagentStatusIsTerminal(taskStatus) ? now : null,

@@ -110,6 +110,7 @@ export function projectedSubagentsToRuntime(
     readonly title: string | null;
     readonly prompt: string;
     readonly model: string | null;
+    readonly effort?: string | undefined;
     readonly status: OrchestrationV2Subagent["status"];
     readonly progress?: string | undefined;
     readonly result: string | null;
@@ -129,7 +130,7 @@ export function projectedSubagentsToRuntime(
         (subagent.prompt.length > 80 ? `${subagent.prompt.slice(0, 77)}...` : subagent.prompt),
       role: null,
       model: subagent.model,
-      effort: null,
+      effort: subagent.effort ?? null,
       status: subagent.status,
       activationCount: 1,
       usage: null,

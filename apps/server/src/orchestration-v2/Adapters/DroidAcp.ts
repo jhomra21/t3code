@@ -22,6 +22,13 @@ function text(value: unknown): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
 }
 
+// Task's `complexity` is Droid's name for the worker's reasoning effort.
+const EFFORT_BY_COMPLEXITY = new Map([
+  ["light", "low"],
+  ["medium", "medium"],
+  ["heavy", "high"],
+]);
+
 const BACKGROUND_LAUNCH = /^Task launched in background\./;
 const SESSION_ID = /^session_id: (\S+)/m;
 // A blocking Task returns the worker's reply behind this fixed two-line header.
@@ -60,6 +67,8 @@ function extractDroidSubagentUpdateFrom(
   // Not the title: a later update without one is rewritten to a generic "Tool".
   const input = tool.data.rawInput;
   if (!isRecord(input) || typeof input.subagent_type !== "string") return undefined;
+  const effort =
+    typeof input.complexity === "string" ? EFFORT_BY_COMPLEXITY.get(input.complexity) : undefined;
   const output = isRecord(tool.data.rawOutput) ? (text(tool.data.rawOutput.text) ?? "") : "";
   const launchedInBackground = BACKGROUND_LAUNCH.test(output);
   const status =
@@ -74,6 +83,7 @@ function extractDroidSubagentUpdateFrom(
     prompt: text(input.prompt) ?? text(input.description) ?? "",
     title: text(input.description) ?? text(input.subagent_type),
     model: modelOf(input.subagent_type),
+    ...(effort === undefined ? {} : { effort }),
     status,
     result: status === "running" ? null : text(output.replace(REPORT_HEADER, "")),
   };
