@@ -24,6 +24,11 @@ process.stdin.on("data", (chunk) => {
     if (frame.type === "response") {
       send({type:"notification",method:"droid.session_notification",
         params:{notification:{type:"reply_seen",reply:frame}}});
+    } else if (frame.method === "malformed") {
+      process.stdout.write("not-json\\n");
+      send({type:"notification",method:"droid.session_notification",params:{notification:12}});
+      send({type:"future-frame",method:"new"});
+      send({type:"response",id:frame.id,result:{ok:true}});
     } else if (frame.method === "exit") process.exit(9);
     else if (frame.method === "requests") {
       for (const method of ["droid.ask_user","droid.request_permission","unknown"]) {
@@ -38,6 +43,20 @@ process.stdin.on("data", (chunk) => {
 `;
 
 describe("DroidRpc", () => {
+  it.effect("skips malformed and unknown frames while still correlating the next response", () =>
+    Effect.gen(function* () {
+      const rpc = yield* DroidRpc.makeConnection({
+        command: process.execPath,
+        args: ["-e", peer],
+        env: process.env,
+      });
+      assert.deepEqual((yield* rpc.request("malformed", {})).result, { ok: true });
+      assert.deepEqual((yield* rpc.request("after-malformed", {})).result, {
+        sessionId: "session",
+        text: "A\u2028B",
+      });
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
   it.effect("correlates fragmented frames without splitting Unicode separators", () =>
     Effect.gen(function* () {
       const rpc = yield* DroidRpc.makeConnection({

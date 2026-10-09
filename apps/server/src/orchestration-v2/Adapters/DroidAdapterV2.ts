@@ -246,6 +246,10 @@ const decode = <A, I>(schema: Schema.Codec<A, I>, value: unknown) =>
   Schema.decodeUnknownEffect(schema)(value).pipe(
     Effect.mapError((cause) => protocolError("Invalid native Droid payload", cause)),
   );
+const decodeNotice = <A, I>(schema: Schema.Codec<A, I>, value: unknown) =>
+  Schema.decodeUnknownEffect(schema)(value).pipe(
+    Effect.catch(() => Effect.logWarning("Skipping malformed native Droid notification payload")),
+  );
 const nativeRef = (nativeId: string): OrchestrationV2ProviderRef => ({
   driver: DROID_PROVIDER,
   nativeId,
@@ -1101,7 +1105,8 @@ export function makeDroidAdapterV2(
           if (notice.sessionId !== undefined && nativeId !== null && notice.sessionId !== nativeId)
             return;
           if (type === "create_message") {
-            const message = yield* decode(Message, notification["message"]);
+            const message = yield* decodeNotice(Message, notification["message"]);
+            if (message === undefined) return;
             if (message.id.startsWith("task-completion:")) {
               const text = message.content.map((part) => part.text ?? "").join("");
               const childId = /^task_id: (\S+)$/mu.exec(text)?.[1];
@@ -1117,7 +1122,7 @@ export function makeDroidAdapterV2(
                     : reason === "cancelled"
                       ? "cancelled"
                       : "failed",
-                  /^output: ([\s\S]*?)\n\nBackground task/u.exec(text)?.[1] ?? null,
+                  /^output: ([\s\S]*?)\n\nBackground task/mu.exec(text)?.[1] ?? null,
                 );
             } else if (message.role === "user" && message.id === active?.input.message.messageId) {
               nativeNotificationTurnId = message.id;
@@ -1165,14 +1170,16 @@ export function makeDroidAdapterV2(
             ? (wakeOwner ?? active)
             : active;
           if (type === "child_session_available") {
-            const child = yield* decode(
+            const child = yield* decodeNotice(
               Schema.Struct({ ...Child.fields, toolUseId: Schema.String }),
               notification,
             );
+            if (child === undefined) return;
             if (reconciledChildren.has(child.childSessionId)) return;
             yield* registerChild(child, context);
           } else if (type === "create_message") {
-            const message = yield* decode(Message, notification["message"]);
+            const message = yield* decodeNotice(Message, notification["message"]);
+            if (message === undefined) return;
             if (message.role !== "assistant") return;
             const text = message.content
               .filter((part) => part.type === "text")
@@ -1196,7 +1203,8 @@ export function makeDroidAdapterV2(
               });
             for (const part of message.content) {
               if (part.type !== "tool_use") continue;
-              const tool = yield* decode(ToolUse, part);
+              const tool = yield* decodeNotice(ToolUse, part);
+              if (tool === undefined) continue;
               context.tools.set(tool.id, tool);
               yield* emitTool(context, tool, "running");
             }
@@ -1260,6 +1268,23 @@ export function makeDroidAdapterV2(
               false,
               turnId,
             );
+          } else if (
+            ![
+              "droid_working_state_changed",
+              "working_state_changed",
+              "session_token_usage_changed",
+              "settings_updated",
+              "session_title_updated",
+              "mcp_status_changed",
+              "hook_execution_started",
+              "hook_execution_completed",
+              "context_usage_changed",
+              "token_usage_updated",
+            ].includes(typeof type === "string" ? type : "")
+          ) {
+            yield* Effect.logWarning("Skipping unknown native Droid notification", {
+              type: typeof type === "string" ? type : "invalid",
+            });
           }
         });
 

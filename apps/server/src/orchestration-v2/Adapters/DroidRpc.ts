@@ -217,6 +217,11 @@ export const makeConnection = Effect.fn("DroidRpc.makeConnection")(function* (op
       );
       if (notification === undefined) return;
       yield* Queue.offer(incoming, notification);
+    } else {
+      yield* Effect.logWarning("Skipping unknown native Droid RPC frame", {
+        type: frame.type,
+        method: frame.method,
+      });
     }
   });
 

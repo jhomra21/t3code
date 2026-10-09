@@ -137,6 +137,45 @@ const provide = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
   effect.pipe(Effect.scoped, Effect.provide(Layer.merge(NodeServices.layer, IdAllocator.layer)));
 
 describe("DroidAdapterV2", () => {
+  it.effect("skips malformed native notification payloads without losing the live session", () =>
+    provide(
+      Effect.gen(function* () {
+        const { runtime, replay, input } = yield* open();
+        yield* runtime.startTurn(input);
+        yield* replay.emit({ type: "create_message", message: { role: "assistant", content: [] } });
+        yield* replay.emit({ type: "child_session_available", toolUseId: "missing-child-id" });
+        yield* replay.emit({
+          type: "create_message",
+          message: {
+            id: "bad-tool",
+            role: "assistant",
+            content: [{ type: "tool_use", name: "Execute" }],
+          },
+        });
+        yield* replay.emit({ type: "future_native_notification", unknown: true });
+        yield* replay.emit({
+          type: "create_message",
+          message: {
+            id: "valid",
+            role: "assistant",
+            content: [{ type: "text", text: "Still connected" }],
+          },
+        });
+        yield* replay.emit({
+          type: "agent_turn_completed",
+          reason: "completed",
+          turnId: input.message.messageId,
+        });
+        yield* replay.drain;
+        assert.isFalse(replay.closed());
+        const snapshot = yield* runtime.readThreadSnapshot({
+          providerThread: input.providerThread,
+        });
+        assert.equal(snapshot.providerTurns.at(-1)?.status, "completed");
+        assert.equal(snapshot.messages.at(-1)?.text, "Still connected");
+      }),
+    ),
+  );
   it.effect.each(["ordinary", "changed", "child", "wake", "stat-failure"])(
     "reloads changed imported files safely: %s",
     (mode) =>
@@ -815,6 +854,7 @@ describe("DroidAdapterV2", () => {
           assert.equal(projection?.runs.length, 2);
           assert.equal(projection?.subagents.length, 1);
           assert.equal(projection?.subagents[0]?.status, "completed");
+          assert.equal(projection?.subagents[0]?.result, "DONE");
           assert.isTrue(projection?.runs.every((run) => run.status === "completed"));
         }
       }),
