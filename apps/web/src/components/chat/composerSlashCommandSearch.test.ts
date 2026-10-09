@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vite-plus/test";
-import { ProviderDriverKind } from "@t3tools/contracts";
+import { ProviderDriverKind, ProviderInstanceId, type ServerProvider } from "@t3tools/contracts";
+import {
+  resolveProviderSlashCommandsForCwd,
+  getProviderSlashCommandsForSlashMenu,
+  getProviderSkillsForSlashMenu,
+} from "@t3tools/client-runtime/providerSkills";
 
 import type { ComposerCommandItem } from "./ComposerCommandMenu";
 import {
@@ -8,6 +13,44 @@ import {
 } from "./composerSlashCommandSearch";
 
 describe("searchSlashCommandItems", () => {
+  it("feeds native Droid's advertised commands and skills through the composer source", () => {
+    const driver = ProviderDriverKind.make("droid");
+    const snapshot: ServerProvider = {
+      instanceId: ProviderInstanceId.make("droid"),
+      driver,
+      enabled: true,
+      installed: true,
+      version: "0.234.0",
+      status: "ready",
+      auth: { status: "authenticated" },
+      checkedAt: "2026-10-01T00:00:00.000Z",
+      models: [],
+      slashCommands: [
+        { name: "review", description: "Review changes", input: { hint: "<files>" } },
+      ],
+      skills: [
+        { name: "verify", path: "/skills/verify/SKILL.md", enabled: true, userInvocable: true },
+      ],
+    };
+    const skills = getProviderSkillsForSlashMenu(snapshot.skills, true);
+    const commands = getProviderSlashCommandsForSlashMenu(
+      resolveProviderSlashCommandsForCwd(snapshot, "/project"),
+      skills,
+    );
+    const items = commands.map((command) => ({
+      id: `provider-slash-command:droid:${command.name}`,
+      type: "provider-slash-command" as const,
+      provider: driver,
+      command,
+      label: `/${command.name}`,
+      description: command.description ?? "",
+    }));
+    expect(
+      searchSlashCommandItems(slashCommandItemsForPromptPosition(items, true), "/rev")[0]?.label,
+    ).toBe("/review");
+    expect(slashCommandItemsForPromptPosition(items, false)).toEqual([]);
+    expect(skills.map((skill) => skill.name)).toEqual(["verify"]);
+  });
   const claudeDriver = ProviderDriverKind.make("claudeAgent");
 
   it("moves exact provider command matches ahead of broader description matches", () => {

@@ -130,6 +130,28 @@ const provide = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
   effect.pipe(Effect.scoped, Effect.provide(Layer.merge(NodeServices.layer, IdAllocator.layer)));
 
 describe("DroidAdapterV2", () => {
+  it.effect("sends a selected native slash command as unchanged user text", () =>
+    provide(
+      Effect.gen(function* () {
+        const { runtime, replay, input } = yield* open();
+        yield* runtime.startTurn({
+          ...input,
+          message: { ...input.message, text: "/review src/example.ts" },
+        });
+        const request = replay.requests.find(
+          (request) => request.method === "droid.add_user_message",
+        );
+        assert.deepEqual(request?.params, {
+          messageId: input.message.messageId,
+          text: "/review src/example.ts",
+          imagePaths: [],
+          userMessageSource: "sdk",
+          queuePlacement: "end_of_turn",
+        });
+        assert.isFalse(replay.methods.some((method) => method.includes("execute_command")));
+      }),
+    ),
+  );
   it.each([
     ["approval-required", "off"],
     ["auto-accept-edits", "low"],
