@@ -26,7 +26,7 @@ import * as ImportedHistory from "./ImportedDroidHistory.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as ApplicationEvents from "../persistence/OrchestrationEventStore.ts";
-import { subscribeOrchestrationV2Thread } from "../ws.ts";
+import { subscribeOrchestrationV2Thread, listProviderSessionsForCwd } from "../ws.ts";
 
 const decodeThread = Schema.decodeUnknownEffect(OrchestrationV2AppThread);
 const encode = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
@@ -218,6 +218,25 @@ it.effect(
           ),
         );
         assert.equal(yield* open, 151, "projection reads must not refresh history");
+        const beforeListing = loads;
+        const listing = yield* listProviderSessionsForCwd({ instanceId, cwd: "/project" }).pipe(
+          Effect.provide(
+            Layer.mock(ThreadManagement.ThreadManagementService)({
+              getThreadShell: (id) =>
+                projections
+                  .getThreadShell(id)
+                  .pipe(
+                    Effect.mapError(
+                      (cause) =>
+                        new Orchestrator.OrchestratorProjectionError({ threadId: id, cause }),
+                    ),
+                  ),
+            }),
+          ),
+        );
+        assert.equal(listing.sessions[0]?.importedThreadId, threadId);
+        assert.equal(loads, beforeListing, "listing must not re-import existing sessions");
+        assert.equal(yield* projections.getMessageCount(threadId), 151);
         yield* subscribe;
         assert.equal(yield* open, 152);
         const afterRefresh = loads;

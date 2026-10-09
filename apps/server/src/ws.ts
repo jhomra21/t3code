@@ -745,6 +745,52 @@ const enrichProjectShells = Effect.fn("ws.orchestrationV2.enrichProjectShells")(
     ),
 );
 
+export const listProviderSessionsForCwd = Effect.fn("ws.providerSessions.list")(function* (input: {
+  readonly instanceId: ProviderInstanceId;
+  readonly cwd: string;
+  readonly cursor?: string;
+}) {
+  const instances = yield* ProviderInstanceRegistry.ProviderInstanceRegistry;
+  const management = yield* ThreadManagementService.ThreadManagementService;
+  const instance = yield* instances.getInstance(input.instanceId);
+  const manager = instance?.sessionImport ?? instance?.acpSessionManagement;
+  if (instance === undefined || manager === undefined)
+    return yield* new AcpRegistryOperationError({
+      reason: "session_list_unsupported",
+      message: "This provider does not support native session import.",
+    });
+  const listed = yield* manager.listSessions({
+    cwd: input.cwd,
+    ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
+  });
+  const sessions = yield* Effect.forEach(
+    listed.sessions,
+    (session) => {
+      const threadId = IdAllocator.deriveThreadFromProviderThread({
+        driver: instance.driverKind,
+        providerInstanceId: input.instanceId,
+        nativeThreadId: session.sessionId,
+      });
+      return management.getThreadShell(threadId).pipe(
+        Effect.map((thread) => ({
+          ...session,
+          importedThreadId: thread === null ? null : threadId,
+        })),
+        Effect.mapError(
+          (cause) =>
+            new AcpRegistryOperationError({
+              reason: "session_import_failed",
+              message: "Could not inspect existing imported sessions.",
+              cause,
+            }),
+        ),
+      );
+    },
+    { concurrency: 16 },
+  );
+  return { ...listed, sessions };
+});
+
 export const subscribeOrchestrationV2Thread = Effect.fn("ws.orchestrationV2.subscribeThread")(
   function* (input: {
     readonly threadId: ThreadId;
@@ -1418,37 +1464,17 @@ const layerWsRpc = (
         input: AcpRegistryListSessionsInput,
       ) {
         const project = yield* acpRegistryProject(input.projectId);
-        const { instance, manager } = yield* sessionImportManager(input.instanceId);
-        const listed = yield* manager.listSessions({
+        return yield* listProviderSessionsForCwd({
+          instanceId: input.instanceId,
           cwd: project.workspaceRoot,
           ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
-        });
-        const sessions = yield* Effect.forEach(
-          listed.sessions,
-          (session) => {
-            const threadId = importedAcpThreadId({
-              driver: instance.driverKind,
-              instanceId: input.instanceId,
-              sessionId: session.sessionId,
-            });
-            return threadManagement.getThreadShell(threadId).pipe(
-              Effect.map((thread) => ({
-                ...session,
-                importedThreadId: thread === null ? null : threadId,
-              })),
-              Effect.mapError(
-                (cause) =>
-                  new AcpRegistryOperationError({
-                    reason: "session_import_failed",
-                    message: "Could not inspect existing imported ACP sessions.",
-                    cause,
-                  }),
-              ),
-            );
-          },
-          { concurrency: 16 },
+        }).pipe(
+          Effect.provideService(
+            ProviderInstanceRegistry.ProviderInstanceRegistry,
+            providerInstances,
+          ),
+          Effect.provideService(ThreadManagementService.ThreadManagementService, threadManagement),
         );
-        return { ...listed, sessions };
       });
 
       const importAcpRegistrySession = Effect.fn("ws.acpRegistry.importSession")(function* (
