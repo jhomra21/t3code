@@ -6,6 +6,7 @@ import * as NodePath from "node:path";
 import * as NodeCrypto from "node:crypto";
 
 import * as Effect from "effect/Effect";
+import * as Deferred from "effect/Deferred";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
@@ -40,6 +41,16 @@ const SessionRow = Schema.Struct({
 const decodeRow = Schema.decodeUnknownOption(Schema.fromJsonString(SessionRow));
 const decodeSettings = Schema.decodeUnknownOption(
   Schema.fromJsonString(Schema.Struct({ model: Schema.optional(Schema.String) })),
+);
+const decodeChildHeader = Schema.decodeUnknownOption(
+  Schema.fromJsonString(
+    Schema.Struct({
+      type: Schema.Literal("session_start"),
+      id: Schema.String,
+      callingSessionId: Schema.optionalKey(Schema.String),
+      callingToolUseId: Schema.optionalKey(Schema.String),
+    }),
+  ),
 );
 
 /** Droid keeps each session under a directory named for its project, so the id alone is searched. */
@@ -422,6 +433,53 @@ export const watchDroidSessionDirectory = Effect.fn("watchDroidSessionDirectory"
   directory: string,
 ) {
   const listeners = new Map<string, Set<() => void>>();
+  const checkedHeaders = new Set<string>();
+  const discoveryParents = new Set<string>();
+  const children = new Map<string, string>();
+  const waiting = new Map<string, Set<Deferred.Deferred<string>>>();
+  const dirtyHeaders = new Set<string>();
+  const headerSignal = yield* Queue.sliding<void>(1);
+  const childKey = (parent: string, tool: string) => `${parent}:${tool}`;
+  yield* Stream.fromQueue(headerSignal).pipe(
+    Stream.runForEach(() =>
+      Effect.gen(function* () {
+        for (const name of dirtyHeaders) {
+          dirtyHeaders.delete(name);
+          if (checkedHeaders.has(name)) continue;
+          const line = yield* Effect.tryPromise(async () => {
+            const handle = await NodeFSP.open(NodePath.join(directory, name), "r");
+            try {
+              const buffer = Buffer.alloc(64 * 1024);
+              const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+              const end = buffer.subarray(0, bytesRead).indexOf(0x0a);
+              return end === -1 ? undefined : buffer.subarray(0, end).toString("utf8");
+            } finally {
+              await handle.close();
+            }
+          }).pipe(Effect.orElseSucceed(() => undefined));
+          if (line === undefined) continue;
+          const header = decodeChildHeader(line);
+          checkedHeaders.add(name);
+          if (header._tag === "None") {
+            yield* Effect.logWarning("Droid session header is undecodable", { undecodableRows: 1 });
+            continue;
+          }
+          const { id, callingSessionId, callingToolUseId } = header.value;
+          if (
+            callingSessionId === undefined ||
+            !discoveryParents.has(callingSessionId) ||
+            callingToolUseId === undefined ||
+            `${id}.jsonl` !== name
+          )
+            continue;
+          const key = childKey(callingSessionId, callingToolUseId);
+          children.set(key, id);
+          for (const waiter of waiting.get(key) ?? []) yield* Deferred.succeed(waiter, id);
+        }
+      }),
+    ),
+    Effect.forkScoped,
+  );
   const errors = yield* Queue.sliding<Error>(1);
   yield* Stream.fromQueue(errors).pipe(
     Stream.runForEach((cause) => Effect.logWarning("Droid session watcher failed", { cause })),
@@ -431,7 +489,18 @@ export const watchDroidSessionDirectory = Effect.fn("watchDroidSessionDirectory"
     Effect.try(() =>
       NodeFS.watch(directory, (_event, name) => {
         if (name === null) return;
-        for (const listener of listeners.get(String(name)) ?? []) listener();
+        const fileName = String(name);
+        for (const listener of listeners.get(fileName) ?? []) listener();
+        // FSEvents reports every append: read each complete header only once, including non-matches.
+        if (
+          discoveryParents.size > 0 &&
+          fileName.endsWith(".jsonl") &&
+          isSessionId(fileName.slice(0, -6)) &&
+          !checkedHeaders.has(fileName)
+        ) {
+          dirtyHeaders.add(fileName);
+          Queue.offerUnsafe(headerSignal, undefined);
+        }
       }).on("error", (error) => {
         Queue.offerUnsafe(errors, error);
         // Wake registered readers once; their final read and parent lifecycle still settle the child.
@@ -443,7 +512,29 @@ export const watchDroidSessionDirectory = Effect.fn("watchDroidSessionDirectory"
         Effect.andThen(Effect.logDebug("Droid session watchers", { watchersOpen: 0 })),
       ),
   ).pipe(Effect.tap(() => Effect.logDebug("Droid session watchers", { watchersOpen: 1 })));
+  const discover = (parent: string, tool: string) =>
+    Effect.gen(function* () {
+      const key = childKey(parent, tool);
+      const known = children.get(key);
+      if (known !== undefined) return known;
+      const waiter = yield* Deferred.make<string>();
+      const current = waiting.get(key) ?? new Set();
+      current.add(waiter);
+      waiting.set(key, current);
+      return yield* Deferred.await(waiter).pipe(
+        Effect.ensuring(
+          Effect.sync(() => {
+            current.delete(waiter);
+            if (current.size === 0) waiting.delete(key);
+          }),
+        ),
+      );
+    });
   return {
+    discoverFor: (parent: string) => {
+      discoveryParents.add(parent);
+      return (tool: string) => discover(parent, tool);
+    },
     listen: (name: string, listener: () => void) => {
       const current = listeners.get(name) ?? new Set();
       current.add(listener);

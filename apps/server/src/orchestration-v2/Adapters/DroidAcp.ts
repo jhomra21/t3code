@@ -1,15 +1,19 @@
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import type * as FileSystem from "effect/FileSystem";
+import * as Queue from "effect/Queue";
+import * as Scope from "effect/Scope";
+// @effect-diagnostics nodeBuiltinImport:off -- Adapter-local transcript paths use Node filesystem semantics.
+import * as NodePath from "node:path";
 import * as Stream from "effect/Stream";
 
 import type { AcpToolCallState } from "../../provider/acp/AcpRuntimeModel.ts";
 import {
   findDroidSessionFile,
   followDroidSubagent,
+  watchDroidSessionDirectory,
   readDroidDefinitionModel,
   readDroidSubagentWork,
-  type DroidSubagentWork,
   readDroidWakeReply,
 } from "../../provider/acp/DroidSessionTranscript.ts";
 import type { AcpAdapterV2Flavor, AcpAdapterV2SubagentUpdate } from "./AcpAdapterV2.ts";
@@ -131,42 +135,68 @@ export const readDroidSubagentWorkFor =
   ({ childSessionId }) =>
     readDroidSubagentWork({ sessionId: childSessionId, environment: input.environment });
 
-/**
- * Resolves when a background worker's own session file ends its turn. The
- * watcher starts before the first read, so an end that lands between the two is
- * still seen. A worker whose file cannot be found yields `undefined`, which
- * leaves the subagent as launched rather than guessing an outcome.
- */
-export const awaitDroidSubagentEnd =
-  (input: {
-    readonly fileSystem: FileSystem.FileSystem;
-    readonly environment: NodeJS.ProcessEnv;
-  }): NonNullable<AcpAdapterV2Flavor["awaitSubagentEnd"]> =>
-  ({ childSessionId, startedAtMillis, onWork }) =>
+/** Session-owned watchers are prepared before a prompt can create its blocking Task children. */
+export const makeDroidSubagentSupport = (input: { readonly environment: NodeJS.ProcessEnv }) => {
+  const sessions = new WeakMap<
+    Scope.Scope,
+    Map<string, Effect.Success<ReturnType<typeof watchDroidSessionDirectory>>>
+  >();
+  const parentDirectory = Effect.fn("DroidAcp.parentDirectory")(function* (rootSessionId: string) {
+    const file = yield* findDroidSessionFile({
+      sessionId: rootSessionId,
+      environment: input.environment,
+    });
+    if (file === undefined) return undefined;
+    return NodePath.dirname(file);
+  });
+  const prepareSubagentSessionDiscovery: NonNullable<
+    AcpAdapterV2Flavor["prepareSubagentSessionDiscovery"]
+  > = ({ rootSessionId }) =>
     Effect.gen(function* () {
-      const file = yield* findDroidSessionFile({
-        sessionId: childSessionId,
-        environment: input.environment,
+      const scope = yield* Effect.scope;
+      let watchers = sessions.get(scope);
+      if (watchers === undefined) {
+        watchers = new Map();
+        sessions.set(scope, watchers);
+      }
+      const directory = yield* parentDirectory(rootSessionId);
+      if (directory === undefined) return () => Effect.succeed(undefined);
+      let watcher = watchers.get(directory);
+      if (watcher === undefined) {
+        watcher = yield* watchDroidSessionDirectory(directory).pipe(Effect.orDie);
+        watchers.set(directory, watcher);
+      }
+      return watcher.discoverFor(rootSessionId);
+    });
+  const awaitSubagentEnd: NonNullable<AcpAdapterV2Flavor["awaitSubagentEnd"]> = ({
+    rootSessionId,
+    childSessionId,
+    startedAtMillis,
+    onWork,
+  }) =>
+    Effect.gen(function* () {
+      const scope = yield* Effect.scope;
+      const watchers = sessions.get(scope);
+      if (watchers === undefined) return undefined;
+      const directory = yield* parentDirectory(rootSessionId);
+      if (directory === undefined) return undefined;
+      const watcher = watchers.get(directory);
+      if (watcher === undefined) return undefined;
+      const dirty = yield* Queue.sliding<void>(1);
+      const remove = watcher.listen(`${childSessionId}.jsonl`, () =>
+        Queue.offerUnsafe(dirty, undefined),
+      );
+      const follow = followDroidSubagent({
+        file: NodePath.join(directory, `${childSessionId}.jsonl`),
+        startedAtMillis,
       });
-      if (file === undefined) return undefined;
-      const follow = followDroidSubagent({ file, startedAtMillis });
-      let reported: DroidSubagentWork | undefined;
-      const end = yield* Stream.merge(
-        input.fileSystem.watch(file).pipe(Stream.debounce(Duration.millis(200))),
-        Stream.make(undefined),
-      ).pipe(
-        Stream.mapEffect(() =>
-          follow.pipe(
-            Effect.tap((session) => {
-              if (session.work === reported) return Effect.void;
-              reported = session.work;
-              return onWork(session.work);
-            }),
-          ),
-        ),
-        Stream.filter((session) => session.outcome !== undefined),
+      yield* Queue.offer(dirty, undefined);
+      const end = yield* Stream.fromQueue(dirty).pipe(
+        Stream.mapEffect(() => follow.pipe(Effect.tap((state) => onWork(state.work)))),
+        Stream.filter((state) => state.outcome !== undefined),
         Stream.take(1),
         Stream.runHead,
+        Effect.ensuring(Effect.sync(remove)),
       );
       if (end._tag === "None" || end.value.outcome === undefined) return undefined;
       return {
@@ -174,4 +204,6 @@ export const awaitDroidSubagentEnd =
         result: end.value.assistantMessages.at(-1) ?? null,
         work: end.value.work,
       };
-    }).pipe(Effect.catch(() => Effect.succeed(undefined)));
+    });
+  return { prepareSubagentSessionDiscovery, awaitSubagentEnd };
+};

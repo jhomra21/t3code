@@ -5511,6 +5511,7 @@ describe("AcpAdapterV2", () => {
         ],
       };
       const watched: Array<string> = [];
+      const discovered: Array<string> = [];
       const liveGate = yield* Deferred.make<void>();
       const workReads: Array<string> = [];
       const adapter = makeAcpAdapterV2({
@@ -5527,10 +5528,17 @@ describe("AcpAdapterV2", () => {
                   title: "background worker",
                   model: null,
                   status: "running",
-                  childSessionId: "worker-session-1",
+                  childSessionId: null,
                   result: null,
                 }
               : undefined,
+          prepareSubagentSessionDiscovery: ({ rootSessionId }) =>
+            Effect.succeed((nativeTaskId: string) =>
+              Effect.sync(() => {
+                discovered.push(`${rootSessionId}:${nativeTaskId}`);
+                return "worker-session-1";
+              }),
+            ),
           awaitSubagentEnd: ({ childSessionId, onWork }) =>
             Effect.sync(() => watched.push(childSessionId)).pipe(
               Effect.andThen(Deferred.await(liveGate)),
@@ -5599,6 +5607,7 @@ describe("AcpAdapterV2", () => {
       // The worker was still running when the parent turn ended.
       assert.deepEqual(statusesBeforeSettle.at(-1), "running");
       assert.deepEqual(watched, ["worker-session-1"]);
+      assert.deepEqual(discovered, ["mock-session-1:task-generic-1"]);
 
       yield* Deferred.succeed(liveGate, undefined);
       yield* Deferred.succeed(workerEnd, {
@@ -5623,7 +5632,7 @@ describe("AcpAdapterV2", () => {
               output: null,
               isError: false,
             },
-            { kind: "message", text: "WORKER_REPORT" },
+            { kind: "message", id: "report-row:0", text: "WORKER_REPORT" },
           ],
         },
       });
@@ -5656,7 +5665,11 @@ describe("AcpAdapterV2", () => {
       );
       assert.deepEqual(childReplies, ["WORKER_REPORT"]);
       assert.deepEqual(watched, ["worker-session-1"]);
-      assert.deepEqual(workReads, [], "the end check already carried the worker's work");
+      assert.deepEqual(
+        workReads,
+        ["read"],
+        "the final read catches rows after the last live update",
+      );
     }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 

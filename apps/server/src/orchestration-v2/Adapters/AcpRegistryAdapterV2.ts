@@ -4,7 +4,7 @@ import {
   extractDevinSubagentUpdate,
 } from "./DevinAcp.ts";
 import {
-  awaitDroidSubagentEnd,
+  makeDroidSubagentSupport,
   awaitDroidWakeReply,
   extractDroidSubagentUpdate,
   readDroidSubagentWorkFor,
@@ -248,8 +248,7 @@ export function makeAcpRegistryAdapterV2(options: AcpRegistryAdapterV2Options) {
             subagents: { ...AcpProviderCapabilitiesV2.subagents, supportsSubagents: true },
           },
           extractSubagentUpdate: extractDroidSubagentUpdate({ environment: options.environment }),
-          awaitSubagentEnd: awaitDroidSubagentEnd({
-            fileSystem: options.fileSystem,
+          ...makeDroidSubagentSupport({
             environment: options.environment,
           }),
           readSubagentWork: readDroidSubagentWorkFor({ environment: options.environment }),
