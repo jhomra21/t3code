@@ -151,7 +151,7 @@ export const DroidProviderCapabilitiesV2 = {
 } satisfies OrchestrationV2ProviderCapabilities;
 
 const AutonomyLevel = Schema.Literals(["off", "low", "medium", "high"]);
-const decodeAutonomyLevel = Schema.decodeUnknownSync(AutonomyLevel);
+const decodeAutonomyLevel = Schema.decodeUnknownOption(AutonomyLevel);
 const ToolUse = Schema.Struct({
   id: Schema.String,
   name: Schema.String,
@@ -268,10 +268,13 @@ export function droidSessionSettings(
     ["auto-medium", "medium"],
     ["auto-high", "high"],
   ]);
-  const autonomyLevel = decodeAutonomyLevel(
+  const requestedAutonomy =
     autonomy === undefined
       ? mapped[policy.runtimeMode]
-      : (aliases.get(String(autonomy)) ?? autonomy),
+      : (aliases.get(String(autonomy)) ?? autonomy);
+  const autonomyLevel = Option.getOrElse(
+    decodeAutonomyLevel(requestedAutonomy),
+    () => mapped[policy.runtimeMode],
   );
   const effort =
     selection.options?.find(

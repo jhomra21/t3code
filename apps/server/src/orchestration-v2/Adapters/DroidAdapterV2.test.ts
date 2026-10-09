@@ -268,6 +268,13 @@ describe("DroidAdapterV2", () => {
         reasoningEffort: "low",
       },
     );
+    assert.equal(
+      DroidAdapter.droidSessionSettings(
+        { ...selection, options: [{ id: "autonomy_level", value: "unknown" }] },
+        decodePolicy({ ...policy, runtimeMode: "auto-accept-edits" }),
+      ).autonomyLevel,
+      "low",
+    );
   });
 
   it.effect("streams a native turn into validated orchestration artifacts", () =>
