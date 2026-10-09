@@ -865,8 +865,10 @@ export function makeDroidAdapterV2(
           return child;
         });
 
-        const finishRequests = Effect.fnUntraced(function* () {
+        const finishRequests = Effect.fnUntraced(function* (providerTurnId?: string) {
           for (const entry of pending.values()) {
+            if (providerTurnId !== undefined && entry.request.providerTurnId !== providerTurnId)
+              continue;
             yield* Deferred.succeed(entry.reply, {
               result:
                 entry.questions === undefined
@@ -892,7 +894,7 @@ export function makeDroidAdapterV2(
             yield* emitTool(context, tool, status === "completed" ? "interrupted" : status);
           }
           context.tools.clear();
-          yield* finishRequests();
+          yield* finishRequests(context.turn.id);
           const turn: OrchestrationV2ProviderTurn = {
             ...context.turn,
             status,
@@ -946,18 +948,24 @@ export function makeDroidAdapterV2(
           }
         });
         const handleRequest = Effect.fnUntraced(function* (request: DroidRpc.DroidRpcRequest) {
-          const context = active;
+          if (request.method !== "droid.ask_user" && request.method !== "droid.request_permission")
+            return undefined;
+          const requestSessionId = stringField(request.params, "sessionId");
+          const child = requestSessionId === undefined ? undefined : children.get(requestSessionId);
+          const context =
+            child?.context ??
+            (requestSessionId !== undefined && requestSessionId !== nativeId
+              ? null
+              : nativeNotificationTurnId?.startsWith("task-completion:")
+                ? wakeOwner
+                : active);
           if (context === null) {
-            // A wake or idle child has no owning run for a UI request; cancellation is safer than
-            // attaching approval to a later, unrelated user turn.
-            yield* Effect.logWarning("Cancelling native Droid request without an active run", {
+            yield* Effect.logWarning("Cancelling unroutable native Droid request", {
               method: request.method,
               requestId: request.id,
             });
             return undefined;
           }
-          if (request.method !== "droid.ask_user" && request.method !== "droid.request_permission")
-            return undefined;
           const asking =
             request.method === "droid.ask_user"
               ? yield* decode(AskUser, request.params)
@@ -983,7 +991,7 @@ export function makeDroidAdapterV2(
             id: nodeId,
             threadId: context.input.threadId,
             runId: context.input.runId,
-            parentNodeId: context.input.rootNodeId,
+            parentNodeId: child?.task.id ?? context.input.rootNodeId,
             rootNodeId: context.input.rootNodeId,
             kind: asking === undefined ? "approval_request" : "user_input_request",
             status: "waiting",

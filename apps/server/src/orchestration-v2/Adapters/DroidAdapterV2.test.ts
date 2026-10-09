@@ -403,6 +403,120 @@ describe("DroidAdapterV2", () => {
       }),
     ),
   );
+  it.effect.each(["wake-ask", "idle-child-ask", "wake-permission", "idle-child-permission"])(
+    "routes a %s request without an active turn",
+    (owner) =>
+      provide(
+        Effect.gen(function* () {
+          const { runtime, replay, input } = yield* open();
+          yield* runtime.startTurn(input);
+          yield* replay.emit({
+            type: "child_session_available",
+            childSessionId: "idle-child",
+            toolUseId: "task",
+            description: "Worker",
+          });
+          yield* replay.emit({
+            type: "agent_turn_completed",
+            reason: "completed",
+            turnId: input.message.messageId,
+          });
+          if (owner.startsWith("wake"))
+            yield* replay.emit({
+              type: "create_message",
+              message: {
+                id: "task-completion:idle-child",
+                role: "user",
+                content: [
+                  {
+                    type: "text",
+                    text: "task_id: idle-child\nreason: completed\noutput: DONE\n\nBackground task finished.",
+                  },
+                ],
+              },
+            });
+          yield* replay.drain;
+          const waiting =
+            yield* Deferred.make<import("@t3tools/contracts").OrchestrationV2RuntimeRequest>();
+          const nodes: import("@t3tools/contracts").OrchestrationV2ExecutionNode[] = [];
+          const reader = yield* runtime.events.pipe(
+            Stream.runForEach((event) =>
+              Effect.gen(function* () {
+                if (event.type === "node.updated") nodes.push(event.node);
+                if (
+                  event.type === "runtime_request.updated" &&
+                  event.runtimeRequest.status === "pending"
+                )
+                  yield* Deferred.succeed(waiting, event.runtimeRequest);
+              }),
+            ),
+            Effect.forkChild,
+          );
+          const permission = owner.endsWith("permission");
+          const params = permission
+            ? {
+                toolUses: [
+                  {
+                    toolUse: { id: "child-tool", name: "Execute", input: { command: "echo blue" } },
+                    confirmationType: "exec",
+                    details: {},
+                  },
+                ],
+                options: [{ label: "Allow", value: "proceed_once" }],
+              }
+            : {
+                toolCallId: "child-ask",
+                questions: [{ index: 1, topic: "Color", question: "Color?", options: ["Blue"] }],
+              };
+          const answer = yield* replay
+            .ask({
+              id: "idle-ask",
+              method: permission ? "droid.request_permission" : "droid.ask_user",
+              params: {
+                ...params,
+                ...(owner.startsWith("idle-child") ? { sessionId: "idle-child" } : {}),
+              },
+            })
+            .pipe(Effect.forkChild);
+          const request = yield* Deferred.await(waiting);
+          assert.equal(nodes.find((node) => node.id === request.nodeId)?.runId, input.runId);
+          assert.deepEqual(request.responseCapability, {
+            type: "live",
+            providerSessionId: runtime.providerSessionId,
+          });
+          yield* runtime.respondToRuntimeRequest({
+            requestId: request.id,
+            ...(permission ? { decision: "accept" as const } : { answers: { "1": "Blue" } }),
+          });
+          assert.deepEqual(yield* Fiber.join(answer), {
+            result: permission
+              ? { selectedOption: "proceed_once" }
+              : {
+                  answers: [{ index: 1, question: "Color?", answer: "Blue" }],
+                  cancelled: false,
+                },
+          });
+          yield* Fiber.interrupt(reader);
+        }),
+      ),
+  );
+  it.effect("cancels truly unroutable idle requests without creating UI artifacts", () =>
+    provide(
+      Effect.gen(function* () {
+        const { replay } = yield* open();
+        assert.isUndefined(
+          yield* replay.ask({
+            id: "orphan",
+            method: "droid.ask_user",
+            params: {
+              toolCallId: "orphan",
+              questions: [],
+            },
+          }),
+        );
+      }),
+    ),
+  );
   it.effect("drains an undispatched wake before a user turn and ignores its late completion", () =>
     provide(
       Effect.gen(function* () {
