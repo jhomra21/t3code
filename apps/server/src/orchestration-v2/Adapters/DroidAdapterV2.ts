@@ -1080,7 +1080,7 @@ export function makeDroidAdapterV2(
           if (type === "create_message") {
             const message = yield* decode(Message, notification["message"]);
             if (message.id.startsWith("task-completion:")) {
-              const text = message.content.map((part) => part.text ?? "").join("\n");
+              const text = message.content.map((part) => part.text ?? "").join("");
               const childId = /^task_id: (\S+)$/mu.exec(text)?.[1];
               const reason = /^reason: (\S+)$/mu.exec(text)?.[1];
               const child = childId === undefined ? undefined : children.get(childId);
@@ -1092,7 +1092,7 @@ export function makeDroidAdapterV2(
                     : reason === "cancelled"
                       ? "cancelled"
                       : "failed",
-                  /^output: ([\s\S]*?)(?:\n\nBackground task|$)/u.exec(text)?.[1] ?? null,
+                  /^output: ([\s\S]*?)\n\nBackground task/u.exec(text)?.[1] ?? null,
                 );
             }
             if (
@@ -1147,11 +1147,11 @@ export function makeDroidAdapterV2(
             const text = message.content
               .filter((part) => part.type === "text")
               .map((part) => part.text ?? "")
-              .join("");
+              .join("\n\n");
             const thinking = message.content
               .filter((part) => part.type === "thinking")
               .map((part) => part.thinking ?? "")
-              .join("");
+              .join("\n\n");
             if (text.length > 0)
               yield* textDeltas.complete({
                 turnId: context.turn.id,
@@ -1636,7 +1636,7 @@ export function makeDroidAdapterV2(
               const text = message.content
                 .filter((part) => part.type === "text")
                 .map((part) => part.text ?? "")
-                .join("");
+                .join("\n\n");
               if (text.length === 0) continue;
               persisted.push({
                 id: ids.derive.messageFromProviderItem({
