@@ -940,9 +940,16 @@ export function makeDroidAdapterV2(
           }
         });
         const handleRequest = Effect.fnUntraced(function* (request: DroidRpc.DroidRpcRequest) {
-          // Without a foreground owner, the transport's default is cancellation.
           const context = active;
-          if (context === null) return undefined;
+          if (context === null) {
+            // A wake or idle child has no owning run for a UI request; cancellation is safer than
+            // attaching approval to a later, unrelated user turn.
+            yield* Effect.logWarning("Cancelling native Droid request without an active run", {
+              method: request.method,
+              requestId: request.id,
+            });
+            return undefined;
+          }
           if (request.method !== "droid.ask_user" && request.method !== "droid.request_permission")
             return undefined;
           const asking =
@@ -963,7 +970,9 @@ export function makeDroidAdapterV2(
               ? "user_input"
               : permission?.toolUses.some((entry) => entry.confirmationType === "exec")
                 ? "command"
-                : "file-change";
+                : permission?.toolUses.some((entry) => entry.confirmationType === "apply_patch")
+                  ? "file-change"
+                  : "permission";
           const node: OrchestrationV2ExecutionNode = {
             id: nodeId,
             threadId: context.input.threadId,
@@ -1020,7 +1029,7 @@ export function makeDroidAdapterV2(
                   ...base,
                   type: "approval_request",
                   requestId,
-                  requestKind: kind === "command" ? "command" : "file-change",
+                  requestKind: kind === "command" || kind === "file-change" ? kind : "permission",
                   prompt: permission?.toolUses.map((entry) => entry.toolUse.name).join(", "),
                 }
               : {
