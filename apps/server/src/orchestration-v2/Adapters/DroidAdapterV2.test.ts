@@ -1,4 +1,5 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as NodeFSP from "node:fs/promises";
 import { assert, describe, it } from "@effect/vitest";
 import {
   MessageId,
@@ -157,10 +158,16 @@ describe("DroidAdapterV2", () => {
           const observed: ProviderAdapter.ProviderAdapterV2Event[] = [];
           const toolSeen = yield* Deferred.make<void>();
           const toolEnded = yield* Deferred.make<void>();
+          const modelStepSeen = yield* Deferred.make<void>();
+          const laterStepSeen = yield* Deferred.make<void>();
           yield* runtime.events.pipe(
             Stream.runForEach((event) =>
               Effect.gen(function* () {
                 observed.push(event);
+                if (event.type === "message.updated" && event.message.text === "Still working")
+                  yield* Deferred.succeed(modelStepSeen, undefined);
+                if (event.type === "message.updated" && event.message.text === "Still more")
+                  yield* Deferred.succeed(laterStepSeen, undefined);
                 if (
                   event.type === "turn_item.updated" &&
                   event.turnItem.type === "command_execution"
@@ -179,6 +186,7 @@ describe("DroidAdapterV2", () => {
             type: "child_session_available",
             childSessionId: childId,
             toolUseId: "blocking-task",
+            subagentType: "worker-luna",
             description: "Worker",
           };
           yield* replay.emit(notice);
@@ -214,6 +222,50 @@ describe("DroidAdapterV2", () => {
               (event) => event.type === "turn_item.updated" && event.turnItem.type === "reasoning",
             ),
           );
+          yield* fs.writeFileString(
+            `${directory}/${childId}.settings.json`,
+            '{"model":"custom:GPT-6 Luna-12"}',
+          );
+          yield* Effect.tryPromise(() =>
+            NodeFSP.appendFile(
+              file,
+              line({
+                type: "message",
+                id: "later-row",
+                message: { role: "assistant", content: [{ type: "text", text: "Still working" }] },
+              }),
+            ),
+          );
+          yield* Deferred.await(modelStepSeen);
+          assert.equal(
+            observed.filter(
+              (event) =>
+                event.type === "subagent.updated" &&
+                event.subagent.model === "GPT-6 Luna" &&
+                event.subagent.status === "running",
+            ).length,
+            1,
+          );
+          yield* Effect.tryPromise(() =>
+            NodeFSP.appendFile(
+              file,
+              line({
+                type: "message",
+                id: "later-step",
+                message: { role: "assistant", content: [{ type: "text", text: "Still more" }] },
+              }),
+            ),
+          );
+          yield* Deferred.await(laterStepSeen);
+          assert.equal(
+            observed.filter(
+              (event) =>
+                event.type === "subagent.updated" &&
+                event.subagent.model === "GPT-6 Luna" &&
+                event.subagent.status === "running",
+            ).length,
+            1,
+          );
           yield* replay.emit({
             type: "tool_result",
             toolUseId: "blocking-task",
@@ -235,6 +287,15 @@ describe("DroidAdapterV2", () => {
                 },
               }) +
               line({ type: "agent_turn_outcome", reason: "completed" }),
+          );
+          assert.equal(
+            observed.filter(
+              (event) =>
+                event.type === "subagent.updated" &&
+                event.subagent.model === "GPT-6 Luna" &&
+                event.subagent.status === "running",
+            ).length,
+            1,
           );
           yield* Deferred.await(toolEnded);
           const beforeResume = observed.filter(

@@ -41,6 +41,7 @@ import type * as AcpRegistrySupport from "../../provider/acp/AcpRegistrySupport.
 import {
   findDroidSessionFile,
   followDroidSubagent,
+  readDroidDefinitionModel,
   watchDroidSessionDirectory,
   droidSubagentStepSignature,
   type DroidSubagentWork,
@@ -691,8 +692,10 @@ export function makeDroidAdapterV2(
           const childThreadId = child.task.childThreadId;
           if (childThreadId === null) return;
           const updatedAt = yield* DateTime.now;
-          if (work.model !== undefined)
+          if (work.model !== undefined && work.model !== child.task.model) {
             child.task = { ...child.task, model: work.model, updatedAt };
+            yield* emitChild(child);
+          }
           for (const step of work.steps) {
             const stepId = step.id;
             const signature = droidSubagentStepSignature(step);
@@ -857,7 +860,15 @@ export function makeDroidAdapterV2(
                   notice.description ??
                   ""),
             title: notice.description ?? notice.subagentType ?? null,
-            model: existing?.task.model ?? null,
+            model:
+              existing !== undefined
+                ? existing.task.model
+                : ((notice.subagentType === undefined
+                    ? undefined
+                    : readDroidDefinitionModel({
+                        environment: options.environment,
+                        droidName: notice.subagentType,
+                      })) ?? null),
             status: "running",
             result: null,
             startedAt: reconcile && existing !== undefined ? existing.task.startedAt : updatedAt,
