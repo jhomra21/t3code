@@ -1484,6 +1484,21 @@ export function makeDroidAdapterV2(
           };
           return providerThread;
         });
+        // The native SDK accepts local imagePaths and reads/encodes the images
+        // itself. Initial and queued steering messages use the same wire shape.
+        const imagePathsFor = (message: ProviderAdapter.ProviderAdapterV2TurnInput["message"]) =>
+          Effect.forEach(
+            message.attachments.filter((attachment) => attachment.type === "image"),
+            (attachment) => {
+              const imagePath = resolveAttachmentPath({
+                attachmentsDir: options.attachmentsDir,
+                attachment,
+              });
+              return imagePath === null
+                ? protocolError(`Cannot resolve Droid image attachment: ${attachment.name}`)
+                : Effect.succeed(imagePath);
+            },
+          );
         const startTurn = Effect.fnUntraced(function* (
           input: ProviderAdapter.ProviderAdapterV2TurnInput,
           compact = false,
@@ -1491,6 +1506,7 @@ export function makeDroidAdapterV2(
           if (active !== null) return yield* protocolError("A native Droid turn is already active");
           const isContinuation =
             input.message.createdBy === "agent" && input.message.creationSource === "provider";
+          const imagePaths = isContinuation || compact ? [] : yield* imagePathsFor(input.message);
           const resumedId = input.providerThread.nativeThreadRef?.nativeId;
           if (connection === null)
             yield* openConnection(
@@ -1591,11 +1607,6 @@ export function makeDroidAdapterV2(
             for (const notice of buffer) yield* handleNotification(notice);
             return;
           }
-          const imagePaths = input.message.attachments
-            .filter((attachment) => attachment.type === "image")
-            .map((attachment) =>
-              resolveAttachmentPath({ attachmentsDir: options.attachmentsDir, attachment }),
-            );
           yield* rpc.request("droid.add_user_message", {
             messageId: input.message.messageId,
             text: input.message.text,
@@ -1731,6 +1742,7 @@ export function makeDroidAdapterV2(
               yield* rpc.request("droid.add_user_message", {
                 messageId: input.message.messageId,
                 text: input.message.text,
+                imagePaths: yield* imagePathsFor(input.message),
                 userMessageSource: "sdk",
                 queuePlacement: "end_of_loop",
               });

@@ -36,6 +36,8 @@ import * as DroidTestkit from "./DroidAdapterV2.testkit.ts";
 // wakes or double prompts; unanswered AskUser/approval; foreground interrupt
 // killing workers; idle Stop leaving them alive; stale running crash ledger;
 // terminal turns leaving open tools; truncated load history presented as full.
+// Image failures: nullable paths crossing the SDK boundary; steering silently
+// dropping images; non-image attachments misclassified as images.
 const instanceId = ProviderInstanceId.make("droid-native-test");
 const selection = { instanceId, model: "custom:GPT-6 Luna-12" };
 const policy = {
@@ -130,6 +132,88 @@ const provide = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
   effect.pipe(Effect.scoped, Effect.provide(Layer.merge(NodeServices.layer, IdAllocator.layer)));
 
 describe("DroidAdapterV2", () => {
+  it.effect("sends image paths on initial and steering messages using the SDK shape", () =>
+    provide(
+      Effect.gen(function* () {
+        const { runtime, replay, input } = yield* open();
+        const message: typeof input.message = {
+          ...input.message,
+          attachments: [
+            {
+              type: "image",
+              id: "test-image",
+              name: "pixel.png",
+              mimeType: "image/png",
+              sizeBytes: 68,
+            },
+            { type: "file", id: "notes", name: "notes.txt", mimeType: "text/plain", sizeBytes: 10 },
+          ],
+        };
+        yield* runtime.startTurn({ ...input, message });
+        const providerTurnId = (yield* IdAllocator.IdAllocatorV2).derive.providerTurn({
+          driver: DroidAdapter.DROID_PROVIDER,
+          nativeTurnId: `turn:${input.attemptId}`,
+        });
+        yield* runtime.steerTurn({
+          threadId,
+          runId: input.runId,
+          providerThread: input.providerThread,
+          providerTurnId,
+          message: { ...message, messageId: MessageId.make("image-steer"), text: "Look again" },
+        });
+        const requests = replay.requests.filter(
+          (request) => request.method === "droid.add_user_message",
+        );
+        assert.deepEqual(
+          requests.map((request) => request.params),
+          [
+            {
+              messageId: message.messageId,
+              text: message.text,
+              imagePaths: ["/tmp/droid-native-test-attachments/test-image.png"],
+              userMessageSource: "sdk",
+              queuePlacement: "end_of_turn",
+            },
+            {
+              messageId: "image-steer",
+              text: "Look again",
+              imagePaths: ["/tmp/droid-native-test-attachments/test-image.png"],
+              userMessageSource: "sdk",
+              queuePlacement: "end_of_loop",
+            },
+          ],
+        );
+      }),
+    ),
+  );
+  it.effect("rejects an unresolvable image instead of sending null image paths", () =>
+    provide(
+      Effect.gen(function* () {
+        const { runtime, replay, input } = yield* open();
+        const result = yield* Effect.result(
+          runtime.startTurn({
+            ...input,
+            message: {
+              ...input.message,
+              attachments: [
+                {
+                  type: "image",
+                  id: "../escape",
+                  name: "pixel.png",
+                  mimeType: "image/png",
+                  sizeBytes: 68,
+                },
+              ],
+            },
+          }),
+        );
+        assert.equal(result._tag, "Failure");
+        assert.isFalse(replay.methods.includes("droid.add_user_message"));
+        yield* runtime.startTurn(input);
+        assert.isTrue(replay.methods.includes("droid.add_user_message"));
+      }),
+    ),
+  );
   it.effect("sends a selected native slash command as unchanged user text", () =>
     provide(
       Effect.gen(function* () {
