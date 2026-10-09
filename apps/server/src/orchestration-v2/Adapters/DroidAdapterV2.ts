@@ -650,7 +650,7 @@ export function makeDroidAdapterV2(
             completedAt: yield* DateTime.now,
             updatedAt: yield* DateTime.now,
           };
-          yield* emitChild(child);
+          if (!reconcile) yield* emitChild(child);
         });
         const publishChildWork = Effect.fnUntraced(function* (
           child: ChildState,
@@ -763,10 +763,11 @@ export function makeDroidAdapterV2(
             nativeThreadId: notice.childSessionId,
           });
           const task: OrchestrationV2Subagent = {
+            ...(reconcile && existing !== undefined ? existing.task : {}),
             id: nodeId,
-            threadId: context.input.threadId,
-            runId: context.input.runId,
-            parentNodeId,
+            threadId: existing?.task.threadId ?? context.input.threadId,
+            runId: existing?.task.runId ?? context.input.runId,
+            parentNodeId: existing?.task.parentNodeId ?? parentNodeId,
             origin: "provider_native",
             createdBy: "agent",
             driver: DROID_PROVIDER,
@@ -775,15 +776,17 @@ export function makeDroidAdapterV2(
             childThreadId,
             nativeTaskRef: nativeRef(notice.childSessionId),
             prompt:
-              stringField(tool?.input, "prompt") ??
-              existing?.task.prompt ??
-              notice.description ??
-              "",
+              reconcile && existing !== undefined
+                ? existing.task.prompt
+                : (stringField(tool?.input, "prompt") ??
+                  existing?.task.prompt ??
+                  notice.description ??
+                  ""),
             title: notice.description ?? notice.subagentType ?? null,
             model: existing?.task.model ?? null,
             status: "running",
             result: null,
-            startedAt: updatedAt,
+            startedAt: reconcile && existing !== undefined ? existing.task.startedAt : updatedAt,
             completedAt: null,
             updatedAt,
           };
@@ -804,7 +807,7 @@ export function makeDroidAdapterV2(
           children.set(notice.childSessionId, child);
           if (existing !== undefined) childByToolUseId.delete(existing.toolUseId);
           childByToolUseId.set(notice.toolUseId, child);
-          if (existing === undefined) {
+          if (existing === undefined && !reconcile) {
             const appThread = makeSubagentChildThread({
               parentThread: context.input.appThread,
               childThreadId,
@@ -1274,33 +1277,18 @@ export function makeDroidAdapterV2(
               });
           }
           for (const entry of byId.values()) {
+            if (entry.status !== "running") continue;
             const child = yield* registerChild(
               { ...entry, toolUseId: entry.parentToolUseId },
               context,
               true,
             );
-            const file = yield* findDroidSessionFile({
-              sessionId: entry.childSessionId,
-              environment: options.environment,
-            });
-            const tail =
-              file === undefined
-                ? undefined
-                : yield* followDroidSubagent({ file, startedAtMillis: 0 });
-            const status =
-              tail?.outcome ??
-              (entry.status === "completed"
-                ? "completed"
-                : entry.status === "failed"
-                  ? "failed"
-                  : "cancelled");
             // A fresh parent has no in-process workers. The ledger's "running"
             // is not liveness evidence: Droid leaves it behind after SIGKILL.
             yield* finishChild(
               child,
-              status,
-              tail?.assistantMessages.at(-1) ??
-                (status === "cancelled" ? "The owning Droid process is no longer running." : null),
+              "cancelled",
+              "The owning Droid process is no longer running.",
             );
           }
         });
