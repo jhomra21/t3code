@@ -517,6 +517,57 @@ describe("DroidAdapterV2", () => {
       }),
     ),
   );
+  it.effect("requires the exact wake turnId rather than any task-completion prefix", () =>
+    provide(
+      Effect.gen(function* () {
+        const { runtime, replay, input } = yield* open();
+        yield* runtime.startTurn(input);
+        yield* replay.emit({
+          type: "agent_turn_completed",
+          reason: "completed",
+          turnId: input.message.messageId,
+        });
+        yield* replay.emit({
+          type: "create_message",
+          message: {
+            id: "task-completion:expected",
+            role: "user",
+            content: [],
+          },
+        });
+        yield* replay.drain;
+        yield* runtime.startTurn({
+          ...input,
+          attemptId: RunAttemptId.make("wake-exact"),
+          message: { ...input.message, createdBy: "agent", creationSource: "provider" },
+        });
+        yield* replay.emit({
+          type: "agent_turn_completed",
+          reason: "completed",
+          turnId: "task-completion:unrelated",
+        });
+        yield* replay.drain;
+        assert.equal(
+          (yield* runtime.readThreadSnapshot({
+            providerThread: input.providerThread,
+          })).providerTurns.at(-1)?.status,
+          "running",
+        );
+        yield* replay.emit({
+          type: "agent_turn_completed",
+          reason: "completed",
+          turnId: "task-completion:expected",
+        });
+        yield* replay.drain;
+        assert.equal(
+          (yield* runtime.readThreadSnapshot({
+            providerThread: input.providerThread,
+          })).providerTurns.at(-1)?.status,
+          "completed",
+        );
+      }),
+    ),
+  );
   it.effect.each(["wake-ask", "idle-child-ask", "wake-permission", "idle-child-permission"])(
     "routes a %s request without an active turn",
     (owner) =>

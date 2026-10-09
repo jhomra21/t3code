@@ -1252,9 +1252,7 @@ export function makeDroidAdapterV2(
             }
           } else if (type === "agent_turn_completed") {
             const turnId = stringField(notification, "turnId");
-            const matching = context.isWake
-              ? turnId?.startsWith("task-completion:")
-              : turnId === context.input.message.messageId;
+            const matching = turnId === context.turn.nativeTurnRef?.nativeId;
             if (!matching || active !== context) return;
             const reason = stringField(notification, "reason");
             yield* terminal(
@@ -1642,6 +1640,11 @@ export function makeDroidAdapterV2(
               droidSessionSettings(input.modelSelection, input.runtimePolicy),
             );
           const startedAt = yield* DateTime.now;
+          const wakeTurnId = isContinuation
+            ? wakeBuffer
+                .map((notice) => stringField(notice.notification["message"], "id"))
+                .find((id) => id?.startsWith("task-completion:"))
+            : undefined;
           const context: ActiveTurn = {
             isWake: isContinuation,
             input,
@@ -1653,7 +1656,7 @@ export function makeDroidAdapterV2(
               providerThreadId: input.providerThread.id,
               nodeId: input.rootNodeId,
               runAttemptId: input.attemptId,
-              nativeTurnRef: nativeRef(input.message.messageId),
+              nativeTurnRef: nativeRef(wakeTurnId ?? input.message.messageId),
               ordinal: input.providerTurnOrdinal,
               status: "running",
               startedAt,
