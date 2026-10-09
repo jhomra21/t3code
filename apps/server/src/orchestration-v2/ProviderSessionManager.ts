@@ -2104,6 +2104,7 @@ export const layerWithOptions = (
                 })
                 .pipe(
                   Effect.provideService(Scope.Scope, sessionScope),
+                  Effect.provideService(ProjectionStore.ProjectionStoreV2, projectionStore),
                   // Any failure, including a Stop that interrupts a slow
                   // handshake, stops the provider process this open started.
                   // The session cleanup runs first, and the close is

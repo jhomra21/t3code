@@ -49,6 +49,7 @@ import {
   makeSubagentConversationArtifacts,
 } from "../SubagentProjection.ts";
 import * as DroidRpc from "./DroidRpc.ts";
+import * as ProjectionStore from "../ProjectionStore.ts";
 import { makeProviderTextDeltaCoalescer } from "./ProviderTextDeltaCoalescer.ts";
 
 export const DROID_PROVIDER = ProviderDriverKind.make("droid");
@@ -349,6 +350,7 @@ export function makeDroidAdapterV2(
     openSession: (sessionInput) =>
       Effect.gen(function* () {
         const sessionScope = yield* Effect.scope;
+        const projections = yield* Effect.serviceOption(ProjectionStore.ProjectionStoreV2);
         const now = yield* DateTime.now;
         const session = {
           id: sessionInput.providerSessionId,
@@ -366,6 +368,7 @@ export function makeDroidAdapterV2(
         const pending = new Map<RuntimeRequestId, PendingRequest>();
         const children = new Map<string, ChildState>();
         const childByToolUseId = new Map<string, ChildState>();
+        const reconciledChildren = new Set<string>();
         const turns = new Map<string, OrchestrationV2ProviderTurn>();
         const messages = new Map<string, OrchestrationV2ConversationMessage>();
         let active: ActiveTurn | null = null;
@@ -1149,6 +1152,7 @@ export function makeDroidAdapterV2(
               Schema.Struct({ ...Child.fields, toolUseId: Schema.String }),
               notification,
             );
+            if (reconciledChildren.has(child.childSessionId)) return;
             yield* registerChild(child, context);
           } else if (type === "create_message") {
             const message = yield* decode(Message, notification["message"]);
@@ -1258,10 +1262,7 @@ export function makeDroidAdapterV2(
             connectionScope = null;
           }
         });
-        const reconcileChildren = Effect.fnUntraced(function* (
-          result: typeof SessionResult.Type,
-          context: ActiveTurn,
-        ) {
+        const reconcileChildren = Effect.fnUntraced(function* (context: ActiveTurn) {
           if (nativeId === null) return;
           const home = options.environment.FACTORY_HOME_OVERRIDE ?? options.environment.HOME;
           const ledger =
@@ -1278,30 +1279,52 @@ export function makeDroidAdapterV2(
                     ),
                     Effect.orElseSucceed(() => []),
                   );
-          const byId = new Map(ledger.map((row) => [row.childSessionId, row]));
-          for (const entry of result.subagentInvocations ?? []) {
-            if (!byId.has(entry.childSessionId))
-              byId.set(entry.childSessionId, {
-                ...entry,
-                parentSessionId: nativeId,
-                parentToolUseId: `child:${entry.childSessionId}`,
-                status: entry.status ?? "running",
-              });
+          if (Option.isNone(projections)) {
+            if (ledger.some((entry) => entry.status === "running"))
+              yield* Effect.logWarning(
+                "Cannot reconcile Droid children without persisted projections",
+              );
+            return;
           }
-          for (const entry of byId.values()) {
+          const records = yield* projections.value.getThreadRecords(context.input.threadId, [
+            "subagents",
+            "nodes",
+            "turnItems",
+          ]);
+          const existingByNativeId = new Map(
+            records.subagents.map((row) => [row.nativeTaskRef?.nativeId, row]),
+          );
+          for (const entry of ledger) {
             if (entry.status !== "running") continue;
-            const child = yield* registerChild(
-              { ...entry, toolUseId: entry.parentToolUseId },
-              context,
-              true,
-            );
-            // A fresh parent has no in-process workers. The ledger's "running"
-            // is not liveness evidence: Droid leaves it behind after SIGKILL.
-            yield* finishChild(
-              child,
-              "cancelled",
-              "The owning Droid process is no longer running.",
-            );
+            const previous = existingByNativeId.get(entry.childSessionId);
+            if (previous === undefined) {
+              yield* Effect.logWarning("No persisted Droid child to reconcile", {
+                childSessionId: entry.childSessionId,
+              });
+              continue;
+            }
+            reconciledChildren.add(entry.childSessionId);
+            const completedAt = yield* DateTime.now;
+            const task = {
+              ...previous,
+              status: "cancelled" as const,
+              result: "The owning Droid process is no longer running.",
+              completedAt,
+              updatedAt: completedAt,
+            };
+            yield* emit({ type: "subagent.updated", driver: DROID_PROVIDER, subagent: task });
+            for (const node of records.nodes)
+              if (node.id === previous.id)
+                yield* emitNode({ ...node, status: "cancelled", completedAt });
+            for (const item of records.turnItems)
+              if (item.type === "subagent" && item.subagentId === previous.id)
+                yield* emitItem({
+                  ...item,
+                  status: "cancelled",
+                  result: task.result,
+                  completedAt,
+                  updatedAt: completedAt,
+                });
           }
         });
         const openConnection = Effect.fnUntraced(
@@ -1565,9 +1588,8 @@ export function makeDroidAdapterV2(
             providerTurn: context.turn,
           });
           if (resumedChildren !== null) {
-            const result = resumedChildren;
             resumedChildren = null;
-            yield* reconcileChildren(result, context);
+            yield* reconcileChildren(context);
           }
           if (compact) {
             if (wakePending || children.values().some((child) => child.task.status === "running")) {

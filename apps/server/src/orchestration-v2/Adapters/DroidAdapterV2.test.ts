@@ -11,6 +11,7 @@ import {
   RunId,
   ThreadId,
   CommandId,
+  EventId,
   type OrchestrationV2Subagent,
   type ProviderReplayTranscript,
 } from "@t3tools/contracts";
@@ -31,6 +32,8 @@ import { runOrchestratorV2ProviderReplayScenario } from "../testkit/ProviderRepl
 import { provideDeterministicTestRuntime } from "../testkit/DeterministicRuntime.ts";
 import * as DroidAdapter from "./DroidAdapterV2.ts";
 import * as DroidTestkit from "./DroidAdapterV2.testkit.ts";
+import * as ProjectionStore from "../ProjectionStore.ts";
+import * as Sqlite from "../../persistence/Sqlite.ts";
 
 // Failure cases: wrong protocol/autonomy; duplicate resumed child rows; lost
 // wakes or double prompts; unanswered AskUser/approval; foreground interrupt
@@ -641,6 +644,12 @@ describe("DroidAdapterV2", () => {
                   subagentType: "worker-luna",
                   description: "Worker",
                 },
+                {
+                  parentSessionId: parentId,
+                  childSessionId: "finished-child",
+                  parentToolUseId: "finished-tool",
+                  status: "completed",
+                },
               ],
             }),
           );
@@ -673,6 +682,38 @@ describe("DroidAdapterV2", () => {
             Stream.take(2),
             Stream.runCollect,
           );
+          const projections = yield* ProjectionStore.ProjectionStoreV2;
+          const at = yield* DateTime.now;
+          yield* projections.apply({
+            id: EventId.make("resume-parent"),
+            type: "thread.created",
+            threadId,
+            occurredAt: at,
+            payload: original.input.appThread,
+          });
+          const previous = {
+            ...before[0]!.subagent,
+            runId: RunId.make("original-run"),
+            prompt: "Original prompt, not ledger description",
+          };
+          const finished = {
+            ...previous,
+            id: NodeId.make("finished-child-node"),
+            status: "completed" as const,
+            nativeTaskRef: {
+              driver: DroidAdapter.DROID_PROVIDER,
+              nativeId: "finished-child",
+              strength: "strong" as const,
+            },
+          };
+          for (const [index, row] of [previous, finished].entries())
+            yield* projections.apply({
+              id: EventId.make(`resume-child-${index}`),
+              type: "subagent.updated",
+              threadId,
+              occurredAt: at,
+              payload: row,
+            });
           yield* original.replay.crash;
           yield* original.runtime.events.pipe(
             Stream.filter(
@@ -702,21 +743,31 @@ describe("DroidAdapterV2", () => {
             Effect.forkChild,
           );
           yield* resumed.runtime.startTurn(resumed.input);
-          yield* resumed.replay.release;
+          yield* resumed.replay.drain;
           if (status === "running") yield* Deferred.await(reopened);
           if (status === "running") {
             const terminal = rows.find((row) => row.status === "cancelled");
             assert.isDefined(terminal);
-            assert.equal(terminal.runId, before[0]?.subagent.runId);
-            assert.deepEqual(terminal.startedAt, before[0]?.subagent.startedAt);
-            assert.equal(terminal.id, before[0]?.subagent.id);
-          }
+            assert.equal(terminal.runId, previous.runId);
+            assert.deepEqual(terminal.startedAt, previous.startedAt);
+            assert.equal(terminal.id, previous.id);
+            assert.equal(terminal.prompt, previous.prompt);
+            assert.equal(terminal.childThreadId, previous.childThreadId);
+            assert.equal(rows.length, 1);
+          } else assert.deepEqual(rows, []);
+          assert.isFalse(rows.some((row) => row.id === finished.id));
+          assert.deepEqual(
+            (yield* projections.getThreadRecords(threadId, ["subagents"])).subagents.find(
+              (row) => row.id === finished.id,
+            ),
+            finished,
+          );
           assert.deepEqual(childThreads, []);
           assert.equal(resumed.input.providerThread.id, original.input.providerThread.id);
           assert.equal(resumed.input.providerThread.nativeThreadRef?.nativeId, parentId);
           assert.isTrue(resumed.replay.methods.includes("droid.load_session"));
           yield* Fiber.interrupt(reader);
-        }),
+        }).pipe(Effect.provide(ProjectionStore.layer.pipe(Layer.provide(Sqlite.layerMemory)))),
       ),
   );
 
