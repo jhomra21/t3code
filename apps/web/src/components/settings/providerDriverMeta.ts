@@ -4,6 +4,7 @@ import {
   ClaudeSettings,
   CodexSettings,
   CursorSettings,
+  DroidSettings,
   GrokSettings,
   OpenCodeSettings,
   MuseSettings,
@@ -60,6 +61,11 @@ export const providerClients = makeProviderClientRegistry([
     badgeLabel: "Beta",
   },
   piClient,
+  {
+    driverKind: ProviderDriverKind.make("droid"),
+    label: "Factory Droid (native)",
+    settingsSchema: DroidSettings,
+  },
   {
     driverKind: ProviderDriverKind.make("acpRegistry"),
     label: "ACP Registry",

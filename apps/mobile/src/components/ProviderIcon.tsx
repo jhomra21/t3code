@@ -3,7 +3,10 @@ import { Path, Svg } from "react-native-svg";
 import { View } from "react-native";
 import { providerInstanceInitials } from "@t3tools/client-runtime/state/provider-instance-display";
 import { useState } from "react";
-import { resolveOfficialAcpRegistryIconUrl } from "@t3tools/contracts";
+import {
+  officialAcpRegistryIconUrlForAgentId,
+  resolveOfficialAcpRegistryIconUrl,
+} from "@t3tools/contracts";
 import { useAppearancePreferences } from "../features/settings/appearance/AppearancePreferencesProvider";
 import { AppText as Text } from "./AppText";
 import { getProviderClient } from "../lib/providerClients";
@@ -78,8 +81,18 @@ export function ProviderIcon(props: ProviderIconProps) {
       />
     );
   }
-  if (props.provider === "acpRegistry") {
-    return <AcpRegistryProviderIcon color={mono} iconUrl={props.iconUrl} size={size} />;
+  if (props.provider === "acpRegistry" || props.provider === "droid") {
+    return (
+      <AcpRegistryProviderIcon
+        color={mono}
+        iconUrl={
+          props.provider === "droid"
+            ? officialAcpRegistryIconUrlForAgentId("factory-droid")
+            : props.iconUrl
+        }
+        size={size}
+      />
+    );
   }
 
   if (props.provider === "claudeAgent") {

@@ -569,7 +569,10 @@ export function ProviderInstanceCard({
   environmentId,
   acpProjects = EMPTY_ACP_PROJECTS,
 }: ProviderInstanceCardProps) {
-  const enabled = resolveProviderInstanceEnabled(instance);
+  // Native Droid's automatic enablement is determined by the host install.
+  const enabled =
+    resolveProviderInstanceEnabled(instance) &&
+    (instance.driver !== "droid" || liveProvider?.enabled !== false);
   const compatibility = enabled ? liveProvider?.compatibilityAdvisory : undefined;
   // A locally disabled provider reads "Disabled" with a muted dot even if its
   // last server status is stale. Enabled providers use the server status.

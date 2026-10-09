@@ -49,6 +49,7 @@ function providerDisplayLabel(provider: {
   if (provider.driver === "codex") return "Codex";
   if (provider.driver === "claudeAgent") return "Claude";
   if (provider.driver === "pi") return "Pi";
+  if (provider.driver === "droid") return "Factory Droid (native)";
   return provider.instanceId;
 }
 

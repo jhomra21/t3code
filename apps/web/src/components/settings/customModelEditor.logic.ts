@@ -53,6 +53,20 @@ const EFFORT_CHOICES = [
 export const DESCRIPTOR_PRESETS_BY_KIND: Partial<
   Record<ProviderDriverKind, ReadonlyArray<DescriptorPreset>>
 > = {
+  [ProviderDriverKind.make("droid")]: [
+    // Reasoning choices come from the native catalog, not a generic preset.
+    {
+      id: "autonomy_level",
+      label: "Autonomy",
+      type: "select",
+      choices: [
+        { id: "off", label: "Supervised" },
+        { id: "low", label: "Low" },
+        { id: "medium", label: "Medium" },
+        { id: "high", label: "High" },
+      ],
+    },
+  ],
   [ProviderDriverKind.make("codex")]: [
     { id: "reasoningEffort", label: "Reasoning", type: "select", choices: EFFORT_CHOICES },
     {

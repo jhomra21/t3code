@@ -63,6 +63,7 @@ export function resolveProviderInstanceAcpRegistryIconUrl(input: {
   readonly agentId?: string | undefined;
   readonly iconUrl?: string | undefined;
 }): string | null {
+  if (input.driverKind === "droid") return officialAcpRegistryIconUrlForAgentId("factory-droid");
   if (input.driverKind !== "acpRegistry") return null;
   return (
     resolveOfficialAcpRegistryIconUrl(input.iconUrl ?? null) ??
@@ -91,7 +92,7 @@ export const ProviderInstanceIcon = memo(function ProviderInstanceIcon(props: {
     ? ({ "--provider-accent": props.accentColor } as CSSProperties)
     : undefined;
   const badgeContent = props.badgeContent ?? "initials";
-  const isAcpRegistry = props.driverKind === "acpRegistry";
+  const isAcpRegistry = props.driverKind === "acpRegistry" || props.driverKind === "droid";
   const acpRegistryIconUrl = resolveProviderInstanceAcpRegistryIconUrl({
     driverKind: props.driverKind,
     agentId: props.acpRegistryAgentId,

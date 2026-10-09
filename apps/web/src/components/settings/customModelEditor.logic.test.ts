@@ -19,6 +19,14 @@ const draft = (overrides: Partial<CustomModelDraft>): CustomModelDraft => ({
 });
 
 describe("customModelEditor.logic", () => {
+  it("does not invent reasoning efforts for native Droid custom models", () => {
+    expect(
+      DESCRIPTOR_PRESETS_BY_KIND[ProviderDriverKind.make("droid")]?.map((preset) => preset.id),
+    ).toEqual(["autonomy_level"]);
+    expect(definitionFromDraft(draft({ slug: "custom:Claude Sonnet 5.5-15" })).slug).toBe(
+      "custom:Claude Sonnet 5.5-15",
+    );
+  });
   it("round-trips a definition through the draft, marking the current value as default", () => {
     const definition = definitionFromDraft(
       draft({
