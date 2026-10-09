@@ -1100,6 +1100,14 @@ describe("DroidAdapterV2", () => {
           );
           yield* resumed.runtime.startTurn(resumed.input);
           yield* resumed.replay.drain;
+          for (const id of [childId, "finished-child"])
+            yield* resumed.replay.emit({
+              type: "child_session_available",
+              childSessionId: id,
+              toolUseId: "replayed-child",
+              description: "Must not recreate",
+            });
+          yield* resumed.replay.drain;
           if (status === "running") yield* Deferred.await(reopened);
           if (status === "running") {
             const terminal = rows.find((row) => row.status === "cancelled");

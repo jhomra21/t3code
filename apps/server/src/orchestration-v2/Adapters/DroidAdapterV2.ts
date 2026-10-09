@@ -1339,6 +1339,8 @@ export function makeDroidAdapterV2(
           const existingByNativeId = new Map(
             records.subagents.map((row) => [row.nativeTaskRef?.nativeId, row]),
           );
+          for (const nativeChildId of existingByNativeId.keys())
+            if (nativeChildId != null) reconciledChildren.add(nativeChildId);
           for (const entry of ledger) {
             if (entry.status !== "running") continue;
             const previous = existingByNativeId.get(entry.childSessionId);
@@ -1348,7 +1350,8 @@ export function makeDroidAdapterV2(
               });
               continue;
             }
-            reconciledChildren.add(entry.childSessionId);
+            if (["completed", "cancelled", "failed", "interrupted"].includes(previous.status))
+              continue;
             const completedAt = yield* DateTime.now;
             const task = {
               ...previous,
