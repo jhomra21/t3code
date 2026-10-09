@@ -167,8 +167,11 @@ export const makeConnection = Effect.fn("DroidRpc.makeConnection")(function* (op
 
   const route = Effect.fnUntraced(function* (line: string) {
     const frame = yield* decodeEnvelope(line).pipe(
-      Effect.mapError((cause) => new DroidRpcError({ operation: "decode", cause })),
+      Effect.catchCause((cause) =>
+        Effect.logWarning("Skipping undecodable native Droid frame", { cause }),
+      ),
     );
+    if (frame === undefined) return;
     if (frame.type === "response" && frame.id !== undefined) {
       const waiter = pending.get(frame.id);
       if (waiter === undefined) return;
@@ -208,8 +211,11 @@ export const makeConnection = Effect.fn("DroidRpc.makeConnection")(function* (op
       );
     } else if (frame.type === "notification" && frame.method === "droid.session_notification") {
       const notification = yield* decodeNotification(frame.params).pipe(
-        Effect.mapError((cause) => new DroidRpcError({ operation: "notification", cause })),
+        Effect.catchCause((cause) =>
+          Effect.logWarning("Skipping undecodable native Droid notification", { cause }),
+        ),
       );
+      if (notification === undefined) return;
       yield* Queue.offer(incoming, notification);
     }
   });
