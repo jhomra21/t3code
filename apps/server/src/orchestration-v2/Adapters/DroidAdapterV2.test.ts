@@ -708,10 +708,7 @@ describe("DroidAdapterV2", () => {
             const terminal = rows.find((row) => row.status === "cancelled");
             assert.isDefined(terminal);
             assert.equal(terminal.runId, before[0]?.subagent.runId);
-            assert.equal(
-              DateTime.toEpochMillis(terminal.startedAt),
-              DateTime.toEpochMillis(before[0]!.subagent.startedAt),
-            );
+            assert.deepEqual(terminal.startedAt, before[0]?.subagent.startedAt);
             assert.equal(terminal.id, before[0]?.subagent.id);
           }
           assert.deepEqual(childThreads, []);
