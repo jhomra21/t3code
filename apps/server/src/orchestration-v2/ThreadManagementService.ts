@@ -41,6 +41,7 @@ import * as Stream from "effect/Stream";
 import * as Orchestrator from "./Orchestrator.ts";
 import { projectTurnItemForDetail } from "./WireProjection.ts";
 import * as LegacyV1ThreadImporter from "./legacy/LegacyV1ThreadImporter.ts";
+import * as ImportedDroidHistory from "../project/ImportedDroidHistory.ts";
 
 export type ThreadManagementSendMode = "auto" | "queue" | "steer" | "restart";
 
@@ -443,6 +444,7 @@ const make = Effect.gen(function* () {
   const orchestrator = yield* Orchestrator.OrchestratorV2;
   const layerScope = yield* Effect.scope;
   const legacyImporter = yield* LegacyV1ThreadImporter.LegacyV1ThreadImporter;
+  const importedDroidHistory = yield* ImportedDroidHistory.ImportedDroidHistory;
 
   const ensureLegacyTranscript = Effect.fn(
     "orchestrationV2.threadManagement.ensureLegacyTranscript",
@@ -457,8 +459,12 @@ const make = Effect.gen(function* () {
     );
   });
 
-  const ensureProjectionTranscript = (threadId: ThreadId) =>
+  const ensureImportedTranscript = (threadId: ThreadId) =>
     ensureLegacyTranscript(threadId).pipe(
+      Effect.andThen(importedDroidHistory.refreshThread(threadId)),
+    );
+  const ensureProjectionTranscript = (threadId: ThreadId) =>
+    ensureImportedTranscript(threadId).pipe(
       Effect.mapError(
         (cause) =>
           new Orchestrator.OrchestratorProjectionError({

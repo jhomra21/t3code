@@ -153,7 +153,14 @@ export function AcpSessionManagementSection(props: {
       );
       toastManager.add({
         type: "success",
-        title: result.value.imported ? "ACP session imported" : "ACP session already imported",
+        title:
+          props.provider.driver === "droid"
+            ? result.value.imported
+              ? "Droid session imported"
+              : "Droid session history refreshed"
+            : result.value.imported
+              ? "ACP session imported"
+              : "ACP session already imported",
       });
       return;
     }
@@ -391,13 +398,16 @@ export function AcpSessionManagementSection(props: {
                         disabled={
                           !canOperate ||
                           !canImport ||
-                          session.importedThreadId !== null ||
+                          (session.importedThreadId !== null &&
+                            props.provider.driver !== "droid") ||
                           importingSessionId !== null
                         }
                         onClick={() => void importNativeSession(session)}
                       >
                         {session.importedThreadId !== null
-                          ? "Imported"
+                          ? props.provider.driver === "droid"
+                            ? "Refresh history"
+                            : "Imported"
                           : importingSessionId === session.sessionId
                             ? "Importing"
                             : "Import"}

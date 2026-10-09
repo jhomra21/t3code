@@ -104,6 +104,25 @@ export interface ProviderInstance {
   readonly orchestrationAdapter: ProviderAdapterV2Shape;
   readonly textGeneration: ProviderTextGeneration;
   readonly auth?: ProviderAuthController;
+  /** File-backed/native import, independent of ACP transport or account mutation. */
+  readonly sessionImport?: {
+    readonly listSessions: (input: {
+      readonly cwd: string;
+      readonly cursor?: string;
+    }) => Effect.Effect<AcpRegistryListSessionsResult, AcpRegistryOperationError>;
+    readonly loadSessionHistory: (input: {
+      readonly cwd: string;
+      readonly sessionId: string;
+    }) => Effect.Effect<
+      ReadonlyArray<{
+        readonly role: "user" | "assistant";
+        readonly text: string;
+        readonly nativeId: string;
+        readonly createdAt?: string;
+      }>,
+      AcpRegistryOperationError
+    >;
+  };
   readonly acpSessionManagement?: {
     readonly listSessions: (input: {
       readonly cwd: string;

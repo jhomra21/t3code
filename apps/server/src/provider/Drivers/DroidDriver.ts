@@ -38,6 +38,7 @@ import {
 import { makeDroidTextGeneration } from "../../textGeneration/DroidTextGeneration.ts";
 import { ProviderDriverError } from "../Errors.ts";
 import { withInstanceIdentity } from "./instanceIdentity.ts";
+import { makeDroidSessionManagement } from "../DroidSessions.ts";
 
 const decodeSettings = Schema.decodeSync(DroidSettings);
 
@@ -76,13 +77,23 @@ export const DroidDriver: ProviderDriver<DroidSettings, DroidDriverEnv> = {
         driverKind: DROID_PROVIDER,
         instanceId,
       });
-      const stamp = withInstanceIdentity({
+      const withIdentity = withInstanceIdentity({
         instanceId,
         driverKind: DROID_PROVIDER,
         displayName: displayName ?? "Factory Droid (native)",
         accentColor,
         continuationGroupKey: continuationIdentity.continuationKey,
       });
+      const stamp = (snapshot: Parameters<typeof withIdentity>[0]) => ({
+        ...withIdentity(snapshot),
+        nativeSessions: {
+          canList: effectiveConfig.enabled,
+          canLoad: effectiveConfig.enabled,
+          canResume: effectiveConfig.enabled,
+          canDelete: false,
+        },
+      });
+      const sessionImport = yield* makeDroidSessionManagement(processEnvironment);
       const snapshotSettings = makeProviderSnapshotSettingsSource(effectiveConfig, host.settings);
       const snapshot = yield* makeManagedServerProvider<ProviderSnapshotSettings<DroidSettings>>({
         resolveMaintenance: () =>
@@ -148,6 +159,7 @@ export const DroidDriver: ProviderDriver<DroidSettings, DroidDriverEnv> = {
         snapshot,
         orchestrationAdapter,
         textGeneration: makeDroidTextGeneration(),
+        sessionImport,
         snapshotForCwd: (cwd) =>
           !effectiveConfig.enabled || installedBinary === undefined
             ? snapshot.getSnapshot

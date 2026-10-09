@@ -248,6 +248,7 @@ import {
 } from "@t3tools/shared/usageLimits";
 import * as AgentSessionScanner from "./project/AgentSessionScanner.ts";
 import * as AgentSessionImporter from "./project/AgentSessionImporter.ts";
+import * as ImportedDroidHistory from "./project/ImportedDroidHistory.ts";
 import * as UsageLimitSources from "./usage/UsageLimitSources.ts";
 
 const CONFIG_DISCOVERY_TIMEOUT = Duration.seconds(5);
@@ -758,7 +759,9 @@ export const subscribeOrchestrationV2Thread = Effect.fn("ws.orchestrationV2.subs
     yield* Effect.annotateCurrentSpan({
       "orchestration_v2.thread_id": input.threadId,
     });
+    const importedHistory = yield* ImportedDroidHistory.ImportedDroidHistory;
     yield* threadManagement.ensureLegacyTranscript(input.threadId).pipe(
+      Effect.andThen(importedHistory.refreshThread(input.threadId)),
       Effect.mapError(
         (cause) =>
           new OrchestrationV2GetThreadProjectionError({
@@ -1256,6 +1259,7 @@ const layerWsRpc = (
         yield* RepositoryIdentityResolver.RepositoryIdentityResolver;
       const agentSessionScanner = yield* AgentSessionScanner.AgentSessionScanner;
       const agentSessionImporter = yield* AgentSessionImporter.AgentSessionImporter;
+      const importedDroidHistory = yield* ImportedDroidHistory.ImportedDroidHistory;
       const checkpointDiffQuery = yield* CheckpointDiffQuery.CheckpointDiffQuery;
       const keybindings = yield* Keybindings.Keybindings;
       const environmentTheme = yield* EnvironmentTheme.EnvironmentThemeService;
@@ -1387,6 +1391,18 @@ const layerWsRpc = (
         return { instance, manager: instance.acpSessionManagement };
       });
 
+      const sessionImportManager = Effect.fn("ws.sessionImport.manager")(function* (
+        instanceId: ProviderInstanceId,
+      ) {
+        const instance = yield* providerInstances.getInstance(instanceId);
+        const manager = instance?.sessionImport ?? instance?.acpSessionManagement;
+        if (instance === undefined || manager === undefined)
+          return yield* new AcpRegistryOperationError({
+            reason: "session_list_unsupported",
+            message: "This provider does not support native session import.",
+          });
+        return { instance, manager };
+      });
       const importedAcpThreadId = (input: {
         readonly driver: ProviderDriverKind;
         readonly instanceId: ProviderInstanceId;
@@ -1402,7 +1418,7 @@ const layerWsRpc = (
         input: AcpRegistryListSessionsInput,
       ) {
         const project = yield* acpRegistryProject(input.projectId);
-        const { instance, manager } = yield* acpSessionManager(input.instanceId);
+        const { instance, manager } = yield* sessionImportManager(input.instanceId);
         const listed = yield* manager.listSessions({
           cwd: project.workspaceRoot,
           ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
@@ -1416,6 +1432,16 @@ const layerWsRpc = (
               sessionId: session.sessionId,
             });
             return threadManagement.getThreadShell(threadId).pipe(
+              Effect.tap((thread) =>
+                instance.driverKind === "droid" && thread !== null
+                  ? importedDroidHistory.importThread({
+                      threadId,
+                      instanceId: input.instanceId,
+                      cwd: project.workspaceRoot,
+                      sessionId: session.sessionId,
+                    })
+                  : Effect.void,
+              ),
               Effect.map((thread) => ({
                 ...session,
                 importedThreadId: thread === null ? null : threadId,
@@ -1441,7 +1467,7 @@ const layerWsRpc = (
         return yield* acpRegistryRuntimeCoordinator.withSessionMutation(
           Effect.gen(function* () {
             const project = yield* acpRegistryProject(input.projectId);
-            const { instance, manager } = yield* acpSessionManager(input.instanceId);
+            const { instance, manager } = yield* sessionImportManager(input.instanceId);
             const providerSnapshot = yield* instance.snapshot.getSnapshot;
             if (
               providerSnapshot.nativeSessions?.canLoad !== true &&
@@ -1467,7 +1493,27 @@ const layerWsRpc = (
                   }),
               ),
             );
-            if (existing !== null) return { threadId, imported: false } as const;
+            const refreshDroid = importedDroidHistory
+              .importThread({
+                threadId,
+                instanceId: input.instanceId,
+                cwd: project.workspaceRoot,
+                sessionId: input.sessionId,
+              })
+              .pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new AcpRegistryOperationError({
+                      reason: "session_import_failed",
+                      message: "Could not refresh native Droid session history.",
+                      cause,
+                    }),
+                ),
+              );
+            if (existing !== null) {
+              if (instance.driverKind === "droid") yield* refreshDroid;
+              return { threadId, imported: false } as const;
+            }
 
             const history = yield* manager
               .loadSessionHistory({
@@ -1537,6 +1583,10 @@ const layerWsRpc = (
                 message: "Could not create a T3 thread for the ACP session.",
                 cause: launched.failure,
               });
+            }
+            if (instance.driverKind === "droid") {
+              yield* refreshDroid;
+              return { threadId, imported: true } as const;
             }
             yield* agentSessionImporter
               .writeAcpSessionHistory({

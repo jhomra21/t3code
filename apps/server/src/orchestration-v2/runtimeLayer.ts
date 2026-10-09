@@ -9,6 +9,7 @@ import * as ProviderSessionRuntime from "../persistence/ProviderSessionRuntime.t
 import * as TextGeneration from "../textGeneration/TextGeneration.ts";
 import * as ProviderAuthService from "../provider/ProviderAuthService.ts";
 import * as AgentSessionImporter from "../project/AgentSessionImporter.ts";
+import * as ImportedDroidHistory from "../project/ImportedDroidHistory.ts";
 import * as AgentSessionScanner from "../project/AgentSessionScanner.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ProjectSetupScriptRunner from "../project/ProjectSetupScriptRunner.ts";
@@ -239,8 +240,17 @@ const layerAgentSessionImporterProvided = AgentSessionImporter.layer.pipe(
   ),
 );
 
+const layerImportedDroidHistoryProvided = ImportedDroidHistory.layer.pipe(
+  Layer.provide(Layer.mergeAll(ProjectionStore.layer, layerEventSinkProvided, IdAllocator.layer)),
+);
 const layerThreadManagementProvided = ThreadManagementService.layerWithLegacyImporter.pipe(
-  Layer.provide(Layer.merge(layerOrchestratorProvided, layerLegacyV1ThreadImporterProvided)),
+  Layer.provide(
+    Layer.mergeAll(
+      layerOrchestratorProvided,
+      layerLegacyV1ThreadImporterProvided,
+      layerImportedDroidHistoryProvided,
+    ),
+  ),
 );
 export const layerProjectSetupScriptRunner = ProjectSetupScriptRunner.layer.pipe(
   Layer.provide(layerProjectService),
@@ -354,5 +364,6 @@ export const layerProduction = Layer.mergeAll(
   ),
   layerProviderContinuationWorkerProvided,
   layerAgentSessionImporterProvided,
+  layerImportedDroidHistoryProvided,
   EffectOutbox.layerPruneWorker.pipe(Layer.provide(EffectOutbox.layer)),
 ).pipe(Layer.provide(Scheduler.layer), Layer.provideMerge(layerEventInfrastructure));
