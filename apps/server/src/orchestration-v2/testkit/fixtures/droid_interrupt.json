@@ -1,0 +1,33 @@
+{
+  "provider": "droid",
+  "protocol": "droid.stream-jsonrpc",
+  "version": "1.246.0",
+  "scenario": "droid_interrupt",
+  "metadata": {
+    "source": "Phase 2 real foreground interrupt terminal",
+    "model": "custom:GPT-6 Luna-12",
+    "cliVersion": "0.234.0",
+    "sanitized": true
+  },
+  "entries": [
+    {
+      "type": "emit_inbound",
+      "frame": {
+        "jsonrpc": "2.0",
+        "type": "notification",
+        "factoryApiVersion": "1.0.0",
+        "factoryProtocolVersion": "1.246.0",
+        "method": "droid.session_notification",
+        "params": {
+          "sessionId": "2d2984ca-7049-4a10-a6e5-e56c80a9e580",
+          "notification": {
+            "type": "agent_turn_completed",
+            "reason": "cancelled",
+            "turnId": "19c619f8-bf42-41ad-974b-589daa04fe12",
+            "durationMs": 1553
+          }
+        }
+      }
+    }
+  ]
+}

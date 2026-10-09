@@ -1,0 +1,1459 @@
+{
+  "provider": "droid",
+  "protocol": "droid.stream-jsonrpc",
+  "version": "1.246.0",
+  "scenario": "droid_background_wake",
+  "metadata": {
+    "source": "Phase 2 real concurrent-worker completion wake; pruned to lifecycle frames",
+    "model": "custom:GPT-6 Luna-12",
+    "cliVersion": "0.234.0",
+    "sanitized": true
+  },
+  "entries": [
+    {
+      "type": "emit_inbound",
+      "frame": {
+        "jsonrpc": "2.0",
+        "type": "notification",
+        "factoryApiVersion": "1.0.0",
+        "factoryProtocolVersion": "1.246.0",
+        "method": "droid.session_notification",
+        "params": {
+          "sessionId": "daabb4fb-3829-40ec-b4b4-44797abc2095",
+          "notification": {
+            "type": "child_session_available",
+            "childSessionId": "fc2a2f6c-76df-4eaf-89a7-014f8712f83f",
+            "toolUseId": "call_bCLJfyaJEsdFgMzKQw6l90fM",
+            "subagentType": "worker-luna",
+            "description": "Spike2 sleep worker",
+            "timestamp": 1791504190641
+          }
+        }
+      }
+    },
+    {
+      "type": "emit_inbound",
+      "frame": {
+        "jsonrpc": "2.0",
+        "type": "notification",
+        "factoryApiVersion": "1.0.0",
+        "factoryProtocolVersion": "1.246.0",
+        "method": "droid.session_notification",
+        "params": {
+          "sessionId": "daabb4fb-3829-40ec-b4b4-44797abc2095",
+          "notification": {
+            "type": "agent_turn_completed",
+            "reason": "completed",
+            "turnId": "8b2a4b73-6ac2-425b-965e-7b858bdbc23d",
+            "durationMs": 20810
+          }
+        }
+      }
+    },
+    {
+      "type": "emit_inbound",
+      "frame": {
+        "jsonrpc": "2.0",
+        "type": "notification",
+        "factoryApiVersion": "1.0.0",
+        "factoryProtocolVersion": "1.246.0",
+        "method": "droid.session_notification",
+        "params": {
+          "sessionId": "daabb4fb-3829-40ec-b4b4-44797abc2095",
+          "notification": {
+            "type": "create_message",
+            "message": {
+              "id": "task-completion:221ed446-33b2-4402-ab5e-b76feb002752",
+              "role": "system",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "Background task completed.\ntask_id: fc2a2f6c-76df-4eaf-89a7-014f8712f83f\ntype: worker-luna\nreason: completed\ndescription: Spike2 sleep worker\noutput: DONE\n\nBackground task \"Spike2 sleep worker\" (fc2a2f6c-76df-4eaf-89a7-014f8712f83f) just completed. This is a new asynchronous completion event, not a repeat of the launch request. Do not repeat the earlier launch acknowledgement. Briefly report this task's terminal outcome or use its result for any necessary follow-up."
+                }
+              ],
+              "createdAt": 1791504242871,
+              "updatedAt": 1791504242871,
+              "interactionMode": "auto",
+              "visibility": "llm_only",
+              "parentId": "context-task-completion:221ed446-33b2-4402-ab5e-b76feb002752",
+              "seq": 11
+            },
+            "requestId": "task-completion:221ed446-33b2-4402-ab5e-b76feb002752"
+          }
+        }
+      }
+    },
+    {
+      "type": "emit_inbound",
+      "frame": {
+        "jsonrpc": "2.0",
+        "type": "notification",
+        "factoryApiVersion": "1.0.0",
+        "factoryProtocolVersion": "1.246.0",
+        "method": "droid.session_notification",
+        "params": {
+          "sessionId": "daabb4fb-3829-40ec-b4b4-44797abc2095",
+          "notification": {
+            "type": "assistant_text_delta",
+            "messageId": "99840990-9af7-4c90-93b6-57e3676270ef",
+            "blockIndex": 0,
+            "textDelta": "Task"
+          }
+        }
+      }
+    },
+    {
+      "type": "emit_inbound",
+      "frame": {
+        "jsonrpc": "2.0",
+        "type": "notification",
+        "factoryApiVersion": "1.0.0",
+        "factoryProtocolVersion": "1.246.0",
+        "method": "droid.session_notification",
+        "params": {
+          "sessionId": "daabb4fb-3829-40ec-b4b4-44797abc2095",
+          "notification": {
+            "type": "assistant_text_delta",
+            "messageId": "99840990-9af7-4c90-93b6-57e3676270ef",
+            "blockIndex": 0,
+            "textDelta": " `"
+          }
+        }
+      }
+    },
+    {
+      "type": "emit_inbound",
+      "frame": {
+        "jsonrpc": "2.0",
+        "type": "notification",
+        "factoryApiVersion": "1.0.0",
+        "factoryProtocolVersion": "1.246.0",
+        "method": "droid.session_notification",
+        "params": {
+          "sessionId": "daabb4fb-3829-40ec-b4b4-44797abc2095",
+          "notification": {
+            "type": "assistant_text_delta",
+            "messageId": "99840990-9af7-4c90-93b6-57e3676270ef",
+            "blockIndex": 0,
+            "textDelta": "fc"
+          }
+        }
+      }
+    },
+    {
+      "type": "emit_inbound",
+      "frame": {
+        "jsonrpc": "2.0",
+        "type": "notification",
+        "factoryApiVersion": "1.0.0",
+        "factoryProtocolVersion": "1.246.0",
+        "method": "droid.session_notification",
+        "params": {
+          "sessionId": "daabb4fb-3829-40ec-b4b4-44797abc2095",
+          "notification": {
+            "type": "assistant_text_delta",
+            "messageId": "99840990-9af7-4c90-93b6-57e3676270ef",
+            "blockIndex": 0,
+            "textDelta": "2"
+          }
+        }
+      }
+    },
+    {
+      "type": "emit_inbound",
+      "frame": {
+        "jsonrpc": "2.0",
+        "type": "notification",
+        "factoryApiVersion": "1.0.0",
+        "factoryProtocolVersion": "1.246.0",
+        "method": "droid.session_notification",
+        "params": {
+          "sessionId": "daabb4fb-3829-40ec-b4b4-44797abc2095",
+          "notification": {
+            "type": "assistant_text_delta",
+            "messageId": "99840990-9af7-4c90-93b6-57e3676270ef",
+            "blockIndex": 0,
+            "textDelta": "a"
+          }
+        }
+      }
+    },
+    {
+      "type": "emit_inbound",
+      "frame": {
+        "jsonrpc": "2.0",
+        "type": "notification",
+        "factoryApiVersion": "1.0.0",
+        "factoryProtocolVersion": "1.246.0",
+        "method": "droid.session_notification",
+        "params": {
+          "sessionId": "daabb4fb-3829-40ec-b4b4-44797abc2095",
+          "notification": {
+            "type": "assistant_text_delta",
+            "messageId": "99840990-9af7-4c90-93b6-57e3676270ef",
+            "blockIndex": 0,
+            "textDelta": "2"
+          }
+        }
+      }
+    },
+    {
+      "type": "emit_inbound",
+      "frame": {
+        "jsonrpc": "2.0",
+        "type": "notification",
+        "factoryApiVersion": "1.0.0",
+        "factoryProtocolVersion": "1.246.0",
+        "method": "droid.session_notification",
+        "params": {
+          "sessionId": "daabb4fb-3829-40ec-b4b4-44797abc2095",
+          "notification": {
+            "type": "assistant_text_delta",
+            "messageId": "99840990-9af7-4c90-93b6-57e3676270ef",
+            "blockIndex": 0,
+            "textDelta": "f"
+          }
+        }
+      }
+    },
+    {
+      "type": "emit_inbound",
+      "frame": {
+        "jsonrpc": "2.0",
+        "type": "notification",
+        "factoryApiVersion": "1.0.0",
+        "factoryProtocolVersion": "1.246.0",
+        "method": "droid.session_notification",
+        "params": {
+          "sessionId": "daabb4fb-3829-40ec-b4b4-44797abc2095",
+          "notification": {
+            "type": "assistant_text_delta",
+            "messageId": "99840990-9af7-4c90-93b6-57e3676270ef",
+            "blockIndex": 0,
+            "textDelta": "6"
+          }
+        }
+      }
+    },
+    {
+      "type": "emit_inbound",
+      "frame": {
+        "jsonrpc": "2.0",
+        "type": "notification",
+        "factoryApiVersion": "1.0.0",
+        "factoryProtocolVersion": "1.246.0",
+        "method": "droid.session_notification",
+        "params": {
+          "sessionId": "daabb4fb-3829-40ec-b4b4-44797abc2095",
+          "notification": {
+            "type": "assistant_text_delta",
+            "messageId": "99840990-9af7-4c90-93b6-57e3676270ef",
+            "blockIndex": 0,
+            "textDelta": "c"
+          }
+        }
+      }
+    },
+    {
+      "type": "emit_inbound",
+      "frame": {
+        "jsonrpc": "2.0",
+        "type": "notification",
+        "factoryApiVersion": "1.0.0",
+        "factoryProtocolVersion": "1.246.0",
+        "method": "droid.session_notification",
+        "params": {
+          "sessionId": "daabb4fb-3829-40ec-b4b4-44797abc2095",
+          "notification": {
+            "type": "assistant_text_delta",
+            "messageId": "99840990-9af7-4c90-93b6-57e3676270ef",
+            "blockIndex": 0,
+            "textDelta": "-"
+          }
+        }
+      }
+    },
+    {
+      "type": "emit_inbound",
+      "frame": {
+        "jsonrpc": "2.0",
+        "type": "notification",
+        "factoryApiVersion": "1.0.0",
+        "factoryProtocolVersion": "1.246.0",
+        "method": "droid.session_notification",
+        "params": {
+          "sessionId": "daabb4fb-3829-40ec-b4b4-44797abc2095",
+          "notification": {
+            "type": "assistant_text_delta",
+            "messageId": "99840990-9af7-4c90-93b6-57e3676270ef",
+            "blockIndex": 0,
+            "textDelta": "76"
+          }
+        }
+      }
+    },
+    {
+      "type": "emit_inbound",
+      "frame": {
+        "jsonrpc": "2.0",
+        "type": "notification",
+        "factoryApiVersion": "1.0.0",
+        "factoryProtocolVersion": "1.246.0",
+        "method": "droid.session_notification",
+        "params": {
+          "sessionId": "daabb4fb-3829-40ec-b4b4-44797abc2095",
+          "notification": {
+            "type": "assistant_text_delta",
+            "messageId": "99840990-9af7-4c90-93b6-57e3676270ef",
+            "blockIndex": 0,
+            "textDelta": "df"
+          }
+        }
+      }
+    },
+    {
+      "type": "emit_inbound",
+      "frame": {
+        "jsonrpc": "2.0",
+        "type": "notification",
+        "factoryApiVersion": "1.0.0",
+        "factoryProtocolVersion": "1.246.0",
+        "method": "droid.session_notification",
+        "params": {
+          "sessionId": "daabb4fb-3829-40ec-b4b4-44797abc2095",
+          "notification": {
+            "type": "assistant_text_delta",
+            "messageId": "99840990-9af7-4c90-93b6-57e3676270ef",
+            "blockIndex": 0,
+            "textDelta": "-"
+          }
+        }
+      }
+    },
+    {
+      "type": "emit_inbound",
+      "frame": {
+        "jsonrpc": "2.0",
+        "type": "notification",
+        "factoryApiVersion": "1.0.0",
+        "factoryProtocolVersion": "1.246.0",
+        "method": "droid.session_notification",
+        "params": {
+          "sessionId": "daabb4fb-3829-40ec-b4b4-44797abc2095",
+          "notification": {
+            "type": "assistant_text_delta",
+            "messageId": "99840990-9af7-4c90-93b6-57e3676270ef",
+            "blockIndex": 0,
+            "textDelta": "4"
+          }
+        }
+      }
+    },
+    {
+      "type": "emit_inbound",
+      "frame": {
+        "jsonrpc": "2.0",
+        "type": "notification",
+        "factoryApiVersion": "1.0.0",
+        "factoryProtocolVersion": "1.246.0",
+        "method": "droid.session_notification",
+        "params": {
+          "sessionId": "daabb4fb-3829-40ec-b4b4-44797abc2095",
+          "notification": {
+            "type": "assistant_text_delta",
+            "messageId": "99840990-9af7-4c90-93b6-57e3676270ef",
+            "blockIndex": 0,
+            "textDelta": "e"
+          }
+        }
+      }
+    },
+    {
+      "type": "emit_inbound",
+      "frame": {
+        "jsonrpc": "2.0",
+        "type": "notification",
+        "factoryApiVersion": "1.0.0",
+        "factoryProtocolVersion": "1.246.0",
+        "method": "droid.session_notification",
+        "params": {
+          "sessionId": "daabb4fb-3829-40ec-b4b4-44797abc2095",
+          "notification": {
+            "type": "assistant_text_delta",
+            "messageId": "99840990-9af7-4c90-93b6-57e3676270ef",
+            "blockIndex": 0,
+            "textDelta": "af"
+          }
+        }
+      }
+    },
+    {
+      "type": "emit_inbound",
+      "frame": {
+        "jsonrpc": "2.0",
+        "type": "notification",
+        "factoryApiVersion": "1.0.0",
+        "factoryProtocolVersion": "1.246.0",
+        "method": "droid.session_notification",
+        "params": {
+          "sessionId": "daabb4fb-3829-40ec-b4b4-44797abc2095",
+          "notification": {
+            "type": "assistant_text_delta",
+            "messageId": "99840990-9af7-4c90-93b6-57e3676270ef",
+            "blockIndex": 0,
+            "textDelta": "-"
+          }
+        }
+      }
+    },
+    {
+      "type": "emit_inbound",
+      "frame": {
+        "jsonrpc": "2.0",
+        "type": "notification",
+        "factoryApiVersion": "1.0.0",
+        "factoryProtocolVersion": "1.246.0",
+        "method": "droid.session_notification",
+        "params": {
+          "sessionId": "daabb4fb-3829-40ec-b4b4-44797abc2095",
+          "notification": {
+            "type": "assistant_text_delta",
+            "messageId": "99840990-9af7-4c90-93b6-57e3676270ef",
+            "blockIndex": 0,
+            "textDelta": "89"
+          }
+        }
+      }
+    },
+    {
+      "type": "emit_inbound",
+      "frame": {
+        "jsonrpc": "2.0",
+        "type": "notification",
+        "factoryApiVersion": "1.0.0",
+        "factoryProtocolVersion": "1.246.0",
+        "method": "droid.session_notification",
+        "params": {
+          "sessionId": "daabb4fb-3829-40ec-b4b4-44797abc2095",
+          "notification": {
+            "type": "assistant_text_delta",
+            "messageId": "99840990-9af7-4c90-93b6-57e3676270ef",
+            "blockIndex": 0,
+            "textDelta": "a"
+          }
+        }
+      }
+    },
+    {
+      "type": "emit_inbound",
+      "frame": {
+        "jsonrpc": "2.0",
+        "type": "notification",
+        "factoryApiVersion": "1.0.0",
+        "factoryProtocolVersion": "1.246.0",
+        "method": "droid.session_notification",
+        "params": {
+          "sessionId": "daabb4fb-3829-40ec-b4b4-44797abc2095",
+          "notification": {
+            "type": "assistant_text_delta",
+            "messageId": "99840990-9af7-4c90-93b6-57e3676270ef",
+            "blockIndex": 0,
+            "textDelta": "7"
+          }
+        }
+      }
+    },
+    {
+      "type": "emit_inbound",
+      "frame": {
+        "jsonrpc": "2.0",
+        "type": "notification",
+        "factoryApiVersion": "1.0.0",
+        "factoryProtocolVersion": "1.246.0",
+        "method": "droid.session_notification",
+        "params": {
+          "sessionId": "daabb4fb-3829-40ec-b4b4-44797abc2095",
+          "notification": {
+            "type": "assistant_text_delta",
+            "messageId": "99840990-9af7-4c90-93b6-57e3676270ef",
+            "blockIndex": 0,
+            "textDelta": "-"
+          }
+        }
+      }
+    },
+    {
+      "type": "emit_inbound",
+      "frame": {
+        "jsonrpc": "2.0",
+        "type": "notification",
+        "factoryApiVersion": "1.0.0",
+        "factoryProtocolVersion": "1.246.0",
+        "method": "droid.session_notification",
+        "params": {
+          "sessionId": "daabb4fb-3829-40ec-b4b4-44797abc2095",
+          "notification": {
+            "type": "assistant_text_delta",
+            "messageId": "99840990-9af7-4c90-93b6-57e3676270ef",
+            "blockIndex": 0,
+            "textDelta": "014"
+          }
+        }
+      }
+    },
+    {
+      "type": "emit_inbound",
+      "frame": {
+        "jsonrpc": "2.0",
+        "type": "notification",
+        "factoryApiVersion": "1.0.0",
+        "factoryProtocolVersion": "1.246.0",
+        "method": "droid.session_notification",
+        "params": {
+          "sessionId": "daabb4fb-3829-40ec-b4b4-44797abc2095",
+          "notification": {
+            "type": "assistant_text_delta",
+            "messageId": "99840990-9af7-4c90-93b6-57e3676270ef",
+            "blockIndex": 0,
+            "textDelta": "f"
+          }
+        }
+      }
+    },
+    {
+      "type": "emit_inbound",
+      "frame": {
+        "jsonrpc": "2.0",
+        "type": "notification",
+        "factoryApiVersion": "1.0.0",
+        "factoryProtocolVersion": "1.246.0",
+        "method": "droid.session_notification",
+        "params": {
+          "sessionId": "daabb4fb-3829-40ec-b4b4-44797abc2095",
+          "notification": {
+            "type": "assistant_text_delta",
+            "messageId": "99840990-9af7-4c90-93b6-57e3676270ef",
+            "blockIndex": 0,
+            "textDelta": "871"
+          }
+        }
+      }
+    },
+    {
+      "type": "emit_inbound",
+      "frame": {
+        "jsonrpc": "2.0",
+        "type": "notification",
+        "factoryApiVersion": "1.0.0",
+        "factoryProtocolVersion": "1.246.0",
+        "method": "droid.session_notification",
+        "params": {
+          "sessionId": "daabb4fb-3829-40ec-b4b4-44797abc2095",
+          "notification": {
+            "type": "assistant_text_delta",
+            "messageId": "99840990-9af7-4c90-93b6-57e3676270ef",
+            "blockIndex": 0,
+            "textDelta": "2"
+          }
+        }
+      }
+    },
+    {
+      "type": "emit_inbound",
+      "frame": {
+        "jsonrpc": "2.0",
+        "type": "notification",
+        "factoryApiVersion": "1.0.0",
+        "factoryProtocolVersion": "1.246.0",
+        "method": "droid.session_notification",
+        "params": {
+          "sessionId": "daabb4fb-3829-40ec-b4b4-44797abc2095",
+          "notification": {
+            "type": "assistant_text_delta",
+            "messageId": "99840990-9af7-4c90-93b6-57e3676270ef",
+            "blockIndex": 0,
+            "textDelta": "f"
+          }
+        }
+      }
+    },
+    {
+      "type": "emit_inbound",
+      "frame": {
+        "jsonrpc": "2.0",
+        "type": "notification",
+        "factoryApiVersion": "1.0.0",
+        "factoryProtocolVersion": "1.246.0",
+        "method": "droid.session_notification",
+        "params": {
+          "sessionId": "daabb4fb-3829-40ec-b4b4-44797abc2095",
+          "notification": {
+            "type": "assistant_text_delta",
+            "messageId": "99840990-9af7-4c90-93b6-57e3676270ef",
+            "blockIndex": 0,
+            "textDelta": "83"
+          }
+        }
+      }
+    },
+    {
+      "type": "emit_inbound",
+      "frame": {
+        "jsonrpc": "2.0",
+        "type": "notification",
+        "factoryApiVersion": "1.0.0",
+        "factoryProtocolVersion": "1.246.0",
+        "method": "droid.session_notification",
+        "params": {
+          "sessionId": "daabb4fb-3829-40ec-b4b4-44797abc2095",
+          "notification": {
+            "type": "assistant_text_delta",
+            "messageId": "99840990-9af7-4c90-93b6-57e3676270ef",
+            "blockIndex": 0,
+            "textDelta": "f"
+          }
+        }
+      }
+    },
+    {
+      "type": "emit_inbound",
+      "frame": {
+        "jsonrpc": "2.0",
+        "type": "notification",
+        "factoryApiVersion": "1.0.0",
+        "factoryProtocolVersion": "1.246.0",
+        "method": "droid.session_notification",
+        "params": {
+          "sessionId": "daabb4fb-3829-40ec-b4b4-44797abc2095",
+          "notification": {
+            "type": "assistant_text_delta",
+            "messageId": "99840990-9af7-4c90-93b6-57e3676270ef",
+            "blockIndex": 0,
+            "textDelta": "`"
+          }
+        }
+      }
+    },
+    {
+      "type": "emit_inbound",
+      "frame": {
+        "jsonrpc": "2.0",
+        "type": "notification",
+        "factoryApiVersion": "1.0.0",
+        "factoryProtocolVersion": "1.246.0",
+        "method": "droid.session_notification",
+        "params": {
+          "sessionId": "daabb4fb-3829-40ec-b4b4-44797abc2095",
+          "notification": {
+            "type": "assistant_text_delta",
+            "messageId": "99840990-9af7-4c90-93b6-57e3676270ef",
+            "blockIndex": 0,
+            "textDelta": " completed"
+          }
+        }
+      }
+    },
+    {
+      "type": "emit_inbound",
+      "frame": {
+        "jsonrpc": "2.0",
+        "type": "notification",
+        "factoryApiVersion": "1.0.0",
+        "factoryProtocolVersion": "1.246.0",
+        "method": "droid.session_notification",
+        "params": {
+          "sessionId": "daabb4fb-3829-40ec-b4b4-44797abc2095",
+          "notification": {
+            "type": "assistant_text_delta",
+            "messageId": "99840990-9af7-4c90-93b6-57e3676270ef",
+            "blockIndex": 0,
+            "textDelta": " and"
+          }
+        }
+      }
+    },
+    {
+      "type": "emit_inbound",
+      "frame": {
+        "jsonrpc": "2.0",
+        "type": "notification",
+        "factoryApiVersion": "1.0.0",
+        "factoryProtocolVersion": "1.246.0",
+        "method": "droid.session_notification",
+        "params": {
+          "sessionId": "daabb4fb-3829-40ec-b4b4-44797abc2095",
+          "notification": {
+            "type": "assistant_text_delta",
+            "messageId": "99840990-9af7-4c90-93b6-57e3676270ef",
+            "blockIndex": 0,
+            "textDelta": " reported"
+          }
+        }
+      }
+    },
+    {
+      "type": "emit_inbound",
+      "frame": {
+        "jsonrpc": "2.0",
+        "type": "notification",
+        "factoryApiVersion": "1.0.0",
+        "factoryProtocolVersion": "1.246.0",
+        "method": "droid.session_notification",
+        "params": {
+          "sessionId": "daabb4fb-3829-40ec-b4b4-44797abc2095",
+          "notification": {
+            "type": "assistant_text_delta",
+            "messageId": "99840990-9af7-4c90-93b6-57e3676270ef",
+            "blockIndex": 0,
+            "textDelta": " `"
+          }
+        }
+      }
+    },
+    {
+      "type": "emit_inbound",
+      "frame": {
+        "jsonrpc": "2.0",
+        "type": "notification",
+        "factoryApiVersion": "1.0.0",
+        "factoryProtocolVersion": "1.246.0",
+        "method": "droid.session_notification",
+        "params": {
+          "sessionId": "daabb4fb-3829-40ec-b4b4-44797abc2095",
+          "notification": {
+            "type": "assistant_text_delta",
+            "messageId": "99840990-9af7-4c90-93b6-57e3676270ef",
+            "blockIndex": 0,
+            "textDelta": "DONE"
+          }
+        }
+      }
+    },
+    {
+      "type": "emit_inbound",
+      "frame": {
+        "jsonrpc": "2.0",
+        "type": "notification",
+        "factoryApiVersion": "1.0.0",
+        "factoryProtocolVersion": "1.246.0",
+        "method": "droid.session_notification",
+        "params": {
+          "sessionId": "daabb4fb-3829-40ec-b4b4-44797abc2095",
+          "notification": {
+            "type": "assistant_text_delta",
+            "messageId": "99840990-9af7-4c90-93b6-57e3676270ef",
+            "blockIndex": 0,
+            "textDelta": "`."
+          }
+        }
+      }
+    },
+    {
+      "type": "emit_inbound",
+      "frame": {
+        "jsonrpc": "2.0",
+        "type": "notification",
+        "factoryApiVersion": "1.0.0",
+        "factoryProtocolVersion": "1.246.0",
+        "method": "droid.session_notification",
+        "params": {
+          "sessionId": "daabb4fb-3829-40ec-b4b4-44797abc2095",
+          "notification": {
+            "type": "assistant_text_complete",
+            "messageId": "99840990-9af7-4c90-93b6-57e3676270ef",
+            "blockIndex": 0
+          }
+        }
+      }
+    },
+    {
+      "type": "emit_inbound",
+      "frame": {
+        "jsonrpc": "2.0",
+        "type": "notification",
+        "factoryApiVersion": "1.0.0",
+        "factoryProtocolVersion": "1.246.0",
+        "method": "droid.session_notification",
+        "params": {
+          "sessionId": "daabb4fb-3829-40ec-b4b4-44797abc2095",
+          "notification": {
+            "type": "create_message",
+            "message": {
+              "id": "99840990-9af7-4c90-93b6-57e3676270ef",
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "Task `fc2a2f6c-76df-4eaf-89a7-014f8712f83f` completed and reported `DONE`."
+                }
+              ],
+              "createdAt": 1791504245084,
+              "updatedAt": 1791504245084,
+              "modelId": "custom:GPT-6 Luna-12",
+              "reasoningEffort": "low",
+              "openaiPhase": "final_answer",
+              "parentId": "task-completion:221ed446-33b2-4402-ab5e-b76feb002752",
+              "seq": 12,
+              "userMessageSource": "sdk"
+            }
+          }
+        }
+      }
+    },
+    {
+      "type": "emit_inbound",
+      "frame": {
+        "jsonrpc": "2.0",
+        "type": "notification",
+        "factoryApiVersion": "1.0.0",
+        "factoryProtocolVersion": "1.246.0",
+        "method": "droid.session_notification",
+        "params": {
+          "sessionId": "daabb4fb-3829-40ec-b4b4-44797abc2095",
+          "notification": {
+            "type": "create_message",
+            "message": {
+              "id": "task-completion:7a937e58-ce67-45f3-ac63-cff23136c60b",
+              "role": "system",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "Background task completed.\ntask_id: 29017c72-f6d3-44eb-bb93-e54e15254815\ntype: worker-luna\nreason: completed\ndescription: Spike2 sleep worker\noutput: DONE\n\nBackground task \"Spike2 sleep worker\" (29017c72-f6d3-44eb-bb93-e54e15254815) just completed. This is a new asynchronous completion event, not a repeat of the launch request. Do not repeat the earlier launch acknowledgement. Briefly report this task's terminal outcome or use its result for any necessary follow-up."
+                }
+              ],
+              "createdAt": 1791504245086,
+              "updatedAt": 1791504245086,
+              "interactionMode": "auto",
+              "visibility": "llm_only",
+              "parentId": "99840990-9af7-4c90-93b6-57e3676270ef",
+              "seq": 13
+            },
+            "requestId": "task-completion:7a937e58-ce67-45f3-ac63-cff23136c60b"
+          }
+        }
+      }
+    },
+    {
+      "type": "emit_inbound",
+      "frame": {
+        "jsonrpc": "2.0",
+        "type": "notification",
+        "factoryApiVersion": "1.0.0",
+        "factoryProtocolVersion": "1.246.0",
+        "method": "droid.session_notification",
+        "params": {
+          "sessionId": "daabb4fb-3829-40ec-b4b4-44797abc2095",
+          "notification": {
+            "type": "assistant_text_delta",
+            "messageId": "0a028d9b-4463-4442-9fc9-e4abbcfa0fa1",
+            "blockIndex": 0,
+            "textDelta": "Task"
+          }
+        }
+      }
+    },
+    {
+      "type": "emit_inbound",
+      "frame": {
+        "jsonrpc": "2.0",
+        "type": "notification",
+        "factoryApiVersion": "1.0.0",
+        "factoryProtocolVersion": "1.246.0",
+        "method": "droid.session_notification",
+        "params": {
+          "sessionId": "daabb4fb-3829-40ec-b4b4-44797abc2095",
+          "notification": {
+            "type": "assistant_text_delta",
+            "messageId": "0a028d9b-4463-4442-9fc9-e4abbcfa0fa1",
+            "blockIndex": 0,
+            "textDelta": " `"
+          }
+        }
+      }
+    },
+    {
+      "type": "emit_inbound",
+      "frame": {
+        "jsonrpc": "2.0",
+        "type": "notification",
+        "factoryApiVersion": "1.0.0",
+        "factoryProtocolVersion": "1.246.0",
+        "method": "droid.session_notification",
+        "params": {
+          "sessionId": "daabb4fb-3829-40ec-b4b4-44797abc2095",
+          "notification": {
+            "type": "assistant_text_delta",
+            "messageId": "0a028d9b-4463-4442-9fc9-e4abbcfa0fa1",
+            "blockIndex": 0,
+            "textDelta": "290"
+          }
+        }
+      }
+    },
+    {
+      "type": "emit_inbound",
+      "frame": {
+        "jsonrpc": "2.0",
+        "type": "notification",
+        "factoryApiVersion": "1.0.0",
+        "factoryProtocolVersion": "1.246.0",
+        "method": "droid.session_notification",
+        "params": {
+          "sessionId": "daabb4fb-3829-40ec-b4b4-44797abc2095",
+          "notification": {
+            "type": "assistant_text_delta",
+            "messageId": "0a028d9b-4463-4442-9fc9-e4abbcfa0fa1",
+            "blockIndex": 0,
+            "textDelta": "17"
+          }
+        }
+      }
+    },
+    {
+      "type": "emit_inbound",
+      "frame": {
+        "jsonrpc": "2.0",
+        "type": "notification",
+        "factoryApiVersion": "1.0.0",
+        "factoryProtocolVersion": "1.246.0",
+        "method": "droid.session_notification",
+        "params": {
+          "sessionId": "daabb4fb-3829-40ec-b4b4-44797abc2095",
+          "notification": {
+            "type": "assistant_text_delta",
+            "messageId": "0a028d9b-4463-4442-9fc9-e4abbcfa0fa1",
+            "blockIndex": 0,
+            "textDelta": "c"
+          }
+        }
+      }
+    },
+    {
+      "type": "emit_inbound",
+      "frame": {
+        "jsonrpc": "2.0",
+        "type": "notification",
+        "factoryApiVersion": "1.0.0",
+        "factoryProtocolVersion": "1.246.0",
+        "method": "droid.session_notification",
+        "params": {
+          "sessionId": "daabb4fb-3829-40ec-b4b4-44797abc2095",
+          "notification": {
+            "type": "assistant_text_delta",
+            "messageId": "0a028d9b-4463-4442-9fc9-e4abbcfa0fa1",
+            "blockIndex": 0,
+            "textDelta": "72"
+          }
+        }
+      }
+    },
+    {
+      "type": "emit_inbound",
+      "frame": {
+        "jsonrpc": "2.0",
+        "type": "notification",
+        "factoryApiVersion": "1.0.0",
+        "factoryProtocolVersion": "1.246.0",
+        "method": "droid.session_notification",
+        "params": {
+          "sessionId": "daabb4fb-3829-40ec-b4b4-44797abc2095",
+          "notification": {
+            "type": "assistant_text_delta",
+            "messageId": "0a028d9b-4463-4442-9fc9-e4abbcfa0fa1",
+            "blockIndex": 0,
+            "textDelta": "-f"
+          }
+        }
+      }
+    },
+    {
+      "type": "emit_inbound",
+      "frame": {
+        "jsonrpc": "2.0",
+        "type": "notification",
+        "factoryApiVersion": "1.0.0",
+        "factoryProtocolVersion": "1.246.0",
+        "method": "droid.session_notification",
+        "params": {
+          "sessionId": "daabb4fb-3829-40ec-b4b4-44797abc2095",
+          "notification": {
+            "type": "assistant_text_delta",
+            "messageId": "0a028d9b-4463-4442-9fc9-e4abbcfa0fa1",
+            "blockIndex": 0,
+            "textDelta": "6"
+          }
+        }
+      }
+    },
+    {
+      "type": "emit_inbound",
+      "frame": {
+        "jsonrpc": "2.0",
+        "type": "notification",
+        "factoryApiVersion": "1.0.0",
+        "factoryProtocolVersion": "1.246.0",
+        "method": "droid.session_notification",
+        "params": {
+          "sessionId": "daabb4fb-3829-40ec-b4b4-44797abc2095",
+          "notification": {
+            "type": "assistant_text_delta",
+            "messageId": "0a028d9b-4463-4442-9fc9-e4abbcfa0fa1",
+            "blockIndex": 0,
+            "textDelta": "d"
+          }
+        }
+      }
+    },
+    {
+      "type": "emit_inbound",
+      "frame": {
+        "jsonrpc": "2.0",
+        "type": "notification",
+        "factoryApiVersion": "1.0.0",
+        "factoryProtocolVersion": "1.246.0",
+        "method": "droid.session_notification",
+        "params": {
+          "sessionId": "daabb4fb-3829-40ec-b4b4-44797abc2095",
+          "notification": {
+            "type": "assistant_text_delta",
+            "messageId": "0a028d9b-4463-4442-9fc9-e4abbcfa0fa1",
+            "blockIndex": 0,
+            "textDelta": "3"
+          }
+        }
+      }
+    },
+    {
+      "type": "emit_inbound",
+      "frame": {
+        "jsonrpc": "2.0",
+        "type": "notification",
+        "factoryApiVersion": "1.0.0",
+        "factoryProtocolVersion": "1.246.0",
+        "method": "droid.session_notification",
+        "params": {
+          "sessionId": "daabb4fb-3829-40ec-b4b4-44797abc2095",
+          "notification": {
+            "type": "assistant_text_delta",
+            "messageId": "0a028d9b-4463-4442-9fc9-e4abbcfa0fa1",
+            "blockIndex": 0,
+            "textDelta": "-"
+          }
+        }
+      }
+    },
+    {
+      "type": "emit_inbound",
+      "frame": {
+        "jsonrpc": "2.0",
+        "type": "notification",
+        "factoryApiVersion": "1.0.0",
+        "factoryProtocolVersion": "1.246.0",
+        "method": "droid.session_notification",
+        "params": {
+          "sessionId": "daabb4fb-3829-40ec-b4b4-44797abc2095",
+          "notification": {
+            "type": "assistant_text_delta",
+            "messageId": "0a028d9b-4463-4442-9fc9-e4abbcfa0fa1",
+            "blockIndex": 0,
+            "textDelta": "44"
+          }
+        }
+      }
+    },
+    {
+      "type": "emit_inbound",
+      "frame": {
+        "jsonrpc": "2.0",
+        "type": "notification",
+        "factoryApiVersion": "1.0.0",
+        "factoryProtocolVersion": "1.246.0",
+        "method": "droid.session_notification",
+        "params": {
+          "sessionId": "daabb4fb-3829-40ec-b4b4-44797abc2095",
+          "notification": {
+            "type": "assistant_text_delta",
+            "messageId": "0a028d9b-4463-4442-9fc9-e4abbcfa0fa1",
+            "blockIndex": 0,
+            "textDelta": "eb"
+          }
+        }
+      }
+    },
+    {
+      "type": "emit_inbound",
+      "frame": {
+        "jsonrpc": "2.0",
+        "type": "notification",
+        "factoryApiVersion": "1.0.0",
+        "factoryProtocolVersion": "1.246.0",
+        "method": "droid.session_notification",
+        "params": {
+          "sessionId": "daabb4fb-3829-40ec-b4b4-44797abc2095",
+          "notification": {
+            "type": "assistant_text_delta",
+            "messageId": "0a028d9b-4463-4442-9fc9-e4abbcfa0fa1",
+            "blockIndex": 0,
+            "textDelta": "-b"
+          }
+        }
+      }
+    },
+    {
+      "type": "emit_inbound",
+      "frame": {
+        "jsonrpc": "2.0",
+        "type": "notification",
+        "factoryApiVersion": "1.0.0",
+        "factoryProtocolVersion": "1.246.0",
+        "method": "droid.session_notification",
+        "params": {
+          "sessionId": "daabb4fb-3829-40ec-b4b4-44797abc2095",
+          "notification": {
+            "type": "assistant_text_delta",
+            "messageId": "0a028d9b-4463-4442-9fc9-e4abbcfa0fa1",
+            "blockIndex": 0,
+            "textDelta": "b"
+          }
+        }
+      }
+    },
+    {
+      "type": "emit_inbound",
+      "frame": {
+        "jsonrpc": "2.0",
+        "type": "notification",
+        "factoryApiVersion": "1.0.0",
+        "factoryProtocolVersion": "1.246.0",
+        "method": "droid.session_notification",
+        "params": {
+          "sessionId": "daabb4fb-3829-40ec-b4b4-44797abc2095",
+          "notification": {
+            "type": "assistant_text_delta",
+            "messageId": "0a028d9b-4463-4442-9fc9-e4abbcfa0fa1",
+            "blockIndex": 0,
+            "textDelta": "93"
+          }
+        }
+      }
+    },
+    {
+      "type": "emit_inbound",
+      "frame": {
+        "jsonrpc": "2.0",
+        "type": "notification",
+        "factoryApiVersion": "1.0.0",
+        "factoryProtocolVersion": "1.246.0",
+        "method": "droid.session_notification",
+        "params": {
+          "sessionId": "daabb4fb-3829-40ec-b4b4-44797abc2095",
+          "notification": {
+            "type": "assistant_text_delta",
+            "messageId": "0a028d9b-4463-4442-9fc9-e4abbcfa0fa1",
+            "blockIndex": 0,
+            "textDelta": "-e"
+          }
+        }
+      }
+    },
+    {
+      "type": "emit_inbound",
+      "frame": {
+        "jsonrpc": "2.0",
+        "type": "notification",
+        "factoryApiVersion": "1.0.0",
+        "factoryProtocolVersion": "1.246.0",
+        "method": "droid.session_notification",
+        "params": {
+          "sessionId": "daabb4fb-3829-40ec-b4b4-44797abc2095",
+          "notification": {
+            "type": "assistant_text_delta",
+            "messageId": "0a028d9b-4463-4442-9fc9-e4abbcfa0fa1",
+            "blockIndex": 0,
+            "textDelta": "54"
+          }
+        }
+      }
+    },
+    {
+      "type": "emit_inbound",
+      "frame": {
+        "jsonrpc": "2.0",
+        "type": "notification",
+        "factoryApiVersion": "1.0.0",
+        "factoryProtocolVersion": "1.246.0",
+        "method": "droid.session_notification",
+        "params": {
+          "sessionId": "daabb4fb-3829-40ec-b4b4-44797abc2095",
+          "notification": {
+            "type": "assistant_text_delta",
+            "messageId": "0a028d9b-4463-4442-9fc9-e4abbcfa0fa1",
+            "blockIndex": 0,
+            "textDelta": "e"
+          }
+        }
+      }
+    },
+    {
+      "type": "emit_inbound",
+      "frame": {
+        "jsonrpc": "2.0",
+        "type": "notification",
+        "factoryApiVersion": "1.0.0",
+        "factoryProtocolVersion": "1.246.0",
+        "method": "droid.session_notification",
+        "params": {
+          "sessionId": "daabb4fb-3829-40ec-b4b4-44797abc2095",
+          "notification": {
+            "type": "assistant_text_delta",
+            "messageId": "0a028d9b-4463-4442-9fc9-e4abbcfa0fa1",
+            "blockIndex": 0,
+            "textDelta": "152"
+          }
+        }
+      }
+    },
+    {
+      "type": "emit_inbound",
+      "frame": {
+        "jsonrpc": "2.0",
+        "type": "notification",
+        "factoryApiVersion": "1.0.0",
+        "factoryProtocolVersion": "1.246.0",
+        "method": "droid.session_notification",
+        "params": {
+          "sessionId": "daabb4fb-3829-40ec-b4b4-44797abc2095",
+          "notification": {
+            "type": "assistant_text_delta",
+            "messageId": "0a028d9b-4463-4442-9fc9-e4abbcfa0fa1",
+            "blockIndex": 0,
+            "textDelta": "548"
+          }
+        }
+      }
+    },
+    {
+      "type": "emit_inbound",
+      "frame": {
+        "jsonrpc": "2.0",
+        "type": "notification",
+        "factoryApiVersion": "1.0.0",
+        "factoryProtocolVersion": "1.246.0",
+        "method": "droid.session_notification",
+        "params": {
+          "sessionId": "daabb4fb-3829-40ec-b4b4-44797abc2095",
+          "notification": {
+            "type": "assistant_text_delta",
+            "messageId": "0a028d9b-4463-4442-9fc9-e4abbcfa0fa1",
+            "blockIndex": 0,
+            "textDelta": "15"
+          }
+        }
+      }
+    },
+    {
+      "type": "emit_inbound",
+      "frame": {
+        "jsonrpc": "2.0",
+        "type": "notification",
+        "factoryApiVersion": "1.0.0",
+        "factoryProtocolVersion": "1.246.0",
+        "method": "droid.session_notification",
+        "params": {
+          "sessionId": "daabb4fb-3829-40ec-b4b4-44797abc2095",
+          "notification": {
+            "type": "assistant_text_delta",
+            "messageId": "0a028d9b-4463-4442-9fc9-e4abbcfa0fa1",
+            "blockIndex": 0,
+            "textDelta": "`"
+          }
+        }
+      }
+    },
+    {
+      "type": "emit_inbound",
+      "frame": {
+        "jsonrpc": "2.0",
+        "type": "notification",
+        "factoryApiVersion": "1.0.0",
+        "factoryProtocolVersion": "1.246.0",
+        "method": "droid.session_notification",
+        "params": {
+          "sessionId": "daabb4fb-3829-40ec-b4b4-44797abc2095",
+          "notification": {
+            "type": "assistant_text_delta",
+            "messageId": "0a028d9b-4463-4442-9fc9-e4abbcfa0fa1",
+            "blockIndex": 0,
+            "textDelta": " completed"
+          }
+        }
+      }
+    },
+    {
+      "type": "emit_inbound",
+      "frame": {
+        "jsonrpc": "2.0",
+        "type": "notification",
+        "factoryApiVersion": "1.0.0",
+        "factoryProtocolVersion": "1.246.0",
+        "method": "droid.session_notification",
+        "params": {
+          "sessionId": "daabb4fb-3829-40ec-b4b4-44797abc2095",
+          "notification": {
+            "type": "assistant_text_delta",
+            "messageId": "0a028d9b-4463-4442-9fc9-e4abbcfa0fa1",
+            "blockIndex": 0,
+            "textDelta": " and"
+          }
+        }
+      }
+    },
+    {
+      "type": "emit_inbound",
+      "frame": {
+        "jsonrpc": "2.0",
+        "type": "notification",
+        "factoryApiVersion": "1.0.0",
+        "factoryProtocolVersion": "1.246.0",
+        "method": "droid.session_notification",
+        "params": {
+          "sessionId": "daabb4fb-3829-40ec-b4b4-44797abc2095",
+          "notification": {
+            "type": "assistant_text_delta",
+            "messageId": "0a028d9b-4463-4442-9fc9-e4abbcfa0fa1",
+            "blockIndex": 0,
+            "textDelta": " reported"
+          }
+        }
+      }
+    },
+    {
+      "type": "emit_inbound",
+      "frame": {
+        "jsonrpc": "2.0",
+        "type": "notification",
+        "factoryApiVersion": "1.0.0",
+        "factoryProtocolVersion": "1.246.0",
+        "method": "droid.session_notification",
+        "params": {
+          "sessionId": "daabb4fb-3829-40ec-b4b4-44797abc2095",
+          "notification": {
+            "type": "assistant_text_delta",
+            "messageId": "0a028d9b-4463-4442-9fc9-e4abbcfa0fa1",
+            "blockIndex": 0,
+            "textDelta": " `"
+          }
+        }
+      }
+    },
+    {
+      "type": "emit_inbound",
+      "frame": {
+        "jsonrpc": "2.0",
+        "type": "notification",
+        "factoryApiVersion": "1.0.0",
+        "factoryProtocolVersion": "1.246.0",
+        "method": "droid.session_notification",
+        "params": {
+          "sessionId": "daabb4fb-3829-40ec-b4b4-44797abc2095",
+          "notification": {
+            "type": "assistant_text_delta",
+            "messageId": "0a028d9b-4463-4442-9fc9-e4abbcfa0fa1",
+            "blockIndex": 0,
+            "textDelta": "DONE"
+          }
+        }
+      }
+    },
+    {
+      "type": "emit_inbound",
+      "frame": {
+        "jsonrpc": "2.0",
+        "type": "notification",
+        "factoryApiVersion": "1.0.0",
+        "factoryProtocolVersion": "1.246.0",
+        "method": "droid.session_notification",
+        "params": {
+          "sessionId": "daabb4fb-3829-40ec-b4b4-44797abc2095",
+          "notification": {
+            "type": "assistant_text_delta",
+            "messageId": "0a028d9b-4463-4442-9fc9-e4abbcfa0fa1",
+            "blockIndex": 0,
+            "textDelta": "`."
+          }
+        }
+      }
+    },
+    {
+      "type": "emit_inbound",
+      "frame": {
+        "jsonrpc": "2.0",
+        "type": "notification",
+        "factoryApiVersion": "1.0.0",
+        "factoryProtocolVersion": "1.246.0",
+        "method": "droid.session_notification",
+        "params": {
+          "sessionId": "daabb4fb-3829-40ec-b4b4-44797abc2095",
+          "notification": {
+            "type": "assistant_text_complete",
+            "messageId": "0a028d9b-4463-4442-9fc9-e4abbcfa0fa1",
+            "blockIndex": 0
+          }
+        }
+      }
+    },
+    {
+      "type": "emit_inbound",
+      "frame": {
+        "jsonrpc": "2.0",
+        "type": "notification",
+        "factoryApiVersion": "1.0.0",
+        "factoryProtocolVersion": "1.246.0",
+        "method": "droid.session_notification",
+        "params": {
+          "sessionId": "daabb4fb-3829-40ec-b4b4-44797abc2095",
+          "notification": {
+            "type": "create_message",
+            "message": {
+              "id": "0a028d9b-4463-4442-9fc9-e4abbcfa0fa1",
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "Task `29017c72-f6d3-44eb-bb93-e54e15254815` completed and reported `DONE`."
+                }
+              ],
+              "createdAt": 1791504248530,
+              "updatedAt": 1791504248530,
+              "modelId": "custom:GPT-6 Luna-12",
+              "reasoningEffort": "low",
+              "openaiPhase": "final_answer",
+              "parentId": "task-completion:7a937e58-ce67-45f3-ac63-cff23136c60b",
+              "seq": 14,
+              "userMessageSource": "sdk"
+            }
+          }
+        }
+      }
+    },
+    {
+      "type": "emit_inbound",
+      "frame": {
+        "jsonrpc": "2.0",
+        "type": "notification",
+        "factoryApiVersion": "1.0.0",
+        "factoryProtocolVersion": "1.246.0",
+        "method": "droid.session_notification",
+        "params": {
+          "sessionId": "daabb4fb-3829-40ec-b4b4-44797abc2095",
+          "notification": {
+            "type": "agent_turn_completed",
+            "reason": "completed",
+            "turnId": "task-completion:221ed446-33b2-4402-ab5e-b76feb002752",
+            "durationMs": 5674
+          }
+        }
+      }
+    }
+  ]
+}

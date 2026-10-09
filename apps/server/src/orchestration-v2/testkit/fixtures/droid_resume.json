@@ -1,0 +1,56 @@
+{
+  "provider": "droid",
+  "protocol": "droid.stream-jsonrpc",
+  "version": "1.246.0",
+  "scenario": "droid_resume",
+  "metadata": {
+    "source": "Handcrafted reopen from real child_session_available, preserving childSessionId",
+    "model": "custom:GPT-6 Luna-12",
+    "cliVersion": "0.234.0",
+    "sanitized": true
+  },
+  "entries": [
+    {
+      "type": "emit_inbound",
+      "frame": {
+        "jsonrpc": "2.0",
+        "type": "notification",
+        "factoryApiVersion": "1.0.0",
+        "factoryProtocolVersion": "1.246.0",
+        "method": "droid.session_notification",
+        "params": {
+          "sessionId": "daabb4fb-3829-40ec-b4b4-44797abc2095",
+          "notification": {
+            "type": "child_session_available",
+            "childSessionId": "fc2a2f6c-76df-4eaf-89a7-014f8712f83f",
+            "toolUseId": "call_bCLJfyaJEsdFgMzKQw6l90fM",
+            "subagentType": "worker-luna",
+            "description": "Spike2 sleep worker",
+            "timestamp": 1791504190641
+          }
+        }
+      }
+    },
+    {
+      "type": "emit_inbound",
+      "frame": {
+        "jsonrpc": "2.0",
+        "type": "notification",
+        "factoryApiVersion": "1.0.0",
+        "factoryProtocolVersion": "1.246.0",
+        "method": "droid.session_notification",
+        "params": {
+          "sessionId": "daabb4fb-3829-40ec-b4b4-44797abc2095",
+          "notification": {
+            "type": "child_session_available",
+            "childSessionId": "fc2a2f6c-76df-4eaf-89a7-014f8712f83f",
+            "toolUseId": "task-resume",
+            "subagentType": "worker-luna",
+            "description": "Spike2 sleep worker",
+            "timestamp": 1791504190641
+          }
+        }
+      }
+    }
+  ]
+}

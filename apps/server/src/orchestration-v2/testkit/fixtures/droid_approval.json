@@ -1,0 +1,75 @@
+{
+  "provider": "droid",
+  "protocol": "droid.stream-jsonrpc",
+  "version": "1.246.0",
+  "scenario": "droid_approval",
+  "metadata": {
+    "source": "Phase 2 real CLI interactive request",
+    "model": "custom:GPT-6 Luna-12",
+    "cliVersion": "0.234.0",
+    "sanitized": true
+  },
+  "entries": [
+    {
+      "type": "emit_inbound",
+      "frame": {
+        "type": "request",
+        "jsonrpc": "2.0",
+        "factoryApiVersion": "1.0.0",
+        "factoryProtocolVersion": "1.246.0",
+        "method": "droid.request_permission",
+        "id": "664d5e3a-228b-428e-a699-c8aa9dcc9252",
+        "params": {
+          "toolUses": [
+            {
+              "toolUse": {
+                "type": "tool_use",
+                "id": "call_rP2JhdO6dQrNva9u66AbX7uN",
+                "name": "ApplyPatch",
+                "input": {
+                  "input": "*** Begin Patch\n*** Add File: /workspace/no-handler.txt\n+hello\n*** End Patch\n"
+                }
+              },
+              "confirmationType": "apply_patch",
+              "details": {
+                "type": "apply_patch",
+                "filePath": "/workspace/no-handler.txt",
+                "fileName": "no-handler.txt",
+                "patchContent": "*** Begin Patch\n*** Add File: /workspace/no-handler.txt\n+hello\n*** End Patch\n",
+                "oldContent": "",
+                "newContent": "hello",
+                "files": [
+                  {
+                    "filePath": "/workspace/no-handler.txt",
+                    "fileName": "no-handler.txt",
+                    "operation": "create",
+                    "oldContent": "",
+                    "newContent": "hello"
+                  }
+                ]
+              }
+            }
+          ],
+          "options": [
+            {
+              "label": "Yes, allow",
+              "value": "proceed_once",
+              "selectedColor": "#d78700"
+            },
+            {
+              "label": "Yes, and always allow low impact commands (file edits and read-only commands)",
+              "value": "proceed_always",
+              "selectedColor": "#d78700"
+            },
+            {
+              "label": "No, cancel",
+              "value": "cancel",
+              "selectedColor": "#d75f5f",
+              "selectedPrefix": "\u2715 "
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

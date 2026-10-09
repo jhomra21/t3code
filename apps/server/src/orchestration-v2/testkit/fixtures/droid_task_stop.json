@@ -1,0 +1,82 @@
+{
+  "provider": "droid",
+  "protocol": "droid.stream-jsonrpc",
+  "version": "1.246.0",
+  "scenario": "droid_task_stop",
+  "metadata": {
+    "source": "Handcrafted TaskStop from verified Phase 1/2 request and notification shapes",
+    "model": "custom:GPT-6 Luna-12",
+    "cliVersion": "0.234.0",
+    "sanitized": true
+  },
+  "entries": [
+    {
+      "type": "emit_inbound",
+      "frame": {
+        "jsonrpc": "2.0",
+        "type": "notification",
+        "factoryApiVersion": "1.0.0",
+        "factoryProtocolVersion": "1.246.0",
+        "method": "droid.session_notification",
+        "params": {
+          "sessionId": "daabb4fb-3829-40ec-b4b4-44797abc2095",
+          "notification": {
+            "type": "child_session_available",
+            "childSessionId": "fc2a2f6c-76df-4eaf-89a7-014f8712f83f",
+            "toolUseId": "call_bCLJfyaJEsdFgMzKQw6l90fM",
+            "subagentType": "worker-luna",
+            "description": "Spike2 sleep worker",
+            "timestamp": 1791504190641
+          }
+        }
+      }
+    },
+    {
+      "type": "emit_inbound",
+      "frame": {
+        "type": "notification",
+        "jsonrpc": "2.0",
+        "factoryApiVersion": "1.0.0",
+        "factoryProtocolVersion": "1.246.0",
+        "method": "droid.session_notification",
+        "params": {
+          "notification": {
+            "type": "create_message",
+            "message": {
+              "id": "task-stop-message",
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "tool_use",
+                  "id": "task-stop-tool",
+                  "name": "TaskStop",
+                  "input": {
+                    "task_id": "fc2a2f6c-76df-4eaf-89a7-014f8712f83f"
+                  }
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "type": "emit_inbound",
+      "frame": {
+        "type": "notification",
+        "jsonrpc": "2.0",
+        "factoryApiVersion": "1.0.0",
+        "factoryProtocolVersion": "1.246.0",
+        "method": "droid.session_notification",
+        "params": {
+          "notification": {
+            "type": "tool_result",
+            "toolUseId": "task-stop-tool",
+            "content": "Task cancelled.",
+            "isError": false
+          }
+        }
+      }
+    }
+  ]
+}

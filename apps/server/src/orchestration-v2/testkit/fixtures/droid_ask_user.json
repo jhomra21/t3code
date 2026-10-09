@@ -1,0 +1,36 @@
+{
+  "provider": "droid",
+  "protocol": "droid.stream-jsonrpc",
+  "version": "1.246.0",
+  "scenario": "droid_ask_user",
+  "metadata": {
+    "source": "Phase 2 real CLI interactive request",
+    "model": "custom:GPT-6 Luna-12",
+    "cliVersion": "0.234.0",
+    "sanitized": true
+  },
+  "entries": [
+    {
+      "type": "emit_inbound",
+      "frame": {
+        "type": "request",
+        "jsonrpc": "2.0",
+        "factoryApiVersion": "1.0.0",
+        "factoryProtocolVersion": "1.246.0",
+        "method": "droid.ask_user",
+        "id": "52062f15-8aab-4b08-b5b4-d4ebaab02661",
+        "params": {
+          "toolCallId": "call_f3ZztRbzJbi8DYZKzMpTFUnN",
+          "questions": [
+            {
+              "index": 1,
+              "topic": "Color",
+              "question": "Which color do you prefer?",
+              "options": ["Red", "Blue"]
+            }
+          ]
+        }
+      }
+    }
+  ]
+}
