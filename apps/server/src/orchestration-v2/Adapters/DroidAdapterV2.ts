@@ -653,7 +653,7 @@ export function makeDroidAdapterV2(
             completedAt: yield* DateTime.now,
             updatedAt: yield* DateTime.now,
           };
-          if (!reconcile) yield* emitChild(child);
+          yield* emitChild(child);
         });
         const publishChildWork = Effect.fnUntraced(function* (
           child: ChildState,
@@ -825,7 +825,7 @@ export function makeDroidAdapterV2(
             });
             yield* emit({ type: "app_thread.created", driver: DROID_PROVIDER, appThread });
           }
-          yield* emitChild(child);
+          if (!reconcile) yield* emitChild(child);
           if (!reconcile) {
             const promptKey = `${key}:prompt:${notice.toolUseId}`;
             const artifacts = makeSubagentConversationArtifacts({
@@ -1614,7 +1614,7 @@ export function makeDroidAdapterV2(
             userMessageSource: "sdk",
             queuePlacement: "end_of_turn",
           });
-        }).pipe(Effect.onError(() => terminal("failed")));
+        });
         const snapshot = Effect.fnUntraced(function* (
           input: ProviderAdapter.ProviderAdapterV2ReadThreadSnapshotInput,
         ) {
@@ -1723,6 +1723,7 @@ export function makeDroidAdapterV2(
             ),
           startTurn: (input) =>
             startTurn(input).pipe(
+              Effect.onError(() => terminal("failed")),
               Effect.mapError(
                 (cause) =>
                   new ProviderAdapter.ProviderAdapterTurnStartError({
