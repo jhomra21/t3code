@@ -1602,7 +1602,7 @@ export function makeDroidAdapterV2(
             userMessageSource: "sdk",
             queuePlacement: "end_of_turn",
           });
-        });
+        }).pipe(Effect.onError(() => terminal("failed")));
         const snapshot = Effect.fnUntraced(function* (
           input: ProviderAdapter.ProviderAdapterV2ReadThreadSnapshotInput,
         ) {
@@ -1756,7 +1756,9 @@ export function makeDroidAdapterV2(
               active.interrupted = true;
               const rpc = yield* requireConnection();
               yield* finishRequests();
-              yield* rpc.request("droid.interrupt_session", {});
+              yield* rpc
+                .request("droid.interrupt_session", {})
+                .pipe(Effect.onError(() => terminal("interrupted")));
             }).pipe(
               Effect.mapError(
                 (cause) =>
