@@ -7,6 +7,7 @@ import {
   ClientSettingsSchema,
   ClientSettingsPatch,
   ClaudeSettings,
+  DroidSettings,
   DEFAULT_SERVER_SETTINGS,
   resolveProviderInstanceEnabled,
   ServerSettings,
@@ -20,6 +21,30 @@ const decodeServerSettings = Schema.decodeUnknownSync(ServerSettings);
 const decodeServerSettingsPatch = Schema.decodeUnknownSync(ServerSettingsPatch);
 const encodeServerSettings = Schema.encodeSync(ServerSettings);
 const decodeClaudeSettings = Schema.decodeUnknownSync(ClaudeSettings);
+const decodeDroidSettings = Schema.decodeUnknownSync(DroidSettings);
+
+describe("native Droid settings", () => {
+  it("defaults to automatic binary discovery with enablement gated by the host install", () => {
+    expect(decodeDroidSettings({})).toEqual({ enabled: true, binaryPath: "", customModels: [] });
+    expect(decodeDroidSettings({ enabled: false, binaryPath: " /custom/droid " })).toMatchObject({
+      enabled: false,
+      binaryPath: "/custom/droid",
+    });
+  });
+  it("preserves existing ACP instances and native thread selections additively", () => {
+    const instances = {
+      fallback: { driver: "acpRegistry", config: { agentId: "factory-droid" } },
+      droid: { driver: "droid", config: { binaryPath: "/native/droid" } },
+    };
+    expect(
+      encodeServerSettings(decodeServerSettings({ providerInstances: instances }))
+        .providerInstances,
+    ).toEqual(instances);
+    expect(
+      resolveProviderInstanceEnabled({ driver: ProviderDriverKind.make("droid"), config: {} }),
+    ).toBe(true);
+  });
+});
 
 describe("ServerSettings response streaming", () => {
   it("defaults to paragraph buffering", () => {

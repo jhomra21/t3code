@@ -20,6 +20,7 @@ import {
 } from "./Adapters/OpenCodeAdapterV2.ts";
 import { PiAdapterV2Driver, type PiAdapterV2DriverEnv } from "@t3tools/provider-pi/server";
 import type { AnyProviderAdapterDriver } from "@t3tools/provider-core/server/adapterDriver";
+import { DROID_PROVIDER } from "./Adapters/DroidAdapterV2.ts";
 
 export type BuiltInProviderAdapterDriversV2Env =
   | AcpRegistryAdapterV2DriverEnv
@@ -43,5 +44,6 @@ const BUILT_IN_PROVIDER_ADAPTER_DRIVERS_V2: ReadonlyArray<
 ];
 
 export const BUILT_IN_PROVIDER_ADAPTER_DRIVER_KINDS_V2: ReadonlySet<ProviderDriverKind> = new Set(
-  BUILT_IN_PROVIDER_ADAPTER_DRIVERS_V2.map((driver) => driver.driverKind),
+  // Native Droid is constructed by its instance driver, not a legacy adapter driver.
+  [...BUILT_IN_PROVIDER_ADAPTER_DRIVERS_V2.map((driver) => driver.driverKind), DROID_PROVIDER],
 );
