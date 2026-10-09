@@ -37,6 +37,7 @@ export const makeDroidSessionManagement = Effect.fn("makeDroidSessionManagement"
   const path = yield* Path.Path;
   const home = environment.FACTORY_HOME_OVERRIDE ?? environment.HOME ?? environment.USERPROFILE;
   const root = home === undefined ? undefined : path.join(home, ".factory", "sessions");
+  const sessionFiles = new Map<string, string>();
   const scan = Effect.fn("droid.sessions.scan")(function* (cwd: string, sessionId?: string) {
     if (root === undefined || !(yield* fs.exists(root))) return [];
     const directories = yield* fs.readDirectory(root);
@@ -124,6 +125,7 @@ export const makeDroidSessionManagement = Effect.fn("makeDroidSessionManagement"
           reason: "session_import_failed",
           message: "Native Droid session not found in this project.",
         });
+      sessionFiles.set(`${input.cwd}\0${input.sessionId}`, session.file);
       const content = yield* fs.readFileString(session.file);
       return content.split("\n").flatMap((line) => {
         const row = decodeRow(line);
@@ -158,7 +160,34 @@ export const makeDroidSessionManagement = Effect.fn("makeDroidSessionManagement"
         }),
     ),
   );
-  return { listSessions, loadSessionHistory } satisfies NonNullable<
+  const getSessionHistoryRevision = Effect.fn("droid.sessions.revision")(
+    function* (input: { readonly cwd: string; readonly sessionId: string }) {
+      if (!isSessionId(input.sessionId))
+        return yield* new AcpRegistryOperationError({
+          reason: "session_import_failed",
+          message: "Invalid native Droid session id.",
+        });
+      const key = `${input.cwd}\0${input.sessionId}`;
+      const file = sessionFiles.get(key) ?? (yield* scan(input.cwd, input.sessionId))[0]?.file;
+      if (file === undefined)
+        return yield* new AcpRegistryOperationError({
+          reason: "session_import_failed",
+          message: "Native Droid session not found in this project.",
+        });
+      sessionFiles.set(key, file);
+      const stat = yield* fs.stat(file);
+      return `${stat.size}:${Option.isSome(stat.mtime) ? stat.mtime.value.getTime() : 0}`;
+    },
+    Effect.mapError(
+      (cause) =>
+        new AcpRegistryOperationError({
+          reason: "session_import_failed",
+          message: "Could not stat native Droid transcript.",
+          cause,
+        }),
+    ),
+  );
+  return { listSessions, loadSessionHistory, getSessionHistoryRevision } satisfies NonNullable<
     ProviderInstance["sessionImport"]
   >;
 });

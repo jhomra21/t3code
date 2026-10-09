@@ -106,6 +106,10 @@ export interface ProviderInstance {
   readonly auth?: ProviderAuthController;
   /** File-backed/native import, independent of ACP transport or account mutation. */
   readonly sessionImport?: {
+    readonly getSessionHistoryRevision?: (input: {
+      readonly cwd: string;
+      readonly sessionId: string;
+    }) => Effect.Effect<string, AcpRegistryOperationError>;
     readonly listSessions: (input: {
       readonly cwd: string;
       readonly cursor?: string;

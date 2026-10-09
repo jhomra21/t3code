@@ -761,7 +761,6 @@ export const subscribeOrchestrationV2Thread = Effect.fn("ws.orchestrationV2.subs
     });
     const importedHistory = yield* ImportedDroidHistory.ImportedDroidHistory;
     yield* threadManagement.ensureLegacyTranscript(input.threadId).pipe(
-      Effect.andThen(importedHistory.refreshThread(input.threadId)),
       Effect.mapError(
         (cause) =>
           new OrchestrationV2GetThreadProjectionError({
@@ -771,6 +770,7 @@ export const subscribeOrchestrationV2Thread = Effect.fn("ws.orchestrationV2.subs
           }),
       ),
     );
+    yield* importedHistory.refreshThread(input.threadId);
 
     const eventStreamFrom = (afterSequence: number) =>
       threadManagement
@@ -1432,16 +1432,6 @@ const layerWsRpc = (
               sessionId: session.sessionId,
             });
             return threadManagement.getThreadShell(threadId).pipe(
-              Effect.tap((thread) =>
-                instance.driverKind === "droid" && thread !== null
-                  ? importedDroidHistory.importThread({
-                      threadId,
-                      instanceId: input.instanceId,
-                      cwd: project.workspaceRoot,
-                      sessionId: session.sessionId,
-                    })
-                  : Effect.void,
-              ),
               Effect.map((thread) => ({
                 ...session,
                 importedThreadId: thread === null ? null : threadId,

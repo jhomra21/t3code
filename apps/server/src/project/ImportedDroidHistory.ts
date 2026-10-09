@@ -34,7 +34,7 @@ type ImportInput = {
 // imports. Production installs the file-backed implementation below.
 export class ImportedDroidHistory extends Context.Reference<{
   readonly importThread: (input: ImportInput) => Effect.Effect<void, ImportedDroidHistoryError>;
-  readonly refreshThread: (threadId: ThreadId) => Effect.Effect<void, ImportedDroidHistoryError>;
+  readonly refreshThread: (threadId: ThreadId) => Effect.Effect<void>;
 }>("t3/project/ImportedDroidHistory", {
   defaultValue: () => ({ importThread: () => Effect.void, refreshThread: () => Effect.void }),
 }) {}
@@ -45,7 +45,23 @@ const make = Effect.gen(function* () {
   const instances = yield* ProviderInstances.ProviderInstanceRegistry;
   const sink = yield* EventSink.EventSinkV2;
   const ids = yield* IdAllocator.IdAllocatorV2;
-  const lock = yield* Semaphore.make(1);
+  const locks = new Map<ThreadId, { readonly lock: Semaphore.Semaphore; users: number }>();
+  const revisions = new Map<ThreadId, Map<string, string>>();
+  const withThreadLock = <A, E, R>(threadId: ThreadId, effect: Effect.Effect<A, E, R>) =>
+    Effect.suspend(() => {
+      const entry = locks.get(threadId) ?? { lock: Semaphore.makeUnsafe(1), users: 0 };
+      locks.set(threadId, entry);
+      entry.users++;
+      return entry.lock
+        .withPermits(1)(effect)
+        .pipe(
+          Effect.ensuring(
+            Effect.sync(() => {
+              if (--entry.users === 0) locks.delete(threadId);
+            }),
+          ),
+        );
+    });
   const importThread = Effect.fn("ImportedDroidHistory.importThread")(
     function* (input: ImportInput) {
       const instance = yield* instances.getInstance(input.instanceId);
@@ -62,6 +78,15 @@ const make = Effect.gen(function* () {
           ["preparing", "starting", "running", "waiting"].includes(run.status),
         )
       )
+        return;
+      const revisionKey = `${input.instanceId}\0${input.sessionId}\0${input.cwd}`;
+      const revision = yield* (
+        instance.sessionImport.getSessionHistoryRevision?.({
+          cwd: input.cwd,
+          sessionId: input.sessionId,
+        }) ?? Effect.succeed(undefined)
+      );
+      if (revision !== undefined && revisions.get(input.threadId)?.get(revisionKey) === revision)
         return;
       const history = yield* instance.sessionImport.loadSessionHistory({
         cwd: input.cwd,
@@ -199,6 +224,11 @@ const make = Effect.gen(function* () {
         );
       }
       if (events.length > 0) yield* sink.write({ events });
+      if (revision !== undefined) {
+        const current = revisions.get(input.threadId) ?? new Map<string, string>();
+        current.set(revisionKey, revision);
+        revisions.set(input.threadId, current);
+      }
     },
     (effect, input) =>
       effect.pipe(
@@ -209,9 +239,6 @@ const make = Effect.gen(function* () {
   );
   const refreshThread = Effect.fn("ImportedDroidHistory.refreshThread")(
     function* (threadId: ThreadId) {
-      const thread = yield* projections.getThread(threadId);
-      const instance = yield* instances.getInstance(thread.providerInstanceId);
-      if (instance?.driverKind !== DROID) return;
       const { providerThreads } = yield* projections.getThreadRecords(threadId, [
         "providerThreads",
       ]);
@@ -228,11 +255,15 @@ const make = Effect.gen(function* () {
       }
     },
     (effect, threadId) =>
-      effect.pipe(Effect.mapError((cause) => new ImportedDroidHistoryError({ threadId, cause }))),
+      effect.pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("Unable to refresh imported Droid history", { threadId, cause }),
+        ),
+      ),
   );
   return {
-    importThread: (input: ImportInput) => lock.withPermits(1)(importThread(input)),
-    refreshThread: (threadId: ThreadId) => lock.withPermits(1)(refreshThread(threadId)),
+    importThread: (input: ImportInput) => withThreadLock(input.threadId, importThread(input)),
+    refreshThread: (threadId: ThreadId) => withThreadLock(threadId, refreshThread(threadId)),
   };
 });
 export const layer = Layer.effect(ImportedDroidHistory, make);

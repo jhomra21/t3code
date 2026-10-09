@@ -13,6 +13,8 @@ import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as DateTime from "effect/DateTime";
 import * as Stream from "effect/Stream";
+import * as Deferred from "effect/Deferred";
+import * as Fiber from "effect/Fiber";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as EventSink from "../orchestration-v2/EventSink.ts";
@@ -23,6 +25,8 @@ import { makeDroidSessionManagement } from "../provider/DroidSessions.ts";
 import * as ImportedHistory from "./ImportedDroidHistory.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
+import * as ApplicationEvents from "../persistence/OrchestrationEventStore.ts";
+import { subscribeOrchestrationV2Thread } from "../ws.ts";
 
 const decodeThread = Schema.decodeUnknownEffect(OrchestrationV2AppThread);
 const encode = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
@@ -60,6 +64,10 @@ it.effect(
       ];
       yield* fs.writeFileString(file, rows.map((row) => encode(row)).join("\n"));
       const manager = yield* makeDroidSessionManagement({ HOME: home });
+      let loads = 0;
+      let heldSession: string | undefined;
+      const entered = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
       const registry = Layer.mock(ProviderInstances.ProviderInstanceRegistry)({
         getInstance: () =>
           Effect.succeed({
@@ -68,7 +76,18 @@ it.effect(
             enabled: true,
             displayName: undefined,
             continuationIdentity: { driverKind: driver, continuationKey: "droid" },
-            sessionImport: manager,
+            sessionImport: {
+              ...manager,
+              loadSessionHistory: (input) =>
+                Effect.gen(function* () {
+                  loads++;
+                  if (heldSession === input.sessionId) {
+                    yield* Deferred.succeed(entered, undefined);
+                    yield* Deferred.await(release);
+                  }
+                  return yield* manager.loadSessionHistory(input);
+                }),
+            },
             orchestrationAdapter: {
               instanceId,
               driver,
@@ -131,6 +150,31 @@ it.effect(
           ],
         });
         const history = yield* ImportedHistory.ImportedDroidHistory;
+        const subscribe = subscribeOrchestrationV2Thread({ threadId }).pipe(
+          Effect.flatMap(Stream.runHead),
+          Effect.provide(
+            Layer.merge(
+              Layer.mock(ThreadManagement.ThreadManagementService)({
+                ensureLegacyTranscript: () => Effect.void,
+                getThreadSnapshot: () =>
+                  projections.getThreadProjection(threadId).pipe(
+                    Effect.map((projection) => ({
+                      schemaVersion: 2,
+                      snapshotSequence: 0,
+                      projection,
+                    })),
+                    Effect.mapError(
+                      (cause) => new Orchestrator.OrchestratorProjectionError({ threadId, cause }),
+                    ),
+                  ),
+                streamStoredEventsFrom: () => Stream.empty,
+              }),
+              Layer.mock(ApplicationEvents.OrchestrationEventStore)({}),
+            ),
+          ),
+        );
+        yield* subscribe;
+        assert.equal(loads, 0, "ordinary threads do not invoke native history");
         yield* history.importThread({ threadId, instanceId, cwd: "/project", sessionId: nativeId });
         assert.equal(yield* projections.getMessageCount(threadId), 151);
         const messages = (yield* projections.getThreadRecords(threadId, ["messages"])).messages;
@@ -173,7 +217,12 @@ it.effect(
             ),
           ),
         );
+        assert.equal(yield* open, 151, "projection reads must not refresh history");
+        yield* subscribe;
         assert.equal(yield* open, 152);
+        const afterRefresh = loads;
+        yield* history.refreshThread(threadId);
+        assert.equal(loads, afterRefresh, "unchanged size and mtime skip history reads");
         assert.equal(yield* open, 152);
         const childId = "22222222-2222-4222-8222-222222222222";
         const childThreadId = ids.derive.threadFromProviderThread({
@@ -237,6 +286,35 @@ it.effect(
           (yield* projections.getThreadRecords(childThreadId, ["providerThreads"])).providerThreads,
           1,
         );
+        heldSession = nativeId;
+        yield* fs.writeFileString(file, rows.map((row) => encode(row)).join("\n"));
+        const parentRefresh = yield* history.refreshThread(threadId).pipe(Effect.forkChild);
+        yield* Deferred.await(entered);
+        yield* fs.writeFileString(
+          `${directory}/${childId}.jsonl`,
+          [
+            encode({ type: "session_start", id: childId, cwd: "/project" }),
+            encode({
+              type: "message",
+              id: "child-new",
+              message: {
+                role: "assistant",
+                content: [{ type: "text", text: "New child result" }],
+              },
+            }),
+          ].join("\n"),
+        );
+        yield* history.refreshThread(childThreadId);
+        assert.equal(
+          yield* projections.getMessageCount(childThreadId),
+          2,
+          "another thread must not wait for the parent lock",
+        );
+        yield* Deferred.succeed(release, undefined);
+        yield* Fiber.join(parentRefresh);
+        yield* fs.remove(file);
+        yield* subscribe;
+        assert.equal(yield* open, 152, "failed stat/refresh must not fail ordinary reads");
       }).pipe(
         Effect.provide(
           ImportedHistory.layer.pipe(Layer.provideMerge(Layer.merge(stores, registry))),
