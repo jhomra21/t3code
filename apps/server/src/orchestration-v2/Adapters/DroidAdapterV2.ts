@@ -1448,17 +1448,27 @@ export function makeDroidAdapterV2(
               // Resume precedes the run subscription. Publish reconciliation
               // only once startTurn provides a routable run/turn owner.
               resumedChildren = result;
-              const file = yield* findDroidSessionFile({
-                sessionId: nativeId,
-                environment: options.environment,
-              });
-              if (file !== undefined) {
-                const stat = yield* options.fileSystem.stat(file);
-                importedFile = {
-                  file,
-                  size: Number(stat.size),
-                  modified: Option.isSome(stat.mtime) ? stat.mtime.value.getTime() : 0,
-                };
+              importedFile = null;
+              if (providerThread?.nativeMetadata?.importedSessionCwd !== undefined) {
+                const file = yield* findDroidSessionFile({
+                  sessionId: nativeId,
+                  environment: options.environment,
+                }).pipe(Effect.orElseSucceed(() => undefined));
+                if (file !== undefined) {
+                  const stat = yield* options.fileSystem.stat(file).pipe(Effect.option);
+                  if (Option.isSome(stat))
+                    importedFile = {
+                      file,
+                      size: Number(stat.value.size),
+                      modified: Option.isSome(stat.value.mtime)
+                        ? stat.value.mtime.value.getTime()
+                        : 0,
+                    };
+                  else
+                    yield* Effect.logWarning("Unable to stat imported Droid session", {
+                      sessionId: nativeId,
+                    });
+                }
               }
             }
             yield* rpc.notifications.pipe(
@@ -1552,6 +1562,7 @@ export function makeDroidAdapterV2(
           const isContinuation =
             input.message.createdBy === "agent" && input.message.creationSource === "provider";
           const imagePaths = isContinuation || compact ? [] : yield* imagePathsFor(input.message);
+          const hadPendingWake = wakePending;
           if (!isContinuation && !compact && wakeBuffer.length > 0 && lastContext !== null) {
             const buffer = wakeBuffer;
             wakeBuffer = [];
@@ -1570,10 +1581,26 @@ export function makeDroidAdapterV2(
               input.runtimePolicy,
               resumedId ?? undefined,
             );
-          if (importedFile !== null && !isContinuation) {
-            const stat = yield* options.fileSystem.stat(importedFile.file);
-            const modified = Option.isSome(stat.mtime) ? stat.mtime.value.getTime() : 0;
-            if (Number(stat.size) !== importedFile.size || modified !== importedFile.modified) {
+          if (
+            importedFile !== null &&
+            !isContinuation &&
+            !hadPendingWake &&
+            !children.values().some((child) => child.task.status === "running")
+          ) {
+            const stat = yield* options.fileSystem.stat(importedFile.file).pipe(Effect.option);
+            const modified =
+              Option.isSome(stat) && Option.isSome(stat.value.mtime)
+                ? stat.value.mtime.value.getTime()
+                : 0;
+            if (Option.isNone(stat)) {
+              yield* Effect.logWarning(
+                "Unable to stat imported Droid session; keeping live connection",
+                { sessionId: resumedId },
+              );
+            } else if (
+              Number(stat.value.size) !== importedFile.size ||
+              modified !== importedFile.modified
+            ) {
               // An external CLI can modify an imported transcript without a lock.
               yield* closeConnection();
               yield* openConnection(

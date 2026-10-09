@@ -59,6 +59,8 @@ const open = Effect.fnUntraced(function* (
     readonly environment?: NodeJS.ProcessEnv;
     readonly responses?: Parameters<typeof DroidTestkit.makeReplayConnection>[2];
     readonly existingProviderThread?: ProviderAdapter.ProviderAdapterV2EnsureThreadInput["existingProviderThread"];
+    readonly makeConnection?: DroidAdapter.DroidAdapterV2Options["makeConnection"];
+    readonly fileSystem?: FileSystem.FileSystem;
   } = {},
 ) {
   const replay = yield* DroidTestkit.makeReplayConnection(transcript, false, setup.responses);
@@ -66,10 +68,10 @@ const open = Effect.fnUntraced(function* (
     instanceId,
     environment: setup.environment ?? {},
     attachmentsDir: "/tmp/droid-native-test-attachments",
-    fileSystem: yield* FileSystem.FileSystem,
+    fileSystem: setup.fileSystem ?? (yield* FileSystem.FileSystem),
     path: yield* Path.Path,
     idAllocator: yield* IdAllocator.IdAllocatorV2,
-    makeConnection: replay.open,
+    makeConnection: setup.makeConnection ?? replay.open,
     ...(continuationRequests === undefined ? {} : { continuationRequests }),
   });
   const runtime = yield* adapter.openSession({
@@ -135,6 +137,79 @@ const provide = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
   effect.pipe(Effect.scoped, Effect.provide(Layer.merge(NodeServices.layer, IdAllocator.layer)));
 
 describe("DroidAdapterV2", () => {
+  it.effect.each(["ordinary", "changed", "child", "wake", "stat-failure"])(
+    "reloads changed imported files safely: %s",
+    (mode) =>
+      provide(
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          const path = yield* Path.Path;
+          const home = yield* fs.makeTempDirectoryScoped();
+          const nativeId = "33333333-3333-4333-8333-333333333333";
+          const directory = path.join(home, ".factory", "sessions", "workspace");
+          yield* fs.makeDirectory(directory, { recursive: true });
+          const file = path.join(directory, `${nativeId}.jsonl`);
+          yield* fs.writeFileString(file, "{}\n");
+          const original = yield* open();
+          const connections: Array<
+            Effect.Success<ReturnType<typeof DroidTestkit.makeReplayConnection>>
+          > = [];
+          const resumed = yield* open(undefined, undefined, {
+            environment: { HOME: home },
+            existingProviderThread: {
+              ...original.input.providerThread,
+              nativeThreadRef: {
+                driver: DroidAdapter.DROID_PROVIDER,
+                nativeId,
+                strength: "strong",
+              },
+              ...(mode === "ordinary"
+                ? {}
+                : { nativeMetadata: { importedSessionCwd: "/workspace" } }),
+            },
+            makeConnection: (options) =>
+              Effect.gen(function* () {
+                const replay = yield* DroidTestkit.makeReplayConnection();
+                connections.push(replay);
+                return yield* replay.open(options);
+              }),
+          });
+          const replay = connections[0]!;
+          yield* resumed.runtime.startTurn(resumed.input);
+          if (mode === "child")
+            yield* replay.emit({
+              type: "child_session_available",
+              childSessionId: "live-child",
+              toolUseId: "live-tool",
+            });
+          yield* replay.emit({
+            type: "agent_turn_completed",
+            reason: "completed",
+            turnId: resumed.input.message.messageId,
+          });
+          if (mode === "wake")
+            yield* replay.emit({
+              type: "create_message",
+              message: {
+                id: "task-completion:live-child",
+                role: "user",
+                content: [],
+              },
+            });
+          yield* replay.drain;
+          if (mode === "stat-failure") yield* fs.remove(file);
+          else yield* fs.writeFileString(file, "{}\n{}\n");
+          yield* resumed.runtime.startTurn({
+            ...resumed.input,
+            attemptId: RunAttemptId.make("reload-next"),
+            message: { ...resumed.input.message, messageId: MessageId.make("reload-next") },
+          });
+          assert.equal(connections.length, mode === "changed" ? 2 : 1);
+          assert.isTrue(connections.at(-1)!.methods.includes("droid.add_user_message"));
+          if (mode === "child") assert.isTrue(yield* resumed.runtime.hasPendingBackgroundWork!);
+        }),
+      ),
+  );
   it.effect("sends image paths on initial and steering messages using the SDK shape", () =>
     provide(
       Effect.gen(function* () {
