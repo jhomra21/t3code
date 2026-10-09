@@ -5,8 +5,9 @@ import * as NodePath from "node:path";
 
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Queue from "effect/Queue";
 
-import { followDroidSubagent } from "./DroidSessionTranscript.ts";
+import { followDroidSubagent, watchDroidSessionDirectory } from "./DroidSessionTranscript.ts";
 
 const row = (value: object) => `${JSON.stringify(value)}\n`;
 const userAt = (timestamp: string, text: string) =>
@@ -14,6 +15,7 @@ const userAt = (timestamp: string, text: string) =>
 const toolCall = (id: string) =>
   row({
     type: "message",
+    id: `row:${id}`,
     message: {
       role: "assistant",
       content: [{ type: "tool_use", id, name: "Execute", input: { command: "sleep 5" } }],
@@ -26,14 +28,18 @@ const toolResult = (id: string, text: string, timestamp: string) =>
     message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content: text }] },
   });
 const reply = (text: string) =>
-  row({ type: "message", message: { role: "assistant", content: [{ type: "text", text }] } });
+  row({
+    type: "message",
+    id: text,
+    message: { role: "assistant", content: [{ type: "text", text }] },
+  });
 const outcome = row({ type: "agent_turn_outcome", reason: "completed" });
 
 const T0 = "2026-10-07T20:00:00.000Z";
 const T1 = "2026-10-07T20:00:05.000Z";
 const startedAtMillis = Date.parse(T0) - 1000;
 
-const withFile = <A>(use: (file: string) => Effect.Effect<A>) =>
+const withFile = <A, E>(use: (file: string) => Effect.Effect<A, E>) =>
   Effect.promise(() => NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "droid-follow-"))).pipe(
     Effect.flatMap((directory) =>
       use(NodePath.join(directory, "worker.jsonl")).pipe(
@@ -84,16 +90,20 @@ describe("followDroidSubagent", () => {
     ),
   );
 
-  it.effect("returns the same work object when nothing was appended", () =>
+  it.effect("emits only changed steps when nothing or another row was appended", () =>
     withFile((file) =>
       Effect.gen(function* () {
         const follow = followDroidSubagent({ file, startedAtMillis });
         yield* append(file, userAt(T0, "go") + toolCall("call-1"));
         const first = yield* follow;
         const second = yield* follow;
-        assert.strictEqual(second.work, first.work);
+        assert.equal(first.work.steps.length, 1);
+        assert.deepEqual(second.work.steps, []);
         yield* append(file, reply("more"));
-        assert.notStrictEqual((yield* follow).work, first.work);
+        assert.deepEqual(
+          (yield* follow).work.steps.map((step) => step.id),
+          ["more:0"],
+        );
       }),
     ),
   );
@@ -119,6 +129,95 @@ describe("followDroidSubagent", () => {
         yield* append(file, userAt(T0, "go") + reply("LATE"));
         assert.equal((yield* follow).work.steps.length, 1);
       }),
+    ),
+  );
+
+  it.effect("counts undecodable complete rows without consuming an unfinished last row", () =>
+    withFile((file) =>
+      Effect.gen(function* () {
+        const follow = followDroidSubagent({ file, startedAtMillis });
+        const pending = reply("later");
+        yield* append(
+          file,
+          "not-json\n" +
+            row({ type: "message", message: { role: "invalid" } }) +
+            pending.slice(0, 12),
+        );
+        const first = yield* follow;
+        assert.equal(first.undecodableRows, 2);
+        assert.deepEqual(first.work.steps, []);
+        yield* append(file, pending.slice(12));
+        const next = yield* follow;
+        assert.equal(next.undecodableRows, 2);
+        assert.deepEqual(
+          next.work.steps.map((step) => step.id),
+          ["later:0"],
+        );
+      }),
+    ),
+  );
+
+  it.effect("restarts incremental parsing after truncation without retaining old tool joins", () =>
+    withFile((file) =>
+      Effect.gen(function* () {
+        const follow = followDroidSubagent({ file, startedAtMillis });
+        yield* append(file, toolCall("old") + reply("a sufficiently long old reply"));
+        yield* follow;
+        yield* Effect.promise(() => NodeFSP.writeFile(file, reply("new")));
+        assert.deepEqual(
+          (yield* follow).work.steps.map((step) => step.id),
+          ["new:0"],
+        );
+        assert.deepEqual((yield* follow).work.steps, []);
+      }),
+    ),
+  );
+
+  it.effect("replays recorded child tools, results, and reasoning with stable identities", () =>
+    withFile((file) =>
+      Effect.gen(function* () {
+        const content = yield* Effect.promise(() =>
+          NodeFSP.readFile(new URL("./fixtures/droid-child.jsonl", import.meta.url), "utf8"),
+        );
+        const follow = followDroidSubagent({ file, startedAtMillis });
+        yield* append(file, content);
+        const state = yield* follow;
+        assert.isTrue(
+          state.work.steps.some(
+            (step) =>
+              step.kind === "message" &&
+              step.reasoning === true &&
+              step.text === "Recorded reasoning fixture",
+          ),
+        );
+        assert.isTrue(
+          state.work.steps.some((step) => step.kind === "tool" && step.output === "fixture output"),
+        );
+        assert.deepEqual((yield* follow).work.steps, []);
+      }),
+    ),
+  );
+
+  it.effect("observes file creation after announcement without listing the session directory", () =>
+    withFile((file) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const watcher = yield* watchDroidSessionDirectory(NodePath.dirname(file));
+          const dirty = yield* Queue.sliding<void>(1);
+          const remove = watcher.listen(NodePath.basename(file), () =>
+            Queue.offerUnsafe(dirty, undefined),
+          );
+          const follow = followDroidSubagent({ file, startedAtMillis });
+          assert.deepEqual((yield* follow).work.steps, []);
+          yield* append(file, reply("created"));
+          yield* Queue.take(dirty);
+          assert.deepEqual(
+            (yield* follow).work.steps.map((step) => step.id),
+            ["created:0"],
+          );
+          remove();
+        }),
+      ),
     ),
   );
 });

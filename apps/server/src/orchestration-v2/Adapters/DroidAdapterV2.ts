@@ -27,6 +27,7 @@ import type * as Path from "effect/Path";
 import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
+import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import { ChildProcessSpawner } from "effect/process";
 
@@ -40,6 +41,8 @@ import type * as AcpRegistrySupport from "../../provider/acp/AcpRegistrySupport.
 import {
   findDroidSessionFile,
   followDroidSubagent,
+  watchDroidSessionDirectory,
+  droidSubagentStepSignature,
   type DroidSubagentWork,
 } from "../../provider/acp/DroidSessionTranscript.ts";
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
@@ -332,7 +335,10 @@ type ChildState = {
   toolUseId: string;
   follower: Fiber.Fiber<void, never> | null;
   generation: number;
-  readonly publishedSteps: Map<string, string | null>;
+  readonly publishedSteps: Map<string, string>;
+  drain: Effect.Effect<boolean>;
+  removeListener: () => void;
+  pendingCompletion: { status: "completed" | "failed"; result: string | null } | null;
 };
 type PendingRequest = {
   readonly reply: Deferred.Deferred<DroidRpc.DroidRpcReply>;
@@ -373,6 +379,10 @@ export function makeDroidAdapterV2(
         const pending = new Map<RuntimeRequestId, PendingRequest>();
         const children = new Map<string, ChildState>();
         const childByToolUseId = new Map<string, ChildState>();
+        const directoryWatchers = new Map<
+          string,
+          { listen: (name: string, listener: () => void) => () => void }
+        >();
         const reconciledChildren = new Set<string>();
         const turns = new Map<string, OrchestrationV2ProviderTurn>();
         const messages = new Map<string, OrchestrationV2ConversationMessage>();
@@ -651,6 +661,15 @@ export function makeDroidAdapterV2(
           status: "completed" | "failed" | "cancelled",
           result: string | null,
         ) {
+          const transcriptEnded = yield* child.drain;
+          // Parent notifications can overtake the final append. Keep observing until the outcome
+          // is on disk, except when cancellation or process death makes another append impossible.
+          if (!transcriptEnded && status !== "cancelled" && connection !== null) {
+            child.pendingCompletion = { status, result };
+            return;
+          }
+          child.pendingCompletion = null;
+          child.removeListener();
           child.generation++;
           if (child.follower !== null) {
             yield* Fiber.interrupt(child.follower);
@@ -674,12 +693,11 @@ export function makeDroidAdapterV2(
           const updatedAt = yield* DateTime.now;
           if (work.model !== undefined)
             child.task = { ...child.task, model: work.model, updatedAt };
-          for (const [index, step] of work.steps.entries()) {
-            const stepId = step.kind === "tool" ? step.id : `message:${index}`;
-            const output = step.kind === "tool" ? step.output : step.text;
-            if (child.publishedSteps.has(stepId) && child.publishedSteps.get(stepId) === output)
-              continue;
-            child.publishedSteps.set(stepId, output);
+          for (const step of work.steps) {
+            const stepId = step.id;
+            const signature = droidSubagentStepSignature(step);
+            if (child.publishedSteps.get(stepId) === signature) continue;
+            child.publishedSteps.set(stepId, signature);
             if (step.kind === "tool") {
               yield* emitTool(
                 child.context,
@@ -689,7 +707,26 @@ export function makeDroidAdapterV2(
                 child,
               );
             } else {
-              const key = `child:${child.task.nativeTaskRef?.nativeId}:message:${index}`;
+              const key = `child:${child.task.nativeTaskRef?.nativeId}:${step.id}`;
+              const itemOrdinal = ordinal(child.context, key);
+              if (step.reasoning === true) {
+                yield* emitItem({
+                  ...itemBase(child.context, key, updatedAt),
+                  threadId: childThreadId,
+                  runId: null,
+                  nodeId: child.rootNodeId,
+                  providerThreadId: null,
+                  providerTurnId: null,
+                  ordinal: itemOrdinal,
+                  type: "reasoning",
+                  title: "Thinking",
+                  text: step.text,
+                  streaming: false,
+                  status: "completed",
+                  completedAt: updatedAt,
+                });
+                continue;
+              }
               const artifacts = makeSubagentConversationArtifacts({
                 messageId: ids.derive.messageFromProviderItem({
                   driver: DROID_PROVIDER,
@@ -706,7 +743,7 @@ export function makeDroidAdapterV2(
                 nativeItemRef: nativeRef(key),
                 role: "assistant",
                 text: step.text,
-                ordinal: index + 101,
+                ordinal: itemOrdinal,
                 now: updatedAt,
               });
               yield* emit({
@@ -719,38 +756,61 @@ export function makeDroidAdapterV2(
           }
         });
         const startFollower = Effect.fnUntraced(function* (childId: string, child: ChildState) {
-          const file = yield* findDroidSessionFile({
-            sessionId: childId,
+          const parentFile = yield* findDroidSessionFile({
+            sessionId: nativeId ?? "",
             environment: options.environment,
           });
-          if (file === undefined) return;
+          if (parentFile === undefined) return;
+          const directory = options.path.dirname(parentFile);
+          let watcher = directoryWatchers.get(directory);
+          if (watcher === undefined) {
+            watcher = yield* watchDroidSessionDirectory(directory).pipe(
+              Effect.provideService(Scope.Scope, sessionScope),
+            );
+            directoryWatchers.set(directory, watcher);
+          }
           const generation = child.generation;
           const follow = followDroidSubagent({
-            file,
+            file: options.path.join(directory, `${childId}.jsonl`),
             startedAtMillis: DateTime.toEpochMillis(child.task.startedAt ?? now),
           });
-          let reported: DroidSubagentWork | null = null;
-          child.follower = yield* Stream.merge(
-            options.fileSystem.watch(file),
-            Stream.make(undefined),
-          ).pipe(
-            Stream.mapEffect(() => follow),
+          const lock = yield* Semaphore.make(1);
+          // A sliding dirty signal retains at most one re-read during a read; idle children do no work.
+          const dirty = yield* Queue.sliding<void>(1);
+          child.removeListener = watcher.listen(`${childId}.jsonl`, () =>
+            Queue.offerUnsafe(dirty, undefined),
+          );
+          const read = lock.withPermit(
+            Effect.gen(function* () {
+              const state = yield* follow;
+              if (child.generation === generation) yield* publishChildWork(child, state.work);
+              return state;
+            }),
+          );
+          child.drain = read.pipe(Effect.map((state) => state.outcome !== undefined));
+          yield* Queue.offer(dirty, undefined);
+          child.follower = yield* Stream.fromQueue(dirty).pipe(
+            Stream.mapEffect(() => read),
             Stream.takeUntil((state) => state.outcome !== undefined),
             Stream.runForEach((state) =>
               Effect.gen(function* () {
                 if (child.generation !== generation) return;
-                if (state.work !== reported) {
-                  reported = state.work;
-                  yield* publishChildWork(child, state.work);
-                }
                 if (state.outcome !== undefined) {
                   // The follower cannot interrupt itself.
                   child.follower = null;
-                  yield* finishChild(child, state.outcome, state.assistantMessages.at(-1) ?? null);
+                  if (child.task.status === "running")
+                    yield* finishChild(
+                      child,
+                      child.pendingCompletion?.status ?? state.outcome,
+                      child.pendingCompletion?.result ?? state.assistantMessages.at(-1) ?? null,
+                    );
                 }
               }),
             ),
-            Effect.ignore,
+            Effect.catchCause((cause) =>
+              Effect.logWarning("Droid child follower failed", { cause }),
+            ),
+            Effect.ensuring(Effect.sync(child.removeListener)),
             Effect.forkIn(sessionScope),
           );
         });
@@ -762,6 +822,7 @@ export function makeDroidAdapterV2(
           const existing = children.get(notice.childSessionId);
           if (existing?.follower !== null && existing?.follower !== undefined)
             yield* Fiber.interrupt(existing.follower);
+          existing?.removeListener();
           const updatedAt = yield* DateTime.now;
           const key = `child:${notice.childSessionId}`;
           const nodeId = ids.derive.nodeFromProviderItem({
@@ -816,6 +877,9 @@ export function makeDroidAdapterV2(
             follower: null,
             generation: (existing?.generation ?? 0) + 1,
             publishedSteps: existing?.publishedSteps ?? new Map(),
+            drain: Effect.succeed(true),
+            removeListener: () => {},
+            pendingCompletion: null,
           };
           children.set(notice.childSessionId, child);
           if (existing !== undefined) childByToolUseId.delete(existing.toolUseId);

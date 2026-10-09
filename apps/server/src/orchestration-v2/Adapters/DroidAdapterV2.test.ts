@@ -137,6 +137,131 @@ const provide = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
   effect.pipe(Effect.scoped, Effect.provide(Layer.merge(NodeServices.layer, IdAllocator.layer)));
 
 describe("DroidAdapterV2", () => {
+  // File creation can follow the launch notification; completion can overtake its final watch event.
+  it.effect(
+    "streams an announced child before its file exists, drains completion, and resumes without duplicate steps",
+    () =>
+      provide(
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          const home = yield* fs.makeTempDirectoryScoped();
+          const parentId = "33333333-3333-4333-8333-333333333333";
+          const childId = "fc2a2f6c-76df-4eaf-89a7-014f8712f83f";
+          const directory = `${home}/.factory/sessions/project`;
+          yield* fs.makeDirectory(directory, { recursive: true });
+          yield* fs.writeFileString(`${directory}/${parentId}.jsonl`, "{}\n");
+          const { runtime, replay, input } = yield* open(undefined, undefined, {
+            environment: { HOME: home },
+            responses: { initializedSessionId: parentId },
+          });
+          const observed: ProviderAdapter.ProviderAdapterV2Event[] = [];
+          const toolSeen = yield* Deferred.make<void>();
+          const toolEnded = yield* Deferred.make<void>();
+          yield* runtime.events.pipe(
+            Stream.runForEach((event) =>
+              Effect.gen(function* () {
+                observed.push(event);
+                if (
+                  event.type === "turn_item.updated" &&
+                  event.turnItem.type === "command_execution"
+                ) {
+                  if (event.turnItem.status === "running")
+                    yield* Deferred.succeed(toolSeen, undefined);
+                  if (event.turnItem.status === "completed")
+                    yield* Deferred.succeed(toolEnded, undefined);
+                }
+              }),
+            ),
+            Effect.forkChild,
+          );
+          yield* runtime.startTurn(input);
+          const notice = {
+            type: "child_session_available",
+            childSessionId: childId,
+            toolUseId: "blocking-task",
+            description: "Worker",
+          };
+          yield* replay.emit(notice);
+          yield* replay.drain;
+          const line = (value: object) => `${JSON.stringify(value)}\n`;
+          const file = `${directory}/${childId}.jsonl`;
+          const user = line({
+            type: "message",
+            id: "prompt",
+            timestamp: "2099-01-01T00:00:00Z",
+            message: { role: "user", content: [] },
+          });
+          const call = line({
+            type: "message",
+            id: "assistant-row",
+            message: {
+              role: "assistant",
+              content: [
+                { type: "thinking", thinking: "Recorded reasoning fixture" },
+                {
+                  type: "tool_use",
+                  id: "child-call",
+                  name: "Execute",
+                  input: { command: "echo fixture" },
+                },
+              ],
+            },
+          });
+          yield* fs.writeFileString(file, user + call);
+          yield* Deferred.await(toolSeen);
+          assert.isTrue(
+            observed.some(
+              (event) => event.type === "turn_item.updated" && event.turnItem.type === "reasoning",
+            ),
+          );
+          yield* replay.emit({
+            type: "tool_result",
+            toolUseId: "blocking-task",
+            content: "Worker reply",
+          });
+          yield* replay.drain;
+          yield* fs.writeFileString(
+            file,
+            user +
+              call +
+              line({
+                type: "message",
+                id: "result-row",
+                message: {
+                  role: "user",
+                  content: [
+                    { type: "tool_result", tool_use_id: "child-call", content: "fixture output" },
+                  ],
+                },
+              }) +
+              line({ type: "agent_turn_outcome", reason: "completed" }),
+          );
+          yield* Deferred.await(toolEnded);
+          const beforeResume = observed.filter(
+            (event) =>
+              event.type === "turn_item.updated" &&
+              ["reasoning", "command_execution"].includes(event.turnItem.type),
+          ).length;
+          yield* replay.emit(notice);
+          yield* replay.drain;
+          yield* replay.emit({
+            type: "tool_result",
+            toolUseId: "blocking-task",
+            content: "Worker reply",
+          });
+          yield* replay.drain;
+          assert.equal(
+            observed.filter(
+              (event) =>
+                event.type === "turn_item.updated" &&
+                ["reasoning", "command_execution"].includes(event.turnItem.type),
+            ).length,
+            beforeResume,
+          );
+        }),
+      ),
+  );
+
   it.effect("skips malformed native notification payloads without losing the live session", () =>
     provide(
       Effect.gen(function* () {

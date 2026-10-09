@@ -1,0 +1,7 @@
+{"type":"session_start","id":"fc2a2f6c-76df-4eaf-89a7-014f8712f83f","callingSessionId":"daabb4fb-3829-40ec-b4b4-44797abc2095","callingToolUseId":"call_bCLJfyaJEsdFgMzKQw6l90fM"}
+{"type":"message","id":"d966af75-ed27-4279-b0f3-e916bf19d6a9","timestamp":"2026-10-09T00:03:10.719Z","message":{"role":"user","content":[{"type":"text","text":"Worker prompt"}],"interactionMode":"auto"}}
+{"type":"message","id":"e8087178-c824-4179-b4c3-b4a50ec103a5","timestamp":"2026-10-08T23:57:29.277Z","message":{"role":"assistant","content":[{"type":"thinking","thinking":"Recorded reasoning fixture"}]}}
+{"type":"message","id":"bee977f8-183c-4928-af92-2c0b4231db25","timestamp":"2026-10-09T00:03:15.621Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"call_OoChSHiFuECxKd6IkVcl5xL5","name":"Execute","input":{"command":"echo fixture"}}],"modelId":"custom:GPT-6 Luna-12","reasoningEffort":"high"}}
+{"type":"message","id":"356962dd-6997-43ea-9c55-f8bb4ba6c340","timestamp":"2026-10-09T00:04:00.667Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"call_OoChSHiFuECxKd6IkVcl5xL5","is_error":false,"content":"fixture output"}]}}
+{"type":"message","id":"c926bbf5-5242-41a6-b5bb-714c00e81d7d","timestamp":"2026-10-09T00:04:02.329Z","message":{"role":"assistant","content":[{"type":"text","text":"Worker reply"}],"openaiMessageId":"msg_076f1334cd352d78016ac82f71f4ec87d197b7fb079620f7ba","openaiPhase":"final_answer","modelId":"custom:GPT-6 Luna-12","reasoningEffort":"high"}}
+{"type":"agent_turn_outcome","reason":"completed"}
