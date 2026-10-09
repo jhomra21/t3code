@@ -197,7 +197,7 @@ export const makeConnection = Effect.fn("DroidRpc.makeConnection")(function* (op
       const handled =
         closing || options.onRequest === undefined
           ? Effect.succeed(undefined)
-          : options.onRequest(incomingRequest);
+          : Effect.suspend(() => options.onRequest?.(incomingRequest) ?? Effect.succeed(undefined));
       yield* handled.pipe(
         Effect.catchCause(() => Effect.succeed(undefined)),
         Effect.flatMap((response) =>
