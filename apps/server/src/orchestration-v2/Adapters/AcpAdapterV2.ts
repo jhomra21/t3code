@@ -260,7 +260,9 @@ export interface AcpAdapterV2Flavor {
   /** Native session mode to select for a runtime policy (e.g. Antigravity `yolo`). */
   readonly sessionModeForPolicy?: (
     policy: ProviderAdapter.ProviderAdapterV2RuntimePolicy,
+    modelSelection?: ModelSelection,
   ) => string | undefined;
+  readonly promptInstructions?: string;
   /**
    * Opts the session into the ACP client `fs` capability. Agents read and write
    * files themselves under their own permission model unless a flavor sets
@@ -6576,8 +6578,13 @@ export function makeAcpAdapterV2(
               }),
             );
           }
-          const policyMode = flavor.sessionModeForPolicy?.(runtimePolicy);
-          if (policyMode !== undefined) {
+          const policyMode = flavor.sessionModeForPolicy?.(runtimePolicy, modelSelection);
+          const policyModeState = yield* runtime.getModeState;
+          if (
+            policyMode !== undefined &&
+            policyModeState?.availableModes.some((mode) => mode.id === policyMode) === true &&
+            policyModeState.currentModeId !== policyMode
+          ) {
             yield* runtime.setMode(policyMode);
           }
           const modeState = yield* runtime.getModeState;
@@ -6973,6 +6980,9 @@ export function makeAcpAdapterV2(
           const instructionState = {
             interactionMode: turnInput.runtimePolicy.interactionMode,
             hasT3Mcp: acpMcpServers(turnInput.threadId, self).length > 0,
+            ...(flavor.promptInstructions === undefined
+              ? {}
+              : { additionalInstructions: flavor.promptInstructions }),
           } satisfies T3AcpInstructionState;
           const previousInstructionState = (yield* Ref.get(promptInstructionStates)).get(sessionId);
           const messageText = providerMessageTextWithAttachmentPaths({

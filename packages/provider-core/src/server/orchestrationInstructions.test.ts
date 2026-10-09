@@ -104,4 +104,27 @@ describe("T3 orchestration provider instructions", () => {
     assert.notInclude(withoutMcp, "T3 Code collaborative browser");
     assert.notInclude(withoutMcp, "T3 Code orchestration");
   });
+
+  it("includes optional ACP flavor guidance only for the flavor that supplies it", () => {
+    const prompt = "Continue.";
+    const droidGuidance = "Do not use the AskUser tool in this environment.";
+    assert.include(
+      t3AcpPromptWithInstructions({
+        prompt,
+        state: {
+          interactionMode: "default",
+          hasT3Mcp: false,
+          additionalInstructions: droidGuidance,
+        },
+      }),
+      droidGuidance,
+    );
+    assert.notInclude(
+      t3AcpPromptWithInstructions({
+        prompt,
+        state: { interactionMode: "default", hasT3Mcp: false },
+      }),
+      droidGuidance,
+    );
+  });
 });

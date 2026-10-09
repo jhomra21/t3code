@@ -36,6 +36,7 @@ import {
   AcpRegistryAdapterV2Driver,
   makeAcpRegistryAdapterV2,
   acpRegistryPromptFailure,
+  factoryDroidSessionModeForPolicy,
 } from "./AcpRegistryAdapterV2.ts";
 
 const registryUrl = "https://registry.test/registry.json";
@@ -92,6 +93,39 @@ const layerTest = Layer.mergeAll(
 );
 
 describe("AcpRegistryAdapterV2", () => {
+  it("maps Droid runtime modes unless the user selected autonomy explicitly", () => {
+    const selection = { instanceId: ProviderInstanceId.make("droid"), model: "droid-model" };
+    const mode = (
+      runtimeMode: "approval-required" | "auto-accept-edits" | "auto" | "full-access",
+    ) =>
+      factoryDroidSessionModeForPolicy(
+        ProviderAdapterV2RuntimePolicy.make({
+          runtimeMode,
+          interactionMode: "default",
+          cwd: "/workspace",
+        }),
+        selection,
+      );
+
+    assert.equal(mode("full-access"), "auto-high");
+    assert.equal(mode("approval-required"), "normal");
+    assert.equal(mode("auto-accept-edits"), "auto-low");
+    assert.equal(mode("auto"), "auto-medium");
+    assert.isUndefined(
+      factoryDroidSessionModeForPolicy(
+        ProviderAdapterV2RuntimePolicy.make({
+          runtimeMode: "approval-required",
+          interactionMode: "default",
+          cwd: "/workspace",
+        }),
+        {
+          ...selection,
+          options: [{ id: "autonomy_level", value: "auto-high" }],
+        },
+      ),
+    );
+  });
+
   it("preserves and sanitizes structured ACP errors without exposing arbitrary defects", () => {
     const limit = new EffectAcpErrors.AcpRequestError({
       code: -31001,

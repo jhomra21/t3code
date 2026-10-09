@@ -58,6 +58,7 @@ Investigate with read-only actions and do not edit files or otherwise execute th
 export interface T3AcpInstructionState {
   readonly interactionMode: ProviderInteractionMode;
   readonly hasT3Mcp: boolean;
+  readonly additionalInstructions?: string;
 }
 
 /**
@@ -73,7 +74,8 @@ export function t3AcpPromptWithInstructions(input: {
   if (input.prompt.trimStart().startsWith("/")) return input.prompt;
   if (
     input.previousState?.interactionMode === input.state.interactionMode &&
-    input.previousState.hasT3Mcp === input.state.hasT3Mcp
+    input.previousState.hasT3Mcp === input.state.hasT3Mcp &&
+    input.previousState.additionalInstructions === input.state.additionalInstructions
   ) {
     return input.prompt;
   }
@@ -84,6 +86,9 @@ export function t3AcpPromptWithInstructions(input: {
     ...(input.state.hasT3Mcp
       ? [T3_CODE_BROWSER_TOOL_INSTRUCTIONS.trim(), T3_CODE_ORCHESTRATION_INSTRUCTIONS.trim()]
       : []),
+    ...(input.state.additionalInstructions === undefined
+      ? []
+      : [input.state.additionalInstructions]),
   ];
   return `<t3_code_instructions>\n${instructions.join("\n\n")}\n</t3_code_instructions>\n\n<user_request>\n${input.prompt}\n</user_request>`;
 }

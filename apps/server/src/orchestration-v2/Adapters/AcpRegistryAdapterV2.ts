@@ -47,6 +47,8 @@ import {
   type ProviderAdapterDriver,
   type ProviderAdapterDriverCreateInput,
 } from "@t3tools/provider-core/server/adapterDriver";
+import type { ModelSelection } from "@t3tools/contracts";
+import type * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 import {
   AcpProviderCapabilitiesV2,
   makeAcpAdapterV2,
@@ -98,6 +100,25 @@ export interface AcpRegistryAdapterV2Options {
 
 // Mistral Vibe: its application error code for rate limits (not an ACP code).
 const MISTRAL_VIBE_RATE_LIMITED = -31001;
+
+export function factoryDroidSessionModeForPolicy(
+  policy: ProviderAdapter.ProviderAdapterV2RuntimePolicy,
+  modelSelection?: ModelSelection,
+): string | undefined {
+  if (modelSelection?.options?.some((option) => option.id === "autonomy_level") === true) {
+    return undefined;
+  }
+  switch (policy.runtimeMode) {
+    case "full-access":
+      return "auto-high";
+    case "approval-required":
+      return "normal";
+    case "auto-accept-edits":
+      return "auto-low";
+    case "auto":
+      return "auto-medium";
+  }
+}
 
 const MistralVibeSessionRetrying = Schema.Struct({
   sessionId: Schema.String,
@@ -219,6 +240,9 @@ export function makeAcpRegistryAdapterV2(options: AcpRegistryAdapterV2Options) {
     // reports subagents only as `Task` tool calls.
     ...(registryAgentId === "factory-droid"
       ? {
+          sessionModeForPolicy: factoryDroidSessionModeForPolicy,
+          promptInstructions:
+            "Do not use the AskUser tool in this environment; it cannot reach the T3 UI. Ask questions in plain text in your reply and wait.",
           capabilities: {
             ...AcpProviderCapabilitiesV2,
             subagents: { ...AcpProviderCapabilitiesV2.subagents, supportsSubagents: true },
