@@ -40,6 +40,7 @@ const Params = Schema.Struct({
 const decodeFrame = Schema.decodeUnknownEffect(Frame);
 const decodeParams = Schema.decodeUnknownEffect(Params);
 const decodeLoadParams = Schema.decodeUnknownSync(Schema.Struct({ sessionId: Schema.String }));
+const decodeMessageParams = Schema.decodeUnknownSync(Schema.Struct({ messageId: Schema.String }));
 const decodeTranscript = Schema.decodeUnknownEffect(
   Schema.fromJsonString(ProviderReplayTranscript),
 );
@@ -76,6 +77,7 @@ export const makeReplayConnection = Effect.fnUntraced(function* (
   let closed = false;
   let released = false;
   let nativeId = responses.initializedSessionId ?? "native-session";
+  let messageId: string | undefined;
   let handler: Parameters<typeof DroidRpc.makeConnection>[0]["onRequest"];
 
   const emit = (notification: Record<string, unknown>) =>
@@ -103,7 +105,18 @@ export const makeReplayConnection = Effect.fnUntraced(function* (
       } else if (frame.method === "droid.session_notification") {
         const params = yield* decodeParams(frame.params);
         // Replay the captured native id on this test connection.
-        yield* Queue.offer(incoming, { ...params, sessionId: nativeId });
+        const notification = params.notification;
+        const turnId = notification["turnId"];
+        yield* Queue.offer(incoming, {
+          ...params,
+          sessionId: nativeId,
+          notification:
+            notification["type"] === "agent_turn_completed" &&
+            typeof turnId === "string" &&
+            !turnId.startsWith("task-completion:")
+              ? { ...notification, turnId: messageId }
+              : notification,
+        });
       }
     }
   });
@@ -118,6 +131,7 @@ export const makeReplayConnection = Effect.fnUntraced(function* (
         if (closed) throw new Error("Request after captured replay process closed");
         methods.push(method);
         requests.push({ method, params });
+        if (method === "droid.add_user_message") messageId = decodeMessageParams(params).messageId;
         if (method === "droid.load_session") {
           const id = decodeLoadParams(params);
           nativeId = id.sessionId;

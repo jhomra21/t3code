@@ -311,6 +311,7 @@ export type DroidAdapterV2Options = {
 };
 
 type ActiveTurn = {
+  readonly isWake: boolean;
   readonly input: ProviderAdapter.ProviderAdapterV2TurnInput;
   readonly turn: OrchestrationV2ProviderTurn;
   readonly ordinals: Map<string, number>;
@@ -381,6 +382,8 @@ export function makeDroidAdapterV2(
         let wakePending = false;
         let wakeGeneration = 0;
         let wakeBuffer: DroidRpc.DroidRpcNotification[] = [];
+        let wakeOwner: ActiveTurn | null = null;
+        let nativeNotificationTurnId: string | null = null;
         let importedFile: { file: string; size: number; modified: number } | null = null;
         let resumedChildren: typeof SessionResult.Type | null = null;
 
@@ -1096,6 +1099,8 @@ export function makeDroidAdapterV2(
               const childId = /^task_id: (\S+)$/mu.exec(text)?.[1];
               const reason = /^reason: (\S+)$/mu.exec(text)?.[1];
               const child = childId === undefined ? undefined : children.get(childId);
+              nativeNotificationTurnId = message.id;
+              wakeOwner = active?.isWake ? active : (child?.context ?? wakeOwner ?? lastContext);
               if (child?.task.status === "running")
                 yield* finishChild(
                   child,
@@ -1106,6 +1111,8 @@ export function makeDroidAdapterV2(
                       : "failed",
                   /^output: ([\s\S]*?)\n\nBackground task/u.exec(text)?.[1] ?? null,
                 );
+            } else if (message.role === "user" && message.id === active?.input.message.messageId) {
+              nativeNotificationTurnId = message.id;
             }
             if (
               message.id.startsWith("task-completion:") &&
@@ -1146,7 +1153,9 @@ export function makeDroidAdapterV2(
             if (wakePending) wakeBuffer.push(notice);
             return;
           }
-          const context = active;
+          const context = nativeNotificationTurnId?.startsWith("task-completion:")
+            ? (wakeOwner ?? active)
+            : active;
           if (type === "child_session_available") {
             const child = yield* decode(
               Schema.Struct({ ...Child.fields, toolUseId: Schema.String }),
@@ -1226,6 +1235,11 @@ export function makeDroidAdapterV2(
               }
             }
           } else if (type === "agent_turn_completed") {
+            const turnId = stringField(notification, "turnId");
+            const matching = context.isWake
+              ? turnId?.startsWith("task-completion:")
+              : turnId === context.input.message.messageId;
+            if (!matching || active !== context) return;
             const reason = stringField(notification, "reason");
             yield* terminal(
               context.interrupted
@@ -1236,7 +1250,7 @@ export function makeDroidAdapterV2(
                     ? "cancelled"
                     : "failed",
               false,
-              stringField(notification, "turnId"),
+              turnId,
             );
           }
         });
@@ -1530,6 +1544,17 @@ export function makeDroidAdapterV2(
           const isContinuation =
             input.message.createdBy === "agent" && input.message.creationSource === "provider";
           const imagePaths = isContinuation || compact ? [] : yield* imagePathsFor(input.message);
+          if (!isContinuation && !compact && wakeBuffer.length > 0 && lastContext !== null) {
+            const buffer = wakeBuffer;
+            wakeBuffer = [];
+            wakePending = false;
+            wakeGeneration++;
+            // Already-completed wake work remains attached to its original run,
+            // never to the incoming user run. Its terminal is not re-emitted.
+            active = lastContext;
+            for (const notice of buffer) yield* handleNotification(notice);
+            active = null;
+          }
           const resumedId = input.providerThread.nativeThreadRef?.nativeId;
           if (connection === null)
             yield* openConnection(
@@ -1558,6 +1583,7 @@ export function makeDroidAdapterV2(
             );
           const startedAt = yield* DateTime.now;
           const context: ActiveTurn = {
+            isWake: isContinuation,
             input,
             turn: {
               id: ids.derive.providerTurn({
@@ -1622,6 +1648,7 @@ export function makeDroidAdapterV2(
             return;
           }
           if (isContinuation) {
+            wakeOwner = context;
             const buffer = wakeBuffer;
             wakeBuffer = [];
             wakePending = false;
@@ -1629,6 +1656,7 @@ export function makeDroidAdapterV2(
             for (const notice of buffer) yield* handleNotification(notice);
             return;
           }
+          nativeNotificationTurnId = input.message.messageId;
           yield* rpc.request("droid.add_user_message", {
             messageId: input.message.messageId,
             text: input.message.text,

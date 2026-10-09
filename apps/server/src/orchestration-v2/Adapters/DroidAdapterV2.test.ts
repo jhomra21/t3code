@@ -403,6 +403,82 @@ describe("DroidAdapterV2", () => {
       }),
     ),
   );
+  it.effect("drains an undispatched wake before a user turn and ignores its late completion", () =>
+    provide(
+      Effect.gen(function* () {
+        const { runtime, replay, input } = yield* open();
+        yield* runtime.startTurn(input);
+        yield* replay.emit({
+          type: "agent_turn_completed",
+          reason: "completed",
+          turnId: input.message.messageId,
+        });
+        yield* replay.drain;
+        yield* replay.emit({
+          type: "create_message",
+          message: {
+            id: "task-completion:worker",
+            role: "user",
+            content: [
+              {
+                type: "text",
+                text: "task_id: worker\nreason: completed\noutput: DONE\n\nBackground task finished.",
+              },
+            ],
+          },
+        });
+        yield* replay.emit({
+          type: "create_message",
+          message: {
+            id: "wake-answer",
+            role: "assistant",
+            content: [{ type: "text", text: "Wake result" }],
+          },
+        });
+        yield* replay.emit({
+          type: "agent_turn_completed",
+          reason: "completed",
+          turnId: "task-completion:worker",
+        });
+        yield* replay.drain;
+        const user = {
+          ...input,
+          runId: RunId.make("user-race"),
+          attemptId: RunAttemptId.make("user-race"),
+          message: { ...input.message, messageId: MessageId.make("user-race") },
+        };
+        yield* runtime.startTurn(user);
+        assert.isFalse(yield* runtime.hasPendingBackgroundWork!);
+        yield* replay.emit({
+          type: "agent_turn_completed",
+          reason: "completed",
+          turnId: "task-completion:worker",
+        });
+        yield* replay.drain;
+        const snapshot = yield* runtime.readThreadSnapshot({
+          providerThread: input.providerThread,
+        });
+        assert.equal(snapshot.providerTurns.at(-1)?.status, "running");
+        yield* replay.emit({
+          type: "agent_turn_completed",
+          reason: "completed",
+          turnId: "user-race",
+        });
+        yield* replay.drain;
+        assert.equal(
+          (yield* runtime.readThreadSnapshot({
+            providerThread: input.providerThread,
+          })).providerTurns.at(-1)?.status,
+          "completed",
+        );
+        assert.isTrue(
+          (yield* runtime.readThreadSnapshot({
+            providerThread: input.providerThread,
+          })).messages.some((message) => message.text === "Wake result"),
+        );
+      }),
+    ),
+  );
 
   it.effect("reads every persisted message instead of the load_session window", () =>
     provide(
