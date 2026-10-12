@@ -22,9 +22,11 @@ import {
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import type * as Context from "effect/Context";
+import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
@@ -67,6 +69,13 @@ import * as DroidRpc from "./rpc.ts";
 import { isAcceptedDroidProtocolVersion } from "./protocolVersion.ts";
 import { DroidSettings } from "../settings.ts";
 import { makeDroidInstanceEnvironment } from "./status.ts";
+import {
+  findDroidSessionDirectory,
+  followDroidSubagent,
+  readDroidDefinitionModel,
+  droidSubagentStepSignature,
+  type DroidSubagentWork,
+} from "./sessionTranscript.ts";
 
 export const DROID_PROVIDER = ProviderDriverKind.make("droid");
 const DEFAULT_DROID_SETTINGS = Schema.decodeSync(DroidSettings)({});
@@ -440,6 +449,12 @@ type ChildState = {
   readonly context: ActiveTurn;
   readonly ordinal: number;
   toolUseId: string;
+  follower: Fiber.Fiber<void, unknown> | null;
+  readonly publishedSteps: Map<string, string>;
+  pendingCompletion: {
+    readonly status: "completed" | "failed";
+    readonly result: string | null;
+  } | null;
 };
 type PendingRequest = {
   readonly reply: Deferred.Deferred<DroidRpc.DroidRpcReply>;
@@ -933,11 +948,137 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
             result: task.result,
           });
         });
+        const publishChildWork = Effect.fnUntraced(function* (
+          child: ChildState,
+          work: DroidSubagentWork,
+        ) {
+          const childThreadId = child.task.childThreadId;
+          if (childThreadId === null) return;
+          const updatedAt = yield* DateTime.now;
+          if (work.model !== undefined && work.model !== child.task.model) {
+            child.task = { ...child.task, model: work.model, updatedAt };
+            yield* emitChild(child);
+          }
+          for (const step of work.steps) {
+            const signature = droidSubagentStepSignature(step);
+            if (child.publishedSteps.get(step.id) === signature) continue;
+            child.publishedSteps.set(step.id, signature);
+            if (step.kind === "tool") {
+              yield* emitTool(
+                child.context,
+                { id: step.id, name: step.name, input: step.input },
+                step.output === null ? "running" : step.isError ? "failed" : "completed",
+                step.output ?? undefined,
+                child,
+              );
+              continue;
+            }
+            const key = `child:${child.task.nativeTaskRef?.nativeId}:${step.id}`;
+            const itemOrdinal = ordinal(child.context, key);
+            if (step.reasoning === true) {
+              yield* emitItem({
+                ...itemBase(child.context, key, updatedAt),
+                threadId: childThreadId,
+                runId: null,
+                nodeId: child.rootNodeId,
+                providerThreadId: null,
+                providerTurnId: null,
+                nativeItemRef: nativeRef(key),
+                type: "reasoning",
+                title: "Thinking",
+                text: step.text,
+                streaming: false,
+                status: "completed",
+                completedAt: updatedAt,
+              });
+            } else {
+              const artifacts = makeSubagentConversationArtifacts({
+                messageId: ids.derive.messageFromProviderItem({
+                  driver: DROID_PROVIDER,
+                  nativeItemId: key,
+                }),
+                turnItemId: ids.derive.turnItemFromProviderItem({
+                  driver: DROID_PROVIDER,
+                  nativeItemId: key,
+                }),
+                senderThreadId: childThreadId,
+                threadId: childThreadId,
+                rootNodeId: child.rootNodeId,
+                providerThreadId: null,
+                providerTurnId: null,
+                nativeItemRef: nativeRef(key),
+                role: "assistant",
+                text: step.text,
+                ordinal: itemOrdinal,
+                now: updatedAt,
+              });
+              yield* emit({
+                type: "message.updated",
+                driver: DROID_PROVIDER,
+                message: artifacts.message,
+              });
+              yield* emitItem(artifacts.turnItem);
+            }
+          }
+          if (work.outcome !== undefined && child.task.status === "running") {
+            child.follower = null;
+            yield* finishChild(
+              child,
+              child.pendingCompletion?.status ?? work.outcome,
+              child.pendingCompletion?.result ?? work.result ?? child.task.result,
+            );
+          }
+        });
+        const startChildFollower = Effect.fnUntraced(function* (
+          childId: string,
+          child: ChildState,
+        ) {
+          if (nativeId === null) return;
+          const directory = yield* findDroidSessionDirectory({
+            sessionId: nativeId,
+            environment: options.environment,
+          });
+          if (directory === undefined) return;
+          const follower = followDroidSubagent({
+            directory,
+            sessionId: childId,
+            startedAtMillis: DateTime.toEpochMillis(child.task.startedAt ?? (yield* DateTime.now)),
+            onWork: (work) => publishChildWork(child, work),
+          });
+          // A follower that dies (for example the directory watch cannot open) must not leave a
+          // completion parked behind it, so release the child and apply any pending outcome.
+          child.follower = yield* Effect.forkIn(
+            Effect.scoped(follower).pipe(
+              Effect.catchCause((cause) =>
+                Cause.hasInterruptsOnly(cause)
+                  ? Effect.failCause(cause)
+                  : Effect.gen(function* () {
+                      yield* Effect.logWarning("Droid child follower failed", { cause });
+                      child.follower = null;
+                      const pending = child.pendingCompletion;
+                      if (pending !== null && child.task.status === "running")
+                        yield* finishChild(child, pending.status, pending.result);
+                    }),
+              ),
+            ),
+            sessionScope,
+          );
+        });
         const finishChild = Effect.fnUntraced(function* (
           child: ChildState,
           status: "completed" | "failed" | "cancelled",
           result: string | null,
         ) {
+          if (status !== "cancelled" && child.follower !== null && connection !== null) {
+            child.pendingCompletion = { status, result };
+            return;
+          }
+          child.pendingCompletion = null;
+          if (child.follower !== null) {
+            const follower = child.follower;
+            child.follower = null;
+            yield* Fiber.interrupt(follower);
+          }
           child.task = {
             ...child.task,
             status,
@@ -991,7 +1132,10 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
                   notice.description ??
                   ""),
             title: notice.description ?? notice.subagentType ?? null,
-            model: null,
+            model:
+              existing?.task.model ??
+              readDroidDefinitionModel(options.environment, notice.subagentType) ??
+              null,
             status: "running",
             result: null,
             startedAt:
@@ -1010,7 +1154,14 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
             parentRootNodeId: parentNodeId,
             ordinal: existing?.ordinal ?? ordinal(context, key),
             toolUseId: notice.toolUseId,
+            follower: existing?.follower ?? null,
+            publishedSteps: existing?.publishedSteps ?? new Map(),
+            pendingCompletion: null,
           };
+          if (existing?.follower !== null && existing?.follower !== undefined) {
+            yield* Fiber.interrupt(existing.follower);
+            child.follower = null;
+          }
           children.set(notice.childSessionId, child);
           if (existing !== undefined) childByToolUseId.delete(existing.toolUseId);
           childByToolUseId.set(notice.toolUseId, child);
@@ -1060,6 +1211,8 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
             });
             yield* emitItem(artifacts.turnItem);
           }
+          if (child.task.status === "running")
+            yield* startChildFollower(notice.childSessionId, child);
           return child;
         });
 
