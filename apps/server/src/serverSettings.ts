@@ -460,13 +460,15 @@ function migrateLegacyProviderSettings(
 }
 
 const ACP_REGISTRY_DRIVER = ProviderDriverKind.make("acpRegistry");
+const DROID_DRIVER = ProviderDriverKind.make("droid");
 
 /** ACP Registry instances reject every application text-generation operation. */
 function selectionSupportsTextGeneration(
   settings: ServerSettings,
   selection: ModelSelection,
 ): boolean {
-  return settings.providerInstances[selection.instanceId]?.driver !== ACP_REGISTRY_DRIVER;
+  const driver = settings.providerInstances[selection.instanceId]?.driver;
+  return driver !== ACP_REGISTRY_DRIVER && driver !== DROID_DRIVER;
 }
 
 function resolveTextGenerationProvider(settings: ServerSettings): ServerSettings {
