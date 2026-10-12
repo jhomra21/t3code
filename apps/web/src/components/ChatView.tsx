@@ -136,7 +136,10 @@ import {
   resolveProjectScripts,
 } from "@t3tools/shared/projectScripts";
 import { CHAT_LIST_ANCHOR_OFFSET } from "@t3tools/shared/chatList";
-import { derivePendingBackgroundWork } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
+import {
+  derivePendingBackgroundWork,
+  pendingBackgroundRosterForActiveThread,
+} from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import {
   latestUnheldRun,
   usageLimitRunPresentedAsLatest,
@@ -7401,7 +7404,21 @@ export default function ChatView(props: ChatViewProps) {
   // the turn; once it settles, the composer stop button is gone, so this
   // banner is the only visible stop affordance. The interrupt path also
   // accepts a completed run while its provider still has background work.
-  const activeBackgroundTasks = !isWorking && activeThread ? pendingBackgroundTasks : [];
+  const activeProviderBackgroundRoster = useMemo(
+    () =>
+      serverProjection === null || serverProjection === undefined
+        ? []
+        : pendingBackgroundRosterForActiveThread({
+            providerThreads: serverProjection.providerThreads,
+            activeProviderThreadId: serverProjection.thread.activeProviderThreadId,
+          }),
+    [serverProjection],
+  );
+  const activeBackgroundTasks = useMemo(
+    () =>
+      !activeThread ? [] : isWorking ? activeProviderBackgroundRoster : pendingBackgroundTasks,
+    [activeProviderBackgroundRoster, activeThread, isWorking, pendingBackgroundTasks],
+  );
   const [stoppingBackgroundWorkKey, setStoppingBackgroundWorkKey] = useState<string | null>(null);
   const isStoppingBackgroundWork =
     stoppingBackgroundWorkKey === `${environmentId}:${activeThreadId}`;
@@ -7641,7 +7658,7 @@ export default function ChatView(props: ChatViewProps) {
                 </Fragment>
               );
             }),
-      actions: (
+      actions: isWorking ? undefined : (
         <Button
           size="xs"
           variant="ghost"
@@ -7658,6 +7675,7 @@ export default function ChatView(props: ChatViewProps) {
     canOperateThread,
     handleStopBackgroundWork,
     isStoppingBackgroundWork,
+    isWorking,
     onOpenRelatedThread,
   ]);
   // Settled, snoozed, and woke are thread state, not composer actions: each
