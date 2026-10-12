@@ -46,6 +46,7 @@ import * as ModelManifest from "./ModelManifest.ts";
 import { applyProviderCompatibility } from "./providerCompatibility.ts";
 import * as ResetCreditCoordinator from "./resetCreditCoordinator.ts";
 import * as ProviderLatestVersions from "@t3tools/provider-core/server/ProviderLatestVersions";
+import * as ProviderContinuationRequests from "@t3tools/provider-core/server/ProviderContinuationRequests";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import * as OpenCodeRuntime from "@t3tools/provider-opencode/server/OpenCodeRuntime";
 import * as OpenCodeServerLedger from "@t3tools/provider-opencode/server/OpenCodeServerLedger";
@@ -2762,6 +2763,7 @@ it.layer(
             ),
           ),
           Layer.provideMerge(ProviderLatestVersions.layer),
+          Layer.provideMerge(ProviderContinuationRequests.layer),
           Layer.provideMerge(McpProviderSessions.layer),
           Layer.provideMerge(ModelManifest.layerTest),
           Layer.provideMerge(ResetCreditCoordinator.layerTest),
@@ -2867,6 +2869,7 @@ it.layer(
             ),
           ),
           Layer.provideMerge(ProviderLatestVersions.layer),
+          Layer.provideMerge(ProviderContinuationRequests.layer),
           Layer.provideMerge(McpProviderSessions.layer),
           Layer.provideMerge(ModelManifest.layerTest),
           Layer.provideMerge(ResetCreditCoordinator.layerTest),
@@ -2987,6 +2990,7 @@ it.layer(
             ),
           ),
           Layer.provideMerge(ProviderLatestVersions.layer),
+          Layer.provideMerge(ProviderContinuationRequests.layer),
           Layer.provideMerge(McpProviderSessions.layer),
           Layer.provideMerge(ModelManifest.layerTest),
           Layer.provideMerge(ResetCreditCoordinator.layerTest),
@@ -3047,6 +3051,7 @@ it.layer(
               ),
             ),
             Layer.provideMerge(ProviderLatestVersions.layer),
+            Layer.provideMerge(ProviderContinuationRequests.layer),
             Layer.provideMerge(McpProviderSessions.layer),
             Layer.provideMerge(ModelManifest.layerTest),
             Layer.provideMerge(ResetCreditCoordinator.layerTest),
@@ -3097,6 +3102,7 @@ it.layer(
               "claudeAgent",
               "codex",
               "cursor",
+              "droid",
               "grok",
               "muse",
               "opencode",
@@ -3108,6 +3114,9 @@ it.layer(
             const museProvider = providers.find((provider) => provider.driver === "muse");
             assert.strictEqual(museProvider?.enabled, false);
             assert.strictEqual(museProvider?.status, "disabled");
+            const droidProvider = providers.find((provider) => provider.driver === "droid");
+            assert.strictEqual(droidProvider?.enabled, false);
+            assert.strictEqual(droidProvider?.status, "disabled");
             assert.strictEqual(cursorSpawned, false);
           }).pipe(Effect.provide(runtimeServices));
         }),
