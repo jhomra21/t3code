@@ -1121,6 +1121,7 @@ export const layer: Layer.Layer<
           const delivery = yield* deliverContextHandoffs({
             handoffs: [...effectiveHandoffs, ...retryHandoff],
             deferInline: compact,
+            skippable: effectiveHandoffs.length === 0,
             providerThread: runningProviderThread,
             budget: Effect.gen(function* () {
               return handoffBudget({

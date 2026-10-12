@@ -263,6 +263,28 @@ describe("handoff budget", () => {
     assert.equal(handoffBudget({ ...base, tokenCap: 2_000 }), 2_000);
   });
 
+  it("budgets a long thread from a reported window rather than the unknown-window default", () => {
+    const base = {
+      tokenCap: 16_000,
+      userText: "Continue",
+      attachments: [],
+      providerThread,
+      nativeContextEstimate: 105_000,
+    };
+    assert.equal(handoffBudget(base), 0);
+    assert.equal(
+      handoffBudget({
+        ...base,
+        modelContextWindow: 300_000,
+        providerThread: {
+          ...providerThread,
+          contextUsage: { usedTokens: 100_000, maxTokens: 300_000 },
+        },
+      }),
+      16_000,
+    );
+  });
+
   it("keeps measured occupancy across a model change", () => {
     const previous = {
       usedTokens: 37_321,
@@ -456,6 +478,21 @@ describe("handoff delivery", () => {
       );
       assert.deepEqual(durable.delivery?.omittedItemIds, [omittedBeforeDelivery, oversized.itemId]);
       assert.deepEqual(decodeHandoff(durable).delivery, durable.delivery);
+    }),
+  );
+  it.effect("sends only the prompt when a retry note has no room in a nearly full thread", () =>
+    Effect.gen(function* () {
+      const input = {
+        handoffs: [handoff],
+        providerThread,
+        budget: 0,
+        alreadyDeliveredItemIds: new Set<string>(),
+        persist: () => Effect.die("nothing was delivered"),
+      };
+      const skipped = yield* deliverContextHandoffs({ ...input, skippable: true });
+      assert.equal(skipped.context, "");
+      const refused = yield* deliverContextHandoffs(input).pipe(Effect.flip);
+      assert.equal(refused._tag, "ContextHandoffBudgetError");
     }),
   );
   it.effect("loads the history budget only when a handoff needs delivery", () =>

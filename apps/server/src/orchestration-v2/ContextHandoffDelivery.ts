@@ -23,6 +23,12 @@ export const deliverContextHandoffs = Effect.fn("orchestrationV2.deliverContextH
     readonly providerThread: OrchestrationV2ProviderThread;
     readonly budget: number | Effect.Effect<number, BudgetError>;
     readonly deferInline?: boolean;
+    /**
+     * The native thread already holds this conversation and the handoff only re-sends turns that
+     * never reached it. Without room for that note, send the prompt alone: the turns stay
+     * recoverable through the thread, whereas refusing would block a conversation that fits.
+     */
+    readonly skippable?: boolean;
     readonly alreadyDeliveredItemIds: ReadonlySet<string>;
     readonly inject?: (
       history: ProviderAdapter.ProviderAdapterV2HistoricalContext,
@@ -80,7 +86,8 @@ export const deliverContextHandoffs = Effect.fn("orchestrationV2.deliverContextH
       budget,
     });
     if (historyCost(selected.messages, selected.context) > budget) {
-      if (input.deferInline) return { context: "", delivered: Effect.void, unsent: Effect.void };
+      if (input.deferInline || input.skippable)
+        return { context: "", delivered: Effect.void, unsent: Effect.void };
       return yield* new ContextHandoffBudgetError();
     }
     const omittedItemIds = new Set(selected.omittedItemIds);
