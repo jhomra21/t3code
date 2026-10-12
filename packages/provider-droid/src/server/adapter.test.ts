@@ -1,4 +1,6 @@
+// @effect-diagnostics nodeBuiltinImport:off
 import { assert, describe, it } from "@effect/vitest";
+import * as NodeFSP from "node:fs/promises";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeOS from "node:os";
 import {
@@ -200,7 +202,10 @@ const responseFor = (
   factoryProtocolVersion: options.protocolVersion ?? "1.257.0",
   result:
     frame.method === "droid.initialize_session"
-      ? { sessionId: options.nativeSessionId ?? "native-session", session: { messages: [] } }
+      ? {
+          sessionId: options.nativeSessionId ?? "native-session",
+          session: { messages: [] },
+        }
       : frame.method === "droid.load_session"
         ? { session: { messages: [] } }
         : frame.method === "droid.get_context_breakdown"
@@ -235,6 +240,7 @@ const open = Effect.fnUntraced(function* (
   ) => string | null,
   existingProviderThread?: ProviderAdapter.ProviderAdapterV2EnsureThreadInput["existingProviderThread"],
   skipEnsureThread = false,
+  environment: NodeJS.ProcessEnv = {},
 ) {
   const providerHost = yield* ProviderHost.ProviderHost;
   if (mcpSession !== undefined)
@@ -243,7 +249,7 @@ const open = Effect.fnUntraced(function* (
     );
   const adapter = yield* makeDroidAdapterV2({
     instanceId,
-    environment: {},
+    environment,
     binaryPath: "droid",
     ...(continuationRequests === undefined ? {} : { continuationRequests }),
   }).pipe(
@@ -814,6 +820,185 @@ describe("Droid adapter", () => {
         );
         assert.isAtLeast(turnIndex, startIndex);
         assert.isAbove(rosterIndex, turnIndex);
+      }),
+    ),
+  );
+
+  it.effect("streams a Droid child transcript and its pinned model into the child thread", () =>
+    provide(
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const home = yield* fileSystem.makeTempDirectoryScoped({
+          directory: NodeOS.tmpdir(),
+          prefix: "droid-child-transcript-",
+        });
+        const sessions = path.join(home, ".factory", "sessions", "workspace");
+        yield* fileSystem.makeDirectory(sessions, { recursive: true });
+        const parentId = "229d7d4f-9420-4fc5-8ad4-e4f48dcc0401";
+        const childId = "43a7fb2d-79a1-4c49-a8d1-3b089cf7d202";
+        yield* Effect.promise(() =>
+          NodeFSP.writeFile(
+            path.join(sessions, `${parentId}.jsonl`),
+            `${JSON.stringify({ type: "session_start", id: parentId })}\n`,
+          ),
+        );
+        yield* fileSystem.makeDirectory(path.join(home, ".factory", "droids"), {
+          recursive: true,
+        });
+        yield* Effect.promise(() =>
+          NodeFSP.writeFile(
+            path.join(home, ".factory", "droids", "worker.md"),
+            '---\nname: worker\nmodel: "custom:GPT-6 Luna-12"\n---\n',
+          ),
+        );
+        const fake = yield* makeFakeDroid({ nativeSessionId: parentId });
+        const { runtime, input } = yield* open(fake, undefined, undefined, undefined, undefined, {
+          FACTORY_HOME_OVERRIDE: home,
+        });
+        const childMessage = yield* Deferred.make<void>();
+        const childModel = yield* Deferred.make<void>();
+        const childToolStarted = yield* Deferred.make<void>();
+        const childToolOutputSeen = yield* Deferred.make<void>();
+        const events: ProviderAdapter.ProviderAdapterV2Event[] = [];
+        yield* runtime.events.pipe(
+          Stream.runForEach((event) => {
+            events.push(event);
+            if (
+              event.type === "message.updated" &&
+              event.message.threadId !== threadId &&
+              event.message.text === "Child is working"
+            )
+              return Deferred.succeed(childMessage, undefined);
+            if (
+              event.type === "subagent.updated" &&
+              event.subagent.nativeTaskRef?.nativeId === childId &&
+              event.subagent.model === "GPT-6 Luna"
+            )
+              return Deferred.succeed(childModel, undefined);
+            if (
+              event.type === "turn_item.updated" &&
+              event.turnItem.type === "command_execution" &&
+              event.turnItem.status === "running" &&
+              event.turnItem.threadId !== threadId
+            )
+              return Deferred.succeed(childToolStarted, undefined);
+            if (
+              event.type === "turn_item.updated" &&
+              event.turnItem.type === "command_execution" &&
+              event.turnItem.output === "child output" &&
+              event.turnItem.threadId !== threadId
+            )
+              return Deferred.succeed(childToolOutputSeen, undefined);
+            return Effect.void;
+          }),
+          Effect.forkChild,
+        );
+        yield* runtime.startTurn(input);
+        yield* fake.takeRequest("droid.add_user_message");
+        yield* fake.emitNotification({
+          type: "create_message",
+          message: {
+            id: "parent-with-task",
+            role: "assistant",
+            content: [
+              {
+                type: "tool_use",
+                id: "transcript-task",
+                name: "Task",
+                input: { description: "Transcript child", prompt: "Do work" },
+              },
+            ],
+          },
+        });
+        yield* fake.emitNotification({
+          type: "child_session_available",
+          childSessionId: childId,
+          toolUseId: "transcript-task",
+          subagentType: "worker",
+          description: "Transcript child",
+        });
+        const childFile = path.join(sessions, `${childId}.jsonl`);
+        const initialRows = `${JSON.stringify({
+          type: "message",
+          timestamp: "2026-10-12T10:00:00.000Z",
+          message: { role: "user", content: [{ type: "text", text: "Do work" }] },
+        })}\n`;
+        const childReply = JSON.stringify({
+          type: "message",
+          id: "child-reply",
+          message: {
+            role: "assistant",
+            content: [
+              { type: "text", text: "Child is working" },
+              {
+                type: "tool_use",
+                id: "child-exec",
+                name: "Execute",
+                input: { command: "echo child" },
+              },
+            ],
+          },
+        });
+        const childToolResult = `${JSON.stringify({
+          type: "message",
+          id: "child-tool-result",
+          message: {
+            role: "user",
+            content: [{ type: "tool_result", tool_use_id: "child-exec", content: "child output" }],
+          },
+        })}\n`;
+        yield* Effect.promise(() =>
+          NodeFSP.writeFile(childFile, `not-json\n${initialRows}${childReply.slice(0, 24)}`),
+        );
+        yield* Effect.promise(() => NodeFSP.appendFile(childFile, `${childReply.slice(24)}\n`));
+        yield* Deferred.await(childMessage);
+        yield* Deferred.await(childModel);
+        yield* Deferred.await(childToolStarted);
+        yield* Effect.promise(() => NodeFSP.appendFile(childFile, childToolResult));
+        yield* Deferred.await(childToolOutputSeen);
+        assert.isTrue(
+          events.some(
+            (event) =>
+              event.type === "message.updated" &&
+              event.message.text === "Do work" &&
+              event.message.threadId !== threadId,
+          ),
+        );
+        assert.isFalse(
+          events.some(
+            (event) =>
+              event.type === "message.updated" &&
+              event.message.threadId !== threadId &&
+              event.message.text !== "Child is working" &&
+              event.message.role === "assistant",
+          ),
+        );
+        assert.isTrue(
+          events.some(
+            (event) =>
+              event.type === "turn_item.updated" &&
+              event.turnItem.type === "command_execution" &&
+              event.turnItem.output === "child output" &&
+              event.turnItem.threadId !== threadId,
+          ),
+        );
+        yield* fake.emitNotification({
+          type: "create_message",
+          message: {
+            id: `task-completion:${childId}`,
+            role: "system",
+            content: [
+              { type: "text", text: `task_id: ${childId}\nreason: completed\noutput: done` },
+            ],
+          },
+        });
+        const extraAssistant = JSON.stringify({
+          type: "message",
+          id: "after-finish",
+          message: { role: "assistant", content: [{ type: "text", text: "must not appear" }] },
+        });
+        yield* Effect.promise(() => NodeFSP.appendFile(childFile, `${extraAssistant}\n`));
       }),
     ),
   );
