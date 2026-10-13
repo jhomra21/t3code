@@ -22,7 +22,7 @@ import {
 } from "@t3tools/provider-core/server/snapshotProbe";
 import type { DroidSettings } from "../settings.ts";
 import { makeConnection } from "./rpc.ts";
-import { readDroidSkills } from "./skills.ts";
+import { discoverDroidSkills } from "./skills.ts";
 import { parseDroidVersion } from "./maintenance.ts";
 import { mergeProviderInstanceEnvironment } from "@t3tools/provider-core/server/instanceEnvironment";
 
@@ -115,10 +115,12 @@ const discoverDroidModels = Effect.fn("discoverDroidModels")(function* (
   yield* fileSystem.makeDirectory(isolatedCwd);
   yield* fileSystem.makeDirectory(isolatedHome);
   yield* fileSystem.makeDirectory(factoryHome);
-  const { FACTORY_RUNTIME_SETTINGS_PATH: _runtimeSettingsPath, ...isolatedEnvironment } =
-    environment;
-  // Droid 0.236.0's droid.list_models did not start hooks or create sessions, but did
-  // launch project MCP servers. Keep discovery off the project path and user Factory home.
+  const {
+    FACTORY_RUNTIME_SETTINGS_PATH: _runtimeSettingsPath,
+    FACTORY_HOME_OVERRIDE: _factoryHomeOverride,
+    ...isolatedEnvironment
+  } = environment;
+  // Keep model discovery off the project path and user Factory home.
   const rpc = yield* makeConnection({
     command: binary,
     env: {
@@ -132,8 +134,7 @@ const discoverDroidModels = Effect.fn("discoverDroidModels")(function* (
   yield* rpc.notifications.pipe(Stream.runDrain, Effect.ignore, Effect.forkScoped);
   const response = yield* rpc.request("droid.list_models", {});
   const catalog = yield* decodeModels(response.result);
-  const skills = yield* readDroidSkills(rpc).pipe(Effect.result);
-  return { models: modelsFromCatalog(catalog), skills };
+  return modelsFromCatalog(catalog);
 });
 
 export const makePendingDroidProvider = Effect.fn("makePendingDroidProvider")(function* (
@@ -162,6 +163,7 @@ export const checkDroidProviderStatus = Effect.fn("checkDroidProviderStatus")(fu
   settings: DroidSettings,
   environment: NodeJS.ProcessEnv,
   cwd: string,
+  home = environment.HOME || process.env.HOME || cwd,
 ) {
   if (!settings.enabled) return yield* makePendingDroidProvider(settings);
   const binary = settings.binaryPath.trim() || "droid";
@@ -235,15 +237,17 @@ export const checkDroidProviderStatus = Effect.fn("checkDroidProviderStatus")(fu
     Effect.timeoutOption("10 seconds"),
     Effect.orElseSucceed(() => Option.none()),
   );
+  const skills = yield* discoverDroidSkills({ binaryPath: binary }, env, cwd, home).pipe(
+    Effect.scoped,
+    Effect.timeoutOption("10 seconds"),
+    Effect.orElseSucceed(() => Option.none()),
+  );
   const modelList = providerModelsFromSettings(
-    Option.isSome(models) ? models.value.models : [],
+    Option.isSome(models) ? models.value : [],
     settings.customModels,
     DEFAULT_CAPABILITIES,
   );
-  const skills =
-    Option.isSome(models) && models.value.skills._tag === "Success"
-      ? models.value.skills.success
-      : [];
+  const skillList = Option.isSome(skills) ? skills.value : [];
   const message =
     auth === "unauthenticated"
       ? "Sign in with Factory Droid on this environment."
@@ -259,7 +263,7 @@ export const checkDroidProviderStatus = Effect.fn("checkDroidProviderStatus")(fu
       checkedAt: DateTime.formatIso(yield* DateTime.now),
       models: modelList,
       slashCommands: [COMPACT_SLASH_COMMAND],
-      skills,
+      skills: skillList,
       probe: {
         installed: version !== null,
         version,

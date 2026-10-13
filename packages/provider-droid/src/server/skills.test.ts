@@ -1,11 +1,20 @@
 import { describe, expect, it } from "@effect/vitest";
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
 import * as Queue from "effect/Queue";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
-import { discoverDroidSkills, mapDroidSkills, readDroidSkills } from "./skills.ts";
+import {
+  discoverDroidProjectSkills,
+  discoverDroidSkills,
+  mapDroidSkills,
+  mergeDroidSkills,
+  readDroidSkills,
+} from "./skills.ts";
 import { DroidRpcError } from "./rpc.ts";
 
 const makeRpcSpawner = (
@@ -150,19 +159,141 @@ describe("Droid skills", () => {
     ).toEqual([]);
   });
 
-  it.effect("treats an unsupported skills RPC as an empty catalog without a model turn", () =>
+  it.effect("preserves personal and plugin skills without the native skills RPC", () =>
     Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const home = yield* fileSystem.makeTempDirectoryScoped();
+      const personalDirectory = path.join(home, ".factory", "skills", "personal");
+      const pluginPath = path.join(home, ".factory", "plugins", "cache", "example");
+      const pluginSkillDirectory = path.join(pluginPath, "skills", "plugin");
+      yield* fileSystem.makeDirectory(personalDirectory, { recursive: true });
+      yield* fileSystem.makeDirectory(pluginSkillDirectory, { recursive: true });
+      yield* fileSystem.writeFileString(
+        path.join(personalDirectory, "SKILL.md"),
+        ["---", "description: Personal skill", "---", ""].join("\n"),
+      );
+      yield* fileSystem.writeFileString(
+        path.join(pluginSkillDirectory, "SKILL.md"),
+        ["---", "name: plugin-skill", "description: Installed plugin skill", "---", ""].join("\n"),
+      );
+      yield* fileSystem.writeFileString(
+        path.join(home, ".factory", "plugins", "installed_plugins.json"),
+        JSON.stringify({
+          plugins: {
+            "example@marketplace": [{ installPath: pluginPath }],
+          },
+        }),
+      );
       const requestedMethods: Array<string> = [];
-      const skills = yield* discoverDroidSkills({ binaryPath: "droid" }, {}, "/repo").pipe(
+      const skills = yield* discoverDroidSkills({ binaryPath: "droid" }, {}, "/repo", home).pipe(
         Effect.provideService(
           ChildProcessSpawner.ChildProcessSpawner,
           makeRpcSpawner({}, requestedMethods),
         ),
       );
-      expect(skills).toEqual([]);
+      expect(skills).toEqual([
+        {
+          name: "personal",
+          path: path.join(personalDirectory, "SKILL.md"),
+          scope: "personal",
+          enabled: true,
+          description: "Personal skill",
+        },
+        {
+          name: "plugin-skill",
+          path: path.join(pluginSkillDirectory, "SKILL.md"),
+          scope: "personal",
+          enabled: true,
+          description: "Installed plugin skill",
+        },
+      ]);
       expect(requestedMethods).toEqual(["droid.list_skills"]);
-    }),
+    }).pipe(Effect.provide(NodeServices.layer)),
   );
+
+  it.effect("discovers project skills from SKILL.md without starting Droid", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const cwd = yield* fileSystem.makeTempDirectoryScoped();
+      const skillDirectory = path.join(cwd, ".factory", "skills", "workspace-review");
+      yield* fileSystem.makeDirectory(skillDirectory, { recursive: true });
+      yield* fileSystem.writeFileString(
+        path.join(skillDirectory, "SKILL.md"),
+        ["---", "name: project-review", "description: Project skill description", "---", ""].join(
+          "\n",
+        ),
+      );
+      const agentsSkillDirectory = path.join(cwd, ".agents", "skills", "agents-skill");
+      yield* fileSystem.makeDirectory(agentsSkillDirectory, { recursive: true });
+      yield* fileSystem.writeFileString(
+        path.join(agentsSkillDirectory, "SKILL.md"),
+        ["---", "name: agents-project-skill", "description: Shared project skill", "---", ""].join(
+          "\n",
+        ),
+      );
+      const skills = yield* discoverDroidProjectSkills(cwd);
+      expect(skills).toEqual([
+        {
+          name: "agents-project-skill",
+          description: "Shared project skill",
+          path: path.join(agentsSkillDirectory, "SKILL.md"),
+          scope: "project",
+          enabled: true,
+        },
+        {
+          name: "project-review",
+          description: "Project skill description",
+          path: path.join(skillDirectory, "SKILL.md"),
+          scope: "project",
+          enabled: true,
+        },
+      ]);
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it("merges machine skills with project skills taking precedence", () => {
+    expect(
+      mergeDroidSkills(
+        [
+          {
+            name: "review",
+            path: "/home/.factory/skills/review/SKILL.md",
+            scope: "personal",
+            enabled: true,
+          },
+          {
+            name: "builtin",
+            path: "builtin:builtin",
+            scope: "builtin",
+            enabled: true,
+          },
+        ],
+        [
+          {
+            name: "review",
+            path: "/repo/.factory/skills/review/SKILL.md",
+            scope: "project",
+            enabled: true,
+          },
+        ],
+      ),
+    ).toEqual([
+      {
+        name: "builtin",
+        path: "builtin:builtin",
+        scope: "builtin",
+        enabled: true,
+      },
+      {
+        name: "review",
+        path: "/repo/.factory/skills/review/SKILL.md",
+        scope: "project",
+        enabled: true,
+      },
+    ]);
+  });
 
   it.effect("keeps skills RPC failures typed instead of returning a cacheable empty list", () =>
     Effect.gen(function* () {

@@ -65,6 +65,13 @@ describe("Droid status", () => {
         directory: NodeOS.tmpdir(),
         prefix: "droid-status-probe-",
       });
+      const projectCwd = path.join(directory, "project");
+      const projectSkillDirectory = path.join(projectCwd, ".factory", "skills", "project-skill");
+      yield* fileSystem.makeDirectory(projectSkillDirectory, { recursive: true });
+      yield* fileSystem.writeFileString(
+        path.join(projectSkillDirectory, "SKILL.md"),
+        ["---", "name: project-skill", "description: Project scoped skill", "---", ""].join("\n"),
+      );
       const binary = path.join(directory, "droid");
       const calls = path.join(directory, "calls.jsonl");
       yield* fileSystem.writeFileString(
@@ -117,7 +124,7 @@ if (args[0] === "--version") {
           DROID_STATUS_CALLS: calls,
           FACTORY_RUNTIME_SETTINGS_PATH: "/project/settings.json",
         },
-        process.cwd(),
+        projectCwd,
       );
       const invocations = (yield* fileSystem.readFileString(calls))
         .trim()
@@ -131,7 +138,7 @@ if (args[0] === "--version") {
         .map((invocation) => invocation.method);
       assert.isTrue(snapshot.installed);
       assert.equal(snapshot.auth.status, "authenticated");
-      assert.deepEqual(requests, ["droid.list_models"]);
+      assert.deepEqual(requests, ["droid.list_models", "droid.list_skills"]);
       assert.isString(modelDiscovery?.cwd);
       assert.notEqual(modelDiscovery?.cwd, process.cwd());
       assert.isString(modelDiscovery?.home);
@@ -139,6 +146,10 @@ if (args[0] === "--version") {
       assert.isString(modelDiscovery?.factoryHome);
       assert.notEqual(modelDiscovery?.factoryHome, process.env.HOME);
       assert.isUndefined(modelDiscovery?.runtimeSettingsPath);
+      assert.deepEqual(
+        snapshot.skills.filter((skill) => skill.scope === "project").map((skill) => skill.name),
+        ["project-skill"],
+      );
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 

@@ -12,7 +12,7 @@ import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderS
 import * as ProviderContinuationRequests from "@t3tools/provider-core/server/ProviderContinuationRequests";
 import * as ProviderLatestVersions from "@t3tools/provider-core/server/ProviderLatestVersions";
 import { ProviderDriverError } from "@t3tools/provider-core/server/errors";
-import { discoverDroidSkills } from "./skills.ts";
+import { discoverDroidProjectSkills, mergeDroidSkills } from "./skills.ts";
 import {
   defaultProviderContinuationIdentity,
   type ProviderDriver,
@@ -67,11 +67,12 @@ export const DroidDriver: ProviderDriver<DroidSettings, DroidDriverEnv> = {
       const path = yield* Path.Path;
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
       const hostEnvironment = yield* HostProcess.Environment;
+      const hostHome = yield* HostProcess.HomeDirectory;
       const processEnvironment = yield* makeDroidInstanceEnvironment(environment, hostEnvironment);
       const effectiveConfig = {
         ...config,
         enabled,
-        binaryPath: expandHomePath(config.binaryPath, yield* HostProcess.HomeDirectory),
+        binaryPath: expandHomePath(config.binaryPath, hostHome),
       };
       const continuationIdentity = defaultProviderContinuationIdentity({
         driverKind: DROID_PROVIDER,
@@ -120,6 +121,7 @@ export const DroidDriver: ProviderDriver<DroidSettings, DroidDriverEnv> = {
           effectiveConfig,
           processEnvironment,
           host.paths.cwd,
+          hostHome,
         ).pipe(
           Effect.map(stampIdentity),
           Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
@@ -149,8 +151,7 @@ export const DroidDriver: ProviderDriver<DroidSettings, DroidDriverEnv> = {
           ? snapshot.getSnapshot
           : Effect.all([
               snapshot.getSnapshot,
-              discoverDroidSkills(effectiveConfig, processEnvironment, cwd).pipe(
-                Effect.scoped,
+              discoverDroidProjectSkills(cwd).pipe(
                 Effect.mapError(
                   (cause) =>
                     new ProviderDriverError({
@@ -162,8 +163,16 @@ export const DroidDriver: ProviderDriver<DroidSettings, DroidDriverEnv> = {
                 ),
               ),
             ]).pipe(
-              Effect.map(([machineSnapshot, skills]) => ({ ...machineSnapshot, skills })),
+              Effect.map(([machineSnapshot, projectSkills]) => ({
+                ...machineSnapshot,
+                skills: mergeDroidSkills(
+                  machineSnapshot.skills.filter((skill) => skill.scope !== "project"),
+                  projectSkills,
+                ),
+              })),
               Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+              Effect.provideService(FileSystem.FileSystem, fileSystem),
+              Effect.provideService(Path.Path, path),
             );
       return {
         instanceId,
