@@ -5,9 +5,12 @@ import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
+import * as Deferred from "effect/Deferred";
+import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
+import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 
 const isSessionId = Schema.is(Schema.String.check(Schema.isUUID()));
@@ -58,6 +61,7 @@ export type DroidSubagentStep =
 export type DroidSubagentWork = {
   readonly model?: string;
   readonly steps: ReadonlyArray<DroidSubagentStep>;
+  readonly activityOffset?: number;
   readonly outcome?: "completed" | "cancelled" | "failed";
   readonly result?: string;
 };
@@ -189,20 +193,55 @@ const toolOutput = (value: unknown) => {
     : `${text.slice(0, maxToolOutputChars)}\n… truncated ${text.length - maxToolOutputChars} characters`;
 };
 
-export const followDroidSubagent = (input: {
+export const DroidSessionWatch = Context.Reference("provider-droid/SessionWatch", {
+  defaultValue:
+    () => (directory: string, listener: (event: string, name: string | Buffer | null) => void) =>
+      NodeFS.watch(directory, listener),
+});
+
+export const DroidSessionRead = Context.Reference("provider-droid/SessionRead", {
+  defaultValue: () => readDroidSessionAppend,
+});
+
+class DroidFollowerError extends Schema.TaggedError<DroidFollowerError>()("DroidFollowerError", {
+  cause: Schema.Defect(),
+}) {}
+
+export const makeDroidSubagentFollower = (input: {
   readonly directory: string;
   readonly sessionId: string;
-  readonly startedAtMillis: number;
+  readonly previousActivityOffset?: number;
   readonly onWork: (work: DroidSubagentWork) => Effect.Effect<void>;
+  readonly readAppend?: typeof readDroidSessionAppend;
+  readonly watchDirectory?: (
+    directory: string,
+    listener: (event: string, name: string | Buffer | null) => void,
+  ) => NodeFS.FSWatcher;
 }) =>
   Effect.gen(function* () {
-    if (!isSessionId(input.sessionId)) return;
+    if (!isSessionId(input.sessionId))
+      return yield* Effect.fail(
+        new DroidFollowerError({ cause: new Error("Invalid Droid child session id") }),
+      );
     const expectedFile = NodePath.join(input.directory, `${input.sessionId}.jsonl`);
+    const watchDirectory = input.watchDirectory ?? (yield* DroidSessionWatch);
+    const readAppend = input.readAppend ?? (yield* DroidSessionRead);
 
     const dirty = yield* Queue.sliding<void>(1);
-    yield* Effect.acquireRelease(
+    const lock = yield* Semaphore.make(1);
+    const failed = yield* Deferred.make<Error>();
+    const onError = (error: Error) => Deferred.doneUnsafe(failed, Effect.succeed(error));
+    let closed = false;
+    const release = (resource: NodeFS.FSWatcher) =>
+      Effect.sync(() => {
+        if (closed) return;
+        closed = true;
+        resource.off("error", onError);
+        resource.close();
+      });
+    const watcher = yield* Effect.acquireRelease(
       Effect.try(() =>
-        NodeFS.watch(input.directory, (_event, name) => {
+        watchDirectory(input.directory, (_event, name) => {
           if (
             name !== null &&
             [
@@ -213,106 +252,128 @@ export const followDroidSubagent = (input: {
             Queue.offerUnsafe(dirty, undefined);
         }),
       ),
-      (resource) => Effect.sync(() => resource.close()),
-    ).pipe(Effect.asVoid);
+      release,
+    ).pipe(Effect.tap((resource) => Effect.sync(() => resource.on("error", onError))));
     const tools = new Map<string, Extract<DroidSubagentStep, { readonly kind: "tool" }>>();
     let offset = 0;
     let inode: number | undefined;
-    let model: string | undefined;
-    let lastUserAt: string | undefined;
+    let model = yield* readSessionModel(expectedFile);
+    let previousActivityOffset = input.previousActivityOffset;
+    let lastUserOffset: number | undefined;
     let outcome: DroidSubagentWork["outcome"];
     let lastAssistant: string | undefined;
-    yield* Queue.offer(dirty, undefined);
-    yield* Stream.fromQueue(dirty).pipe(
-      Stream.mapEffect(() =>
-        Effect.gen(function* () {
-          const appended = yield* readDroidSessionAppend(expectedFile, offset, inode);
-          if (appended.restarted) {
-            offset = 0;
-            tools.clear();
-            lastUserAt = undefined;
-            lastAssistant = undefined;
-            outcome = undefined;
-          }
-          inode = appended.inode;
-          if (model === undefined) model = yield* readSessionModel(expectedFile);
-          const steps = new Map<string, DroidSubagentStep>();
-          let rowOffset = offset;
-          for (const line of appended.text.split("\n").slice(0, -1)) {
-            const currentOffset = rowOffset;
-            rowOffset += Buffer.byteLength(line) + 1;
-            outcome = undefined;
-            if (line.trim().length === 0) continue;
-            const decoded = decodeRow(line);
-            if (decoded._tag === "None") continue;
-            const row = decoded.value;
-            if (row.message?.role === "user" && row.timestamp !== undefined)
-              lastUserAt = row.timestamp;
-            if (row.type === "session_end" || row.type === "agent_turn_outcome")
-              outcome =
-                row.type === "session_end" || row.reason === "completed"
-                  ? "completed"
-                  : row.reason === "cancelled"
-                    ? "cancelled"
-                    : "failed";
-            for (const [index, part] of (row.message?.content ?? []).entries()) {
-              const id = `${row.id ?? `offset:${currentOffset}`}:${index}`;
-              if (row.message?.role === "assistant") {
-                if (
-                  (part.type === "text" && part.text?.trim()) ||
-                  (part.type === "thinking" && part.thinking?.trim())
-                ) {
-                  const text = part.type === "thinking" ? part.thinking : part.text;
-                  if (text === undefined) continue;
-                  steps.set(id, {
-                    kind: "message",
-                    id,
-                    text,
-                    ...(part.type === "thinking" ? { reasoning: true as const } : {}),
-                  });
-                  if (part.type === "text") lastAssistant = text;
-                } else if (part.type === "tool_use" && part.id !== undefined) {
-                  const step: Extract<DroidSubagentStep, { readonly kind: "tool" }> = {
-                    kind: "tool",
-                    id: part.id,
-                    name: part.name ?? "Tool",
-                    input: part.input ?? null,
-                    output: null,
-                    isError: false,
-                  };
-                  tools.set(part.id, step);
-                  steps.set(part.id, step);
-                }
-              }
-              if (part.type === "tool_result" && part.tool_use_id !== undefined) {
-                const tool = tools.get(part.tool_use_id);
-                if (tool === undefined) continue;
-                steps.set(tool.id, {
-                  ...tool,
-                  output: toolOutput(part.content),
-                  isError: part.is_error === true,
+    const drain = lock.withPermit(
+      Effect.gen(function* () {
+        const appended = yield* readAppend(expectedFile, offset, inode);
+        if (appended.restarted) {
+          offset = 0;
+          previousActivityOffset = undefined;
+          tools.clear();
+          lastUserOffset = undefined;
+          lastAssistant = undefined;
+          outcome = undefined;
+        }
+        inode = appended.inode;
+        if (model === undefined) model = yield* readSessionModel(expectedFile);
+        const steps = new Map<string, DroidSubagentStep>();
+        let rowOffset = offset;
+        for (const line of appended.text.split("\n").slice(0, -1)) {
+          const currentOffset = rowOffset;
+          rowOffset += Buffer.byteLength(line) + 1;
+          outcome = undefined;
+          if (line.trim().length === 0) continue;
+          const decoded = decodeRow(line);
+          if (decoded._tag === "None") continue;
+          const row = decoded.value;
+          if (row.message?.role === "user") lastUserOffset = currentOffset;
+          if (row.type === "session_end" || row.type === "agent_turn_outcome")
+            outcome =
+              row.type === "session_end" || row.reason === "completed"
+                ? "completed"
+                : row.reason === "cancelled"
+                  ? "cancelled"
+                  : "failed";
+          for (const [index, part] of (row.message?.content ?? []).entries()) {
+            const id = `${row.id ?? `offset:${currentOffset}`}:${index}`;
+            if (row.message?.role === "assistant") {
+              if (
+                (part.type === "text" && part.text?.trim()) ||
+                (part.type === "thinking" && part.thinking?.trim())
+              ) {
+                const text = part.type === "thinking" ? part.thinking : part.text;
+                if (text === undefined) continue;
+                steps.set(id, {
+                  kind: "message",
+                  id,
+                  text,
+                  ...(part.type === "thinking" ? { reasoning: true as const } : {}),
                 });
-                tools.delete(tool.id);
+                if (part.type === "text") lastAssistant = text;
+              } else if (part.type === "tool_use" && part.id !== undefined) {
+                const step: Extract<DroidSubagentStep, { readonly kind: "tool" }> = {
+                  kind: "tool",
+                  id: part.id,
+                  name: part.name ?? "Tool",
+                  input: part.input ?? null,
+                  output: null,
+                  isError: false,
+                };
+                tools.set(part.id, step);
+                steps.set(part.id, step);
               }
             }
+            if (part.type === "tool_result" && part.tool_use_id !== undefined) {
+              const tool = tools.get(part.tool_use_id);
+              if (tool === undefined) continue;
+              steps.set(tool.id, {
+                ...tool,
+                output: toolOutput(part.content),
+                isError: part.is_error === true,
+              });
+              tools.delete(tool.id);
+            }
           }
-          offset += appended.consumed;
-          const currentTurn =
-            lastUserAt !== undefined && Date.parse(lastUserAt) >= input.startedAtMillis;
-          const currentOutcome = currentTurn ? outcome : undefined;
-          const work: DroidSubagentWork = {
-            ...(model === undefined ? {} : { model }),
-            steps: Array.from(steps.values()),
-            ...(currentOutcome === undefined ? {} : { outcome: currentOutcome }),
-            ...(currentOutcome === undefined || lastAssistant === undefined
-              ? {}
-              : { result: lastAssistant }),
-          };
-          yield* input.onWork(work);
-          return currentOutcome !== undefined;
-        }),
-      ),
-      Stream.takeUntil((done) => done),
-      Stream.runDrain,
+        }
+        offset += appended.consumed;
+        const currentTurn =
+          lastUserOffset !== undefined &&
+          (previousActivityOffset === undefined || lastUserOffset > previousActivityOffset);
+        const currentOutcome = currentTurn ? outcome : undefined;
+        const work: DroidSubagentWork = {
+          ...(model === undefined ? {} : { model }),
+          steps: Array.from(steps.values()),
+          ...(lastUserOffset === undefined ? {} : { activityOffset: lastUserOffset }),
+          ...(currentOutcome === undefined ? {} : { outcome: currentOutcome }),
+          ...(currentOutcome === undefined || lastAssistant === undefined
+            ? {}
+            : { result: lastAssistant }),
+        };
+        yield* input.onWork(work);
+        return work;
+      }),
     );
+    yield* Queue.offer(dirty, undefined);
+    return {
+      drain,
+      run: (onOutcome: (work: DroidSubagentWork) => Effect.Effect<void>) =>
+        Effect.raceFirst(
+          Stream.fromQueue(dirty).pipe(
+            Stream.mapEffect(() => drain),
+            Stream.takeUntil((work) => work.outcome !== undefined),
+            Stream.runForEach((work) =>
+              work.outcome === undefined ? Effect.void : onOutcome(work),
+            ),
+          ),
+          Deferred.await(failed).pipe(
+            Effect.flatMap((cause) => Effect.fail(new DroidFollowerError({ cause }))),
+          ),
+        ).pipe(Effect.ensuring(release(watcher))),
+      close: release(watcher),
+    };
+  });
+
+export const followDroidSubagent = (input: Parameters<typeof makeDroidSubagentFollower>[0]) =>
+  Effect.gen(function* () {
+    const follower = yield* makeDroidSubagentFollower(input);
+    yield* follower.run(() => Effect.void);
   });
