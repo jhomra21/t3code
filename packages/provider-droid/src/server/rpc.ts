@@ -81,6 +81,7 @@ export const makeConnection = Effect.fn("DroidRpc.makeConnection")(function* (op
   readonly args?: ReadonlyArray<string>;
   readonly cwd?: string;
   readonly env: NodeJS.ProcessEnv;
+  readonly closeSession?: boolean;
   readonly onRequest?: (
     request: DroidRpcRequest,
   ) => Effect.Effect<DroidRpcReply | undefined, DroidRpcError>;
@@ -283,7 +284,7 @@ export const makeConnection = Effect.fn("DroidRpc.makeConnection")(function* (op
     for (const incomingRequest of serverRequests.values()) {
       yield* reply(incomingRequest, defaultReply(incomingRequest.method)).pipe(Effect.ignore);
     }
-    if (!ended)
+    if (!ended && options.closeSession !== false)
       yield* request("droid.close_session", { reason: "other" }, "2 seconds").pipe(Effect.ignore);
     // Only the captured child handle is signalled; never search for CLI PIDs.
     if (!ended) yield* child.kill({ forceKillAfter: "1 second" }).pipe(Effect.ignore);
