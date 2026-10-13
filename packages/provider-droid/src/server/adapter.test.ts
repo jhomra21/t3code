@@ -3,6 +3,7 @@ import { assert, describe, it } from "@effect/vitest";
 import * as NodeFSP from "node:fs/promises";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeOS from "node:os";
+import * as NodeEvents from "node:events";
 import {
   EnvironmentId,
   ChatAttachmentId,
@@ -28,6 +29,8 @@ import * as Layer from "effect/Layer";
 import * as Queue from "effect/Queue";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
+import * as Scope from "effect/Scope";
+import * as Exit from "effect/Exit";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
 import { TestClock } from "effect/testing";
@@ -41,6 +44,11 @@ import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter"
 import type * as ProviderContinuationRequests from "@t3tools/provider-core/server/ProviderContinuationRequests";
 import * as TestProviderHost from "@t3tools/provider-testing/TestProviderHost";
 import { DROID_PROVIDER, droidSystemPromptAppend, makeDroidAdapterV2 } from "./adapter.ts";
+import {
+  DroidSessionWatch,
+  DroidSessionRead,
+  readDroidSessionAppend,
+} from "./sessionTranscript.ts";
 
 const instanceId = ProviderInstanceId.make("droid-adapter-test");
 const selection = { instanceId, model: "custom:GPT-6 Luna-12" };
@@ -336,7 +344,494 @@ const provide = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
     ),
   );
 
+class SyntheticWatcher extends NodeEvents.EventEmitter {
+  closed = false;
+  close() {
+    this.closed = true;
+  }
+  ref() {
+    return this;
+  }
+  unref() {
+    return this;
+  }
+}
+
+const lifecycleFixture = Effect.fnUntraced(function* (
+  watchOpenFails = false,
+  initiallyEnded = false,
+  failInitialWatch = false,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const home = yield* fs.makeTempDirectoryScoped({
+    directory: NodeOS.tmpdir(),
+    prefix: "droid-lifecycle-",
+  });
+  const directory = path.join(home, ".factory", "sessions", "workspace");
+  yield* fs.makeDirectory(directory, { recursive: true });
+  const parentId = "229d7d4f-9420-4fc5-8ad4-e4f48dcc0401";
+  const childId = "43a7fb2d-79a1-4c49-a8d1-3b089cf7d202";
+  const file = path.join(directory, `${childId}.jsonl`);
+  const row = (value: object) => `${JSON.stringify(value)}\n`;
+  const user = (timestamp: string) =>
+    row({ type: "message", timestamp, message: { role: "user", content: [] } });
+  const text = (id: string, value: string) =>
+    row({
+      type: "message",
+      id,
+      message: { role: "assistant", content: [{ type: "text", text: value }] },
+    });
+  yield* Effect.promise(() =>
+    NodeFSP.writeFile(path.join(directory, `${parentId}.jsonl`), row({ type: "session_start" })),
+  );
+  const now = yield* DateTime.now;
+  const initialRows =
+    user(DateTime.formatIso(now)) +
+    text("ready", "ready") +
+    (initiallyEnded ? row({ type: "agent_turn_outcome", reason: "completed" }) : "");
+  yield* Effect.promise(() => NodeFSP.writeFile(file, initialRows));
+  yield* Effect.promise(() =>
+    NodeFSP.writeFile(file.replace(/\.jsonl$/u, ".settings.json"), '{"model":"pinned"}'),
+  );
+  const watchers: SyntheticWatcher[] = [];
+  const listeners: Array<(event: string, name: string | Buffer | null) => void> = [];
+  const watchClosed = yield* Deferred.make<void>();
+  let firstRead = true;
+  const fake = yield* makeFakeDroid({ nativeSessionId: parentId });
+  const sessionScope = yield* Scope.fork(yield* Effect.scope, "sequential");
+  const opened = yield* open(fake, undefined, undefined, undefined, undefined, {
+    FACTORY_HOME_OVERRIDE: home,
+  }).pipe(
+    Effect.provideService(Scope.Scope, sessionScope),
+    Effect.provideService(DroidSessionRead, (readFile, offset, inode) =>
+      (initiallyEnded || failInitialWatch) && firstRead
+        ? Effect.sync(() => {
+            if (failInitialWatch && firstRead)
+              watchers[0]!.emit("error", new Error("synchronous watcher failure"));
+            firstRead = false;
+            return {
+              text: initialRows.slice(offset),
+              consumed: Buffer.byteLength(initialRows.slice(offset)),
+              restarted: false,
+              inode: undefined,
+            };
+          })
+        : readDroidSessionAppend(readFile, offset, inode),
+    ),
+    Effect.provideService(DroidSessionWatch, (_directory, listener) => {
+      if (watchOpenFails) throw new Error("synthetic open failure");
+      const watcher = new SyntheticWatcher();
+      watcher.close = () => {
+        watcher.closed = true;
+        Deferred.doneUnsafe(watchClosed, Effect.void);
+      };
+      watchers.push(watcher);
+      listeners.push(listener);
+      return watcher;
+    }),
+  );
+  const events: ProviderAdapter.ProviderAdapterV2Event[] = [];
+  const ready = yield* Deferred.make<void>();
+  const finished = yield* Deferred.make<void>();
+  let notificationBarrier: Deferred.Deferred<void> | undefined;
+  let barrierNumber = 0;
+  yield* opened.runtime.events.pipe(
+    Stream.runForEach((event) => {
+      events.push(event);
+      if (event.type === "message.updated" && event.message.text.startsWith("lifecycle barrier"))
+        return notificationBarrier === undefined
+          ? Effect.void
+          : Deferred.succeed(notificationBarrier, undefined);
+      if (event.type === "subagent.updated" && event.subagent.status !== "running")
+        return Deferred.succeed(finished, undefined);
+      return event.type === "message.updated" && event.message.text === "ready"
+        ? Deferred.succeed(ready, undefined)
+        : Effect.void;
+    }),
+    Effect.forkChild,
+  );
+  yield* opened.runtime.startTurn(opened.input);
+  yield* fake.takeRequest("droid.add_user_message");
+  const barrier = Effect.gen(function* () {
+    notificationBarrier = yield* Deferred.make<void>();
+    barrierNumber++;
+    yield* fake.emitNotification({
+      type: "create_message",
+      message: {
+        id: `barrier-${barrierNumber}`,
+        role: "assistant",
+        content: [{ type: "text", text: `lifecycle barrier ${barrierNumber}` }],
+      },
+    });
+    yield* Deferred.await(notificationBarrier);
+  });
+  const register = (toolUseId = "lifecycle-task") =>
+    fake
+      .emitNotification({
+        type: "child_session_available",
+        childSessionId: childId,
+        toolUseId,
+        description: "Lifecycle child",
+      })
+      .pipe(Effect.andThen(barrier));
+  yield* register();
+  if (!watchOpenFails) yield* Deferred.await(ready);
+  const complete = (reason = "completed") =>
+    fake
+      .emitNotification({
+        type: "create_message",
+        message: {
+          id: `task-completion:${childId}`,
+          role: "system",
+          content: [
+            {
+              type: "text",
+              text: `task_id: ${childId}\nreason: ${reason}\noutput: parent result\n\nBackground task finished`,
+            },
+          ],
+        },
+      })
+      .pipe(Effect.andThen(barrier));
+  const append = (value: string) => Effect.promise(() => NodeFSP.appendFile(file, value));
+  const status = () =>
+    events.flatMap((event) => (event.type === "subagent.updated" ? [event.subagent] : [])).at(-1);
+  return {
+    ...opened,
+    fake,
+    file,
+    watchers,
+    listeners,
+    events,
+    row,
+    user,
+    text,
+    append,
+    complete,
+    register,
+    barrier,
+    status,
+    finished,
+    watchClosed,
+    close: Scope.close(sessionScope, Exit.void),
+  };
+});
+
 describe("Droid adapter", () => {
+  it.effect.each(["completed", "failed"])(
+    "drains final child disk rows on a %s Task result when the watch callback is suppressed",
+    (status) =>
+      provide(
+        Effect.gen(function* () {
+          const f = yield* lifecycleFixture();
+          yield* f.append(
+            f.text("final", "final child text") +
+              f.row({
+                type: "message",
+                id: "tool",
+                message: {
+                  role: "assistant",
+                  content: [
+                    {
+                      type: "tool_use",
+                      id: "final-tool",
+                      name: "Execute",
+                      input: { command: "synthetic" },
+                    },
+                  ],
+                },
+              }) +
+              f.row({
+                type: "message",
+                message: {
+                  role: "user",
+                  content: [
+                    { type: "tool_result", tool_use_id: "final-tool", content: "final output" },
+                  ],
+                },
+              }) +
+              f.row({ type: "agent_turn_outcome", reason: "completed" }),
+          );
+          yield* f.fake.emitNotification({
+            type: "tool_result",
+            toolUseId: "lifecycle-task",
+            content: "parent result",
+            isError: status === "failed",
+          });
+          yield* f.barrier;
+          assert.isTrue(
+            f.events.some(
+              (event) =>
+                event.type === "message.updated" && event.message.text === "final child text",
+            ),
+          );
+          assert.equal(f.status()?.status, status);
+          assert.equal(f.status()?.result, "parent result");
+          assert.isTrue(
+            f.events.some(
+              (event) =>
+                event.type === "turn_item.updated" &&
+                event.turnItem.type === "command_execution" &&
+                event.turnItem.output === "final output",
+            ),
+          );
+          assert.isTrue(f.watchers[0]?.closed);
+        }),
+      ),
+  );
+
+  it.effect("parks parent completion until the later disk outcome and releases the watcher", () =>
+    provide(
+      Effect.gen(function* () {
+        const f = yield* lifecycleFixture();
+        yield* f.complete();
+        assert.equal(f.status()?.status, "running");
+        assert.isFalse(f.watchers[0]!.closed);
+        yield* f.append(
+          f.text("late", "late text") + f.row({ type: "agent_turn_outcome", reason: "completed" }),
+        );
+        f.listeners[0]!("change", f.file.split("/").at(-1)!);
+        yield* Deferred.await(f.finished);
+        assert.equal(f.status()?.result, "parent result");
+        // A parent barrier waits for settlement's roster publication and cleanup.
+        yield* f.barrier;
+        assert.isTrue(f.watchers[0]!.closed);
+        assert.equal(f.watchers[0]!.listenerCount("error"), 0);
+      }),
+    ),
+  );
+
+  it.effect.each(["completed", "failed"])(
+    "applies parked %s after asynchronous watcher failure",
+    (reason) =>
+      provide(
+        Effect.gen(function* () {
+          const f = yield* lifecycleFixture();
+          yield* f.complete(reason);
+          yield* f.append(
+            f.text("failure-drain", "disk result") +
+              f.row({ type: "agent_turn_outcome", reason: "completed" }),
+          );
+          f.watchers[0]!.emit("error", new Error("synthetic failure"));
+          yield* Deferred.await(f.finished);
+          assert.equal(f.status()?.status, reason);
+          assert.equal(f.status()?.result, "parent result");
+          assert.isTrue(f.watchers[0]!.closed);
+          assert.equal(f.watchers[0]!.listenerCount("error"), 0);
+        }),
+      ),
+  );
+
+  it.effect.each(["completed", "failed"])(
+    "applies actual parent %s after watch open failure",
+    (status) =>
+      provide(
+        Effect.gen(function* () {
+          const f = yield* lifecycleFixture(true);
+          assert.equal(f.status()?.status, "running");
+          yield* f.complete(status);
+          assert.equal(f.status()?.status, status);
+          assert.equal(f.status()?.result, "parent result");
+        }),
+      ),
+  );
+
+  it.effect("does not resurrect a follower that completes during its initial read", () =>
+    provide(
+      Effect.gen(function* () {
+        const f = yield* lifecycleFixture(false, true);
+        yield* Deferred.await(f.finished);
+        yield* f.complete();
+        assert.equal(f.status()?.status, "completed");
+        assert.isTrue(f.watchers[0]!.closed);
+        assert.equal(f.watchers[0]!.listenerCount("error"), 0);
+      }),
+    ),
+  );
+
+  it.effect("does not resurrect follower ownership after synchronous startup failure", () =>
+    provide(
+      Effect.gen(function* () {
+        const f = yield* lifecycleFixture(false, false, true);
+        yield* Deferred.await(f.watchClosed);
+        yield* f.complete();
+        assert.equal(f.status()?.status, "completed");
+        assert.equal(f.status()?.result, "parent result");
+        assert.equal(f.watchers[0]!.listenerCount("error"), 0);
+      }),
+    ),
+  );
+
+  it.effect("resume ignores old outcome and stale watcher callbacks", () =>
+    provide(
+      Effect.gen(function* () {
+        const f = yield* lifecycleFixture(false, true);
+        yield* Deferred.await(f.finished);
+        const startedAt = f.status()?.startedAt;
+        yield* TestClock.adjust("1 second");
+        yield* f.register("resumed-task");
+        assert.equal(f.status()?.startedAt, startedAt);
+        yield* f.complete();
+        assert.equal(f.status()?.status, "running");
+        assert.isTrue(f.watchers[0]!.closed);
+        assert.equal(f.watchers[0]!.listenerCount("error"), 0);
+        f.listeners[0]!("change", f.file.split("/").at(-1)!);
+        yield* f.barrier;
+        assert.equal(f.status()?.status, "running");
+        const resumedAt = yield* DateTime.now;
+        yield* f.append(
+          f.user(DateTime.formatIso(resumedAt)) +
+            f.text("resumed-final", "resumed result") +
+            f.row({ type: "agent_turn_outcome", reason: "completed" }),
+        );
+        yield* f.complete();
+        assert.equal(f.status()?.status, "completed");
+        assert.isTrue(
+          f.events.some(
+            (event) => event.type === "message.updated" && event.message.text === "resumed result",
+          ),
+        );
+        assert.isTrue(f.watchers[1]!.closed);
+      }),
+    ),
+  );
+
+  it.effect("accepts resumed transcript activity written before its notification", () =>
+    provide(
+      Effect.gen(function* () {
+        const f = yield* lifecycleFixture(false, true);
+        yield* Deferred.await(f.finished);
+        const startedAt = f.status()?.startedAt;
+        const resumedAt = yield* DateTime.now;
+        yield* f.append(
+          f.user(DateTime.formatIso(resumedAt)) +
+            f.text("resumed-before-register", "resumed before register") +
+            f.row({ type: "agent_turn_outcome", reason: "completed" }),
+        );
+        yield* TestClock.adjust("1 second");
+        yield* f.register("resumed-task");
+        yield* f.complete();
+        assert.equal(f.status()?.status, "completed");
+        assert.equal(f.status()?.result, "parent result");
+        assert.equal(f.status()?.startedAt, startedAt);
+        assert.isTrue(
+          f.events.some(
+            (event) =>
+              event.type === "message.updated" && event.message.text === "resumed before register",
+          ),
+        );
+        assert.isTrue(f.watchers[1]!.closed);
+      }),
+    ),
+  );
+
+  it.effect(
+    "settles a valid disk terminal found during watcher failure without parent completion",
+    () =>
+      provide(
+        Effect.gen(function* () {
+          const f = yield* lifecycleFixture();
+          yield* f.append(
+            f.text("watch-failure-final", "disk terminal result") +
+              f.row({ type: "agent_turn_outcome", reason: "completed" }),
+          );
+          f.watchers[0]!.emit("error", new Error("synthetic failure"));
+          yield* Deferred.await(f.finished);
+          assert.equal(f.status()?.status, "completed");
+          assert.equal(f.status()?.result, "disk terminal result");
+          assert.isTrue(f.watchers[0]!.closed);
+        }),
+      ),
+  );
+
+  it.effect(
+    "replacing an active follower keeps its activity cutoff and closes the old watcher",
+    () =>
+      provide(
+        Effect.gen(function* () {
+          const f = yield* lifecycleFixture();
+          yield* TestClock.adjust("1 second");
+          yield* f.register("replacement-task");
+          assert.isTrue(f.watchers[0]!.closed);
+          yield* f.append(
+            f.text("active-final", "active result") +
+              f.row({ type: "agent_turn_outcome", reason: "completed" }),
+          );
+          f.listeners[0]!("change", f.file.split("/").at(-1)!);
+          yield* f.complete();
+          assert.equal(f.status()?.status, "completed");
+          assert.isTrue(f.watchers[1]!.closed);
+        }),
+      ),
+  );
+
+  it.effect("watcher failure without a parent terminal does not fabricate completion", () =>
+    provide(
+      Effect.gen(function* () {
+        const f = yield* lifecycleFixture();
+        const closed = yield* Deferred.make<void>();
+        const watcher = f.watchers[0]!;
+        watcher.close = () => {
+          watcher.closed = true;
+          Deferred.doneUnsafe(closed, Effect.void);
+        };
+        watcher.emit("error", new Error("synthetic failure"));
+        yield* Deferred.await(closed);
+        assert.equal(f.status()?.status, "running");
+        yield* f.complete("failed");
+        assert.equal(f.status()?.status, "failed");
+        assert.equal(watcher.listenerCount("error"), 0);
+      }),
+    ),
+  );
+
+  it.effect.each(["cancel", "close", "process exit"])(
+    "drains and releases the child watcher on %s",
+    (operation) =>
+      provide(
+        Effect.gen(function* () {
+          const f = yield* lifecycleFixture();
+          yield* f.append(f.text("cleanup-final", "cleanup text"));
+          if (operation === "cancel") {
+            yield* f.fake.emitNotification({
+              type: "create_message",
+              message: {
+                id: "stop",
+                role: "assistant",
+                content: [
+                  {
+                    type: "tool_use",
+                    id: "stop-tool",
+                    name: "TaskStop",
+                    input: { task_id: "43a7fb2d-79a1-4c49-a8d1-3b089cf7d202" },
+                  },
+                ],
+              },
+            });
+            yield* f.fake.emitNotification({
+              type: "tool_result",
+              toolUseId: "stop-tool",
+              content: "stopped",
+            });
+            yield* f.barrier;
+          } else if (operation === "close") {
+            yield* f.close;
+            yield* Deferred.await(f.finished);
+          } else {
+            yield* f.fake.closeStdout;
+            yield* Deferred.await(f.finished);
+          }
+          assert.equal(f.status()?.status, operation === "process exit" ? "failed" : "cancelled");
+          assert.isTrue(
+            f.events.some(
+              (event) => event.type === "message.updated" && event.message.text === "cleanup text",
+            ),
+          );
+          assert.isTrue(f.watchers[0]!.closed);
+          assert.equal(f.watchers[0]!.listenerCount("error"), 0);
+        }),
+      ),
+  );
   it.effect("interrupts before add_user_message is answered and keeps the runtime usable", () =>
     provide(
       Effect.gen(function* () {

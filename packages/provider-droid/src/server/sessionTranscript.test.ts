@@ -1,4 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off
+import * as NodeFS from "node:fs";
 import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
@@ -10,6 +11,7 @@ import * as Fiber from "effect/Fiber";
 
 import {
   followDroidSubagent,
+  makeDroidSubagentFollower,
   readDroidDefinitionModel,
   readDroidSessionAppend,
 } from "./sessionTranscript.ts";
@@ -32,6 +34,47 @@ const assistantRow = (id: string, text: string) =>
   });
 
 describe("Droid session transcript", () => {
+  it.effect("serializes final drains behind watch publication", () =>
+    withFile((directory) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const sessionId = "43a7fb2d-79a1-4c49-a8d1-3b089cf7d202";
+          yield* Effect.promise(() =>
+            NodeFSP.writeFile(
+              NodePath.join(directory, `${sessionId}.settings.json`),
+              '{"model":"pinned"}',
+            ),
+          );
+          const entered = yield* Deferred.make<void>();
+          const release = yield* Deferred.make<void>();
+          let publications = 0;
+          const follower = yield* makeDroidSubagentFollower({
+            directory,
+            sessionId,
+            readAppend: () =>
+              Effect.succeed({ text: "", consumed: 0, restarted: false, inode: undefined }),
+            onWork: () =>
+              Effect.gen(function* () {
+                publications++;
+                if (publications === 1) {
+                  yield* Deferred.succeed(entered, undefined);
+                  yield* Deferred.await(release);
+                }
+              }),
+          });
+          const watching = yield* Effect.forkChild(follower.run(() => Effect.void));
+          yield* Deferred.await(entered);
+          const draining = yield* Effect.forkChild(follower.drain, { startImmediately: true });
+          assert.isUndefined(draining.pollUnsafe());
+          assert.equal(publications, 1);
+          yield* Deferred.succeed(release, undefined);
+          yield* Fiber.join(draining);
+          assert.equal(publications, 2);
+          yield* Fiber.interrupt(watching);
+        }),
+      ),
+    ),
+  );
   it.effect("shows a custom pinned model by its display name", () =>
     withFile((directory) =>
       Effect.gen(function* () {
@@ -109,7 +152,6 @@ describe("Droid session transcript", () => {
             const follower = followDroidSubagent({
               directory,
               sessionId,
-              startedAtMillis: Date.parse("2026-10-12T09:00:00.000Z"),
               onWork: (work) =>
                 Effect.gen(function* () {
                   seen.push(
@@ -138,5 +180,41 @@ describe("Droid session transcript", () => {
           }),
         ),
       ),
+  );
+
+  it.effect("fails on asynchronous watcher errors and removes the listener", () =>
+    withFile((directory) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const sessionId = "43a7fb2d-79a1-4c49-a8d1-3b089cf7d202";
+          const observed = yield* Deferred.make<void>();
+          let watcher: NodeFS.FSWatcher | undefined;
+          const watchDirectory = (
+            path: string,
+            listener: (event: string, name: string | Buffer | null) => void,
+          ) => {
+            watcher = NodeFS.watch(path, listener);
+            return watcher;
+          };
+          const fiber = yield* Effect.forkChild(
+            Effect.scoped(
+              followDroidSubagent({
+                directory,
+                sessionId,
+                onWork: () => Deferred.succeed(observed, undefined),
+                watchDirectory,
+              }),
+            ),
+          );
+          yield* Deferred.await(observed);
+          assert.isDefined(watcher);
+          assert.isAbove(watcher.listenerCount("error"), 0);
+          watcher.emit("error", new Error("synthetic watch failure"));
+          const exit = yield* Fiber.await(fiber);
+          assert.equal(exit._tag, "Failure");
+          assert.equal(watcher.listenerCount("error"), 0);
+        }),
+      ),
+    ),
   );
 });

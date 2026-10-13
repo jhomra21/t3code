@@ -71,7 +71,9 @@ import { DroidSettings } from "../settings.ts";
 import { makeDroidInstanceEnvironment } from "./status.ts";
 import {
   findDroidSessionDirectory,
-  followDroidSubagent,
+  makeDroidSubagentFollower,
+  DroidSessionWatch,
+  DroidSessionRead,
   readDroidDefinitionModel,
   droidSubagentStepSignature,
   type DroidSubagentWork,
@@ -449,10 +451,15 @@ type ChildState = {
   readonly context: ActiveTurn;
   readonly ordinal: number;
   toolUseId: string;
-  follower: Fiber.Fiber<void, unknown> | null;
+  activityOffset: number | undefined;
+  follower: {
+    readonly scope: Scope.Closeable;
+    handle: Effect.Success<ReturnType<typeof makeDroidSubagentFollower>> | null;
+    fiber: Fiber.Fiber<void, unknown> | null;
+  } | null;
   readonly publishedSteps: Map<string, string>;
   pendingCompletion: {
-    readonly status: "completed" | "failed";
+    readonly status: "completed" | "failed" | "cancelled";
     readonly result: string | null;
   } | null;
 };
@@ -475,6 +482,8 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
   const fileSystem = yield* FileSystem.FileSystem;
   const mcpSessions = yield* McpProviderSessions.McpProviderSessions;
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+  const watchDirectory = yield* DroidSessionWatch;
+  const readAppend = yield* DroidSessionRead;
   const resolveSettings = Effect.fnUntraced(function* (
     selection: ModelSelection,
     policy: ProviderAdapter.ProviderAdapterV2RuntimePolicy,
@@ -1020,14 +1029,6 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
               yield* emitItem(artifacts.turnItem);
             }
           }
-          if (work.outcome !== undefined && child.task.status === "running") {
-            child.follower = null;
-            yield* finishChild(
-              child,
-              child.pendingCompletion?.status ?? work.outcome,
-              child.pendingCompletion?.result ?? work.result ?? child.task.result,
-            );
-          }
         });
         const startChildFollower = Effect.fnUntraced(function* (
           childId: string,
@@ -1039,46 +1040,92 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
             environment: options.environment,
           });
           if (directory === undefined) return;
-          const follower = followDroidSubagent({
-            directory,
-            sessionId: childId,
-            startedAtMillis: DateTime.toEpochMillis(child.task.startedAt ?? (yield* DateTime.now)),
-            onWork: (work) => publishChildWork(child, work),
-          });
-          // A follower that dies (for example the directory watch cannot open) must not leave a
-          // completion parked behind it, so release the child and apply any pending outcome.
-          child.follower = yield* Effect.forkIn(
-            Effect.scoped(follower).pipe(
-              Effect.catchCause((cause) =>
-                Cause.hasInterruptsOnly(cause)
-                  ? Effect.failCause(cause)
-                  : Effect.gen(function* () {
-                      yield* Effect.logWarning("Droid child follower failed", { cause });
-                      child.follower = null;
-                      const pending = child.pendingCompletion;
-                      if (pending !== null && child.task.status === "running")
-                        yield* finishChild(child, pending.status, pending.result);
-                    }),
-              ),
-            ),
-            sessionScope,
-          );
+          // Install ownership before any read or fork can complete. A detached fiber cannot
+          // put itself back on a completed or resumed child.
+          const owner: NonNullable<ChildState["follower"]> = {
+            scope: yield* Scope.fork(sessionScope, "sequential"),
+            handle: null,
+            fiber: null,
+          };
+          child.follower = owner;
+          const failed = (cause: Cause.Cause<unknown>) =>
+            Cause.hasInterruptsOnly(cause)
+              ? Effect.void
+              : Effect.gen(function* () {
+                  yield* Effect.logWarning("Droid child follower failed", { cause });
+                  yield* Scope.close(owner.scope, Exit.void);
+                  if (child.follower !== owner) return;
+                  const work = owner.handle === null ? undefined : yield* owner.handle.drain;
+                  if (child.follower !== owner) return;
+                  child.follower = null;
+                  const pending = child.pendingCompletion;
+                  if (child.task.status !== "running") return;
+                  if (pending !== null) {
+                    yield* settleChild(child, pending.status, pending.result);
+                  } else if (work?.outcome !== undefined) {
+                    yield* settleChild(
+                      child,
+                      work.outcome,
+                      work.result ?? child.task.result,
+                      work.activityOffset,
+                    );
+                  }
+                });
+          yield* Effect.gen(function* () {
+            const handle = yield* makeDroidSubagentFollower({
+              directory,
+              sessionId: childId,
+              ...(child.activityOffset === undefined
+                ? {}
+                : { previousActivityOffset: child.activityOffset }),
+              watchDirectory,
+              readAppend,
+              onWork: (work) =>
+                child.follower === owner ? publishChildWork(child, work) : Effect.void,
+            }).pipe(Effect.provideService(Scope.Scope, owner.scope));
+            owner.handle = handle;
+            const fiber = yield* Effect.forkIn(
+              handle
+                .run((work) =>
+                  Effect.gen(function* () {
+                    if (child.follower !== owner || work.outcome === undefined) return;
+                    // Settlement can close this handle, but must not interrupt its own fiber.
+                    owner.fiber = null;
+                    yield* settleChild(
+                      child,
+                      child.pendingCompletion?.status ?? work.outcome,
+                      child.pendingCompletion?.result ?? work.result ?? child.task.result,
+                      work.activityOffset,
+                    );
+                  }),
+                )
+                .pipe(
+                  Effect.ensuring(Scope.close(owner.scope, Exit.void)),
+                  Effect.catchCause(failed),
+                ),
+              sessionScope,
+              { startImmediately: true },
+            );
+            if (child.follower === owner) owner.fiber = fiber;
+          }).pipe(Effect.catchCause(failed));
         });
-        const finishChild = Effect.fnUntraced(function* (
+        const stopChildFollower = Effect.fnUntraced(function* (child: ChildState) {
+          const owner = child.follower;
+          child.follower = null;
+          if (owner === null) return;
+          if (owner.handle !== null) yield* owner.handle.close;
+          if (owner.fiber !== null) yield* Fiber.interrupt(owner.fiber);
+          yield* Scope.close(owner.scope, Exit.void);
+        });
+        const settleChild = Effect.fnUntraced(function* (
           child: ChildState,
           status: "completed" | "failed" | "cancelled",
           result: string | null,
+          activityOffset?: number,
         ) {
-          if (status !== "cancelled" && child.follower !== null && connection !== null) {
-            child.pendingCompletion = { status, result };
-            return;
-          }
           child.pendingCompletion = null;
-          if (child.follower !== null) {
-            const follower = child.follower;
-            child.follower = null;
-            yield* Fiber.interrupt(follower);
-          }
+          if (activityOffset !== undefined) child.activityOffset = activityOffset;
+          yield* stopChildFollower(child);
           child.task = {
             ...child.task,
             status,
@@ -1088,6 +1135,29 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
           };
           yield* emitChild(child);
           yield* syncChildRoster();
+        });
+        const finishChild = Effect.fnUntraced(function* (
+          child: ChildState,
+          status: "completed" | "failed" | "cancelled",
+          result: string | null,
+        ) {
+          const owner = child.follower;
+          child.pendingCompletion = { status, result };
+          const work =
+            owner?.handle === null || owner?.handle === undefined
+              ? undefined
+              : yield* owner.handle.drain;
+          if (child.follower !== owner) return;
+          // Parent notifications can overtake the final append. Only explicit cancellation or
+          // a dead parent forces settlement without a disk outcome.
+          if (
+            owner !== null &&
+            work?.outcome === undefined &&
+            status !== "cancelled" &&
+            connection !== null
+          )
+            return;
+          yield* settleChild(child, status, result, work?.activityOffset);
         });
         const registerChild = Effect.fnUntraced(function* (
           notice: typeof Child.Type & { readonly toolUseId: string },
@@ -1154,14 +1224,12 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
             parentRootNodeId: parentNodeId,
             ordinal: existing?.ordinal ?? ordinal(context, key),
             toolUseId: notice.toolUseId,
-            follower: existing?.follower ?? null,
+            activityOffset: existing?.activityOffset,
+            follower: null,
             publishedSteps: existing?.publishedSteps ?? new Map(),
             pendingCompletion: null,
           };
-          if (existing?.follower !== null && existing?.follower !== undefined) {
-            yield* Fiber.interrupt(existing.follower);
-            child.follower = null;
-          }
+          if (existing !== undefined) yield* stopChildFollower(existing);
           children.set(notice.childSessionId, child);
           if (existing !== undefined) childByToolUseId.delete(existing.toolUseId);
           childByToolUseId.set(notice.toolUseId, child);
