@@ -78,6 +78,7 @@ import { piCompactionInput } from "./pi_compaction/input.ts";
 import { assertPiCompactionOutput } from "./pi_compaction/output.ts";
 import { assertDroidCompactionOutput } from "./pi_compaction/droid_output.ts";
 import { providerThreadResumeInput } from "./provider_thread_resume/input.ts";
+import { assertDroidProviderThreadResumeOutput } from "./provider_thread_resume/droid_output.ts";
 import { assertPiProviderThreadResumeOutput } from "./provider_thread_resume/pi_output.ts";
 import { assertMultiTurnClaudeOutput } from "./multi_turn/claude_output.ts";
 import { assertMultiTurnOutput } from "./multi_turn/codex_output.ts";
@@ -1366,6 +1367,15 @@ export const ORCHESTRATOR_REPLAY_FIXTURES: ReadonlyArray<OrchestratorReplayFixtu
         transcriptFile: new URL("./provider_thread_resume/pi_transcript.ndjson", import.meta.url),
         modelSelection: PI_MODEL_SELECTION,
         assertOutput: assertPiProviderThreadResumeOutput,
+      },
+      {
+        driver: ProviderDriverKind.make("droid"),
+        transcriptFile: new URL(
+          "./provider_thread_resume/droid_transcript.ndjson",
+          import.meta.url,
+        ),
+        modelSelection: DROID_MODEL_SELECTION,
+        assertOutput: assertDroidProviderThreadResumeOutput,
       },
     ],
   },
