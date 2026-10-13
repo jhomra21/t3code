@@ -89,6 +89,8 @@ const makeFakeDroid = (
     readonly holdAddUserMessageResponse?: boolean;
     readonly nativeSessionId?: string;
     readonly rewindSessionId?: string;
+    readonly failInterruptSession?: boolean;
+    readonly holdInterruptSessionResponse?: boolean;
   } = {},
 ) =>
   Effect.gen(function* () {
@@ -101,6 +103,8 @@ const makeFakeDroid = (
     let closed = false;
     let heldAddUserMessage: RpcFrame | undefined;
     let heldAddUserMessageOnce = false;
+    let heldInterruptSession: RpcFrame | undefined;
+    let heldInterruptSessionOnce = false;
     const emit = (frame: unknown) =>
       Queue.offer(stdout, new TextEncoder().encode(`${encodeJson(frame)}\n`)).pipe(Effect.asVoid);
     const spawner = ChildProcessSpawner.make(() =>
@@ -132,6 +136,13 @@ const makeFakeDroid = (
                   ) {
                     heldAddUserMessage = frame;
                     heldAddUserMessageOnce = true;
+                  } else if (
+                    options.holdInterruptSessionResponse &&
+                    !heldInterruptSessionOnce &&
+                    frame.method === "droid.interrupt_session"
+                  ) {
+                    heldInterruptSession = frame;
+                    heldInterruptSessionOnce = true;
                   } else {
                     yield* emit(responseFor(frame, options, contextBreakdownIndex));
                     if (frame.method === "droid.get_context_breakdown") contextBreakdownIndex += 1;
@@ -152,12 +163,15 @@ const makeFakeDroid = (
     );
     return {
       spawner,
-      emitNotification: (notification: Record<string, unknown>) =>
+      emitNotification: (
+        notification: Record<string, unknown>,
+        sessionId = options.nativeSessionId ?? "native-session",
+      ) =>
         emit({
           type: "notification",
           jsonrpc: "2.0",
           method: "droid.session_notification",
-          params: { sessionId: options.nativeSessionId ?? "native-session", notification },
+          params: { sessionId, notification },
         }),
       emitRequest: (id: string, method: string, params: unknown) =>
         emit({ type: "request", jsonrpc: "2.0", id, method, params }),
@@ -175,6 +189,12 @@ const makeFakeDroid = (
           return yield* Effect.die(new Error("No held droid.add_user_message request"));
         yield* emit(responseFor(heldAddUserMessage, options));
         heldAddUserMessage = undefined;
+      }),
+      answerInterruptSession: Effect.gen(function* () {
+        if (heldInterruptSession === undefined)
+          return yield* Effect.die(new Error("No held droid.interrupt_session request"));
+        yield* emit(responseFor(heldInterruptSession, options));
+        heldInterruptSession = undefined;
       }),
       closed: () => closed,
       closeStdout: Queue.end(stdout),
@@ -201,6 +221,8 @@ const responseFor = (
     }>;
     readonly nativeSessionId?: string;
     readonly rewindSessionId?: string;
+    readonly failInterruptSession?: boolean;
+    readonly holdInterruptSessionResponse?: boolean;
   },
   contextBreakdownIndex = 0,
 ) => ({
@@ -208,25 +230,32 @@ const responseFor = (
   jsonrpc: "2.0",
   id: frame.id,
   factoryProtocolVersion: options.protocolVersion ?? "1.257.0",
-  result:
-    frame.method === "droid.initialize_session"
-      ? {
-          sessionId: options.nativeSessionId ?? "native-session",
-          session: { messages: [] },
-        }
-      : frame.method === "droid.load_session"
-        ? { session: { messages: [] } }
-        : frame.method === "droid.get_context_breakdown"
-          ? (options.contextBreakdownSequence?.[
-              Math.min(contextBreakdownIndex, (options.contextBreakdownSequence?.length ?? 1) - 1)
-            ] ??
-            options.contextBreakdown ??
-            {})
-          : frame.method === "droid.compact_session"
-            ? (options.compactSessionResult ?? {})
-            : frame.method === "droid.execute_rewind"
-              ? { newSessionId: options.rewindSessionId ?? "rewound-session" }
-              : {},
+  ...(frame.method === "droid.interrupt_session" && options.failInterruptSession
+    ? { error: { code: -32000, message: "Synthetic interrupt failure" } }
+    : {
+        result:
+          frame.method === "droid.initialize_session"
+            ? {
+                sessionId: options.nativeSessionId ?? "native-session",
+                session: { messages: [] },
+              }
+            : frame.method === "droid.load_session"
+              ? { session: { messages: [] } }
+              : frame.method === "droid.get_context_breakdown"
+                ? (options.contextBreakdownSequence?.[
+                    Math.min(
+                      contextBreakdownIndex,
+                      (options.contextBreakdownSequence?.length ?? 1) - 1,
+                    )
+                  ] ??
+                  options.contextBreakdown ??
+                  {})
+                : frame.method === "droid.compact_session"
+                  ? (options.compactSessionResult ?? {})
+                  : frame.method === "droid.execute_rewind"
+                    ? { newSessionId: options.rewindSessionId ?? "rewound-session" }
+                    : {},
+      }),
 });
 
 const RpcFrameSchema = Schema.Struct({
@@ -361,6 +390,9 @@ const lifecycleFixture = Effect.fnUntraced(function* (
   watchOpenFails = false,
   initiallyEnded = false,
   failInitialWatch = false,
+  failInterruptSession = false,
+  holdInterruptSessionResponse = false,
+  registerInitialChild = true,
 ) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -372,7 +404,8 @@ const lifecycleFixture = Effect.fnUntraced(function* (
   yield* fs.makeDirectory(directory, { recursive: true });
   const parentId = "229d7d4f-9420-4fc5-8ad4-e4f48dcc0401";
   const childId = "43a7fb2d-79a1-4c49-a8d1-3b089cf7d202";
-  const file = path.join(directory, `${childId}.jsonl`);
+  const fileFor = (id: string) => path.join(directory, `${id}.jsonl`);
+  const file = fileFor(childId);
   const row = (value: object) => `${JSON.stringify(value)}\n`;
   const user = (timestamp: string) =>
     row({ type: "message", timestamp, message: { role: "user", content: [] } });
@@ -398,7 +431,11 @@ const lifecycleFixture = Effect.fnUntraced(function* (
   const listeners: Array<(event: string, name: string | Buffer | null) => void> = [];
   const watchClosed = yield* Deferred.make<void>();
   let firstRead = true;
-  const fake = yield* makeFakeDroid({ nativeSessionId: parentId });
+  const fake = yield* makeFakeDroid({
+    nativeSessionId: parentId,
+    failInterruptSession,
+    holdInterruptSessionResponse,
+  });
   const sessionScope = yield* Scope.fork(yield* Effect.scope, "sequential");
   const opened = yield* open(fake, undefined, undefined, undefined, undefined, {
     FACTORY_HOME_OVERRIDE: home,
@@ -434,8 +471,11 @@ const lifecycleFixture = Effect.fnUntraced(function* (
   const events: ProviderAdapter.ProviderAdapterV2Event[] = [];
   const ready = yield* Deferred.make<void>();
   const finished = yield* Deferred.make<void>();
+  const terminal = yield* Deferred.make<ProviderAdapter.ProviderAdapterV2Event>();
   let notificationBarrier: Deferred.Deferred<void> | undefined;
+  let terminalBarrier: Deferred.Deferred<ProviderAdapter.ProviderAdapterV2Event> | undefined;
   let barrierNumber = 0;
+  const childSettled = new Map<string, Deferred.Deferred<void>>();
   yield* opened.runtime.events.pipe(
     Stream.runForEach((event) => {
       events.push(event);
@@ -444,7 +484,22 @@ const lifecycleFixture = Effect.fnUntraced(function* (
           ? Effect.void
           : Deferred.succeed(notificationBarrier, undefined);
       if (event.type === "subagent.updated" && event.subagent.status !== "running")
-        return Deferred.succeed(finished, undefined);
+        return Effect.all([
+          Deferred.succeed(finished, undefined),
+          ...(childSettled.has(event.subagent.nativeTaskRef?.nativeId ?? "")
+            ? [
+                Deferred.succeed(
+                  childSettled.get(event.subagent.nativeTaskRef?.nativeId ?? "")!,
+                  undefined,
+                ),
+              ]
+            : []),
+        ]);
+      if (event.type === "turn.terminal")
+        return Effect.all([
+          Deferred.succeed(terminal, event),
+          terminalBarrier === undefined ? Effect.void : Deferred.succeed(terminalBarrier, event),
+        ]);
       return event.type === "message.updated" && event.message.text === "ready"
         ? Deferred.succeed(ready, undefined)
         : Effect.void;
@@ -466,40 +521,50 @@ const lifecycleFixture = Effect.fnUntraced(function* (
     });
     yield* Deferred.await(notificationBarrier);
   });
-  const register = (toolUseId = "lifecycle-task") =>
+  const register = (toolUseId = "lifecycle-task", id = childId) =>
     fake
       .emitNotification({
         type: "child_session_available",
-        childSessionId: childId,
+        childSessionId: id,
         toolUseId,
         description: "Lifecycle child",
       })
       .pipe(Effect.andThen(barrier));
-  yield* register();
-  if (!watchOpenFails) yield* Deferred.await(ready);
-  const complete = (reason = "completed") =>
-    fake
-      .emitNotification({
-        type: "create_message",
-        message: {
-          id: `task-completion:${childId}`,
-          role: "system",
-          content: [
-            {
-              type: "text",
-              text: `task_id: ${childId}\nreason: ${reason}\noutput: parent result\n\nBackground task finished`,
-            },
-          ],
-        },
-      })
-      .pipe(Effect.andThen(barrier));
-  const append = (value: string) => Effect.promise(() => NodeFSP.appendFile(file, value));
-  const status = () =>
-    events.flatMap((event) => (event.type === "subagent.updated" ? [event.subagent] : [])).at(-1);
+  if (registerInitialChild) yield* register();
+  if (!watchOpenFails && registerInitialChild) yield* Deferred.await(ready);
+  const complete = (reason = "completed", id = childId, waitForBarrier = true) => {
+    const notification = fake.emitNotification({
+      type: "create_message",
+      message: {
+        id: `task-completion:${id}`,
+        role: "system",
+        content: [
+          {
+            type: "text",
+            text: `task_id: ${id}\nreason: ${reason}\noutput: parent result\n\nBackground task finished`,
+          },
+        ],
+      },
+    });
+    return waitForBarrier ? notification.pipe(Effect.andThen(barrier)) : notification;
+  };
+  const append = (value: string, id = childId) =>
+    Effect.promise(() => NodeFSP.appendFile(fileFor(id), value));
+  const writeChild = (id: string, value: string) =>
+    Effect.promise(() => NodeFSP.writeFile(fileFor(id), value));
+  const status = (id = childId) => {
+    for (let index = events.length - 1; index >= 0; index--) {
+      const event = events[index];
+      if (event?.type === "subagent.updated" && event.subagent.nativeTaskRef?.nativeId === id)
+        return event.subagent;
+    }
+    return undefined;
+  };
   return {
     ...opened,
     fake,
     file,
+    fileFor,
     watchers,
     listeners,
     events,
@@ -507,11 +572,18 @@ const lifecycleFixture = Effect.fnUntraced(function* (
     user,
     text,
     append,
+    writeChild,
     complete,
     register,
     barrier,
     status,
     finished,
+    terminal,
+    waitForTerminal: (deferred: Deferred.Deferred<ProviderAdapter.ProviderAdapterV2Event>) => {
+      terminalBarrier = deferred;
+    },
+    trackChildSettled: (id: string, deferred: Deferred.Deferred<void>) =>
+      childSettled.set(id, deferred),
     watchClosed,
     close: Scope.close(sessionScope, Exit.void),
   };
@@ -620,6 +692,270 @@ describe("Droid adapter", () => {
           assert.equal(f.watchers[0]!.listenerCount("error"), 0);
         }),
       ),
+  );
+
+  it.effect("preserves the drained activity offset when watcher failure settles parked work", () =>
+    provide(
+      Effect.gen(function* () {
+        const f = yield* lifecycleFixture();
+        yield* f.complete();
+        assert.equal(f.status()?.status, "running");
+        yield* f.append(
+          f.text("parked-final", "parked transcript result") +
+            f.row({ type: "agent_turn_outcome", reason: "failed" }),
+        );
+        f.watchers[0]!.emit("error", new Error("synthetic failure"));
+        yield* Deferred.await(f.finished);
+        assert.equal(f.status()?.status, "completed");
+
+        yield* f.register("resumed-task");
+        yield* f.barrier;
+        assert.equal(f.status()?.status, "running");
+        const resumedAt = yield* DateTime.now;
+        yield* f.append(
+          f.user(DateTime.formatIso(resumedAt)) +
+            f.text("fresh-resumed-final", "fresh resumed result") +
+            f.row({ type: "agent_turn_outcome", reason: "completed" }),
+        );
+        f.listeners[1]!("change", f.file.split("/").at(-1)!);
+        yield* f.complete();
+        assert.equal(f.status()?.status, "completed");
+        assert.equal(f.status()?.result, "parent result");
+        assert.isTrue(
+          f.events.some(
+            (event) =>
+              event.type === "message.updated" && event.message.text === "fresh resumed result",
+          ),
+        );
+      }),
+    ),
+  );
+
+  it.effect("settles parked child work and clears its roster on breaker connection failure", () =>
+    provide(
+      Effect.gen(function* () {
+        const f = yield* lifecycleFixture(false, false, false, true);
+        yield* f.register();
+        yield* f.fake.emitNotification({
+          type: "tool_result",
+          toolUseId: "lifecycle-task",
+          content: "Task launched in background.\nTask ID: lifecycle-child",
+        });
+        yield* f.fake.emitRequest("background-child-barrier", "droid.unknown_barrier", {});
+        yield* f.fake.takeReply;
+        yield* f.append(f.text("forced-close-final", "drained before forced close"));
+        yield* f.complete();
+        assert.equal(f.status()?.status, "running");
+        for (const id of ["parked-breaker-one", "parked-breaker-two"]) {
+          yield* f.fake.emitNotification({
+            type: "create_message",
+            message: {
+              id: `${id}-message`,
+              role: "assistant",
+              content: [{ type: "tool_use", id, name: "ToolSearch", input: {} }],
+            },
+          });
+          yield* f.fake.emitNotification({
+            type: "tool_result",
+            toolUseId: id,
+            content: "Error: Invalid ToolSearch input: query: Required",
+            isError: true,
+          });
+        }
+        yield* f.fake.takeRequest("droid.interrupt_session");
+        const result = yield* Deferred.await(f.terminal);
+        assert.equal(
+          result.type === "turn.terminal" ? result.threadDisposition : undefined,
+          "broken",
+        );
+        assert.equal(f.status()?.status, "completed");
+        assert.equal(f.status()?.result, "parent result");
+        assert.equal(yield* f.runtime.hasPendingBackgroundWorkForThread!(f.providerThread), false);
+        assert.isTrue(
+          f.events.some(
+            (event) =>
+              event.type === "message.updated" &&
+              event.message.text === "drained before forced close",
+          ),
+        );
+      }),
+    ),
+  );
+
+  it.effect("settles a prior-turn parked child without closing a healthy follower", () =>
+    provide(
+      Effect.gen(function* () {
+        const f = yield* lifecycleFixture(false, false, false, true, false, false);
+        const priorChild = "16ea4f8c-6ad1-4cce-bd1c-b6134301fe11";
+        const healthyChild = "16ea4f8c-6ad1-4cce-bd1c-b6134301fe12";
+        const priorFile = f.fileFor(priorChild);
+        const healthyFile = f.fileFor(healthyChild);
+        yield* f.writeChild(
+          priorChild,
+          f.row({ type: "session_start" }) +
+            f.user(DateTime.formatIso(yield* DateTime.now)) +
+            f.text("prior-ready", "prior ready"),
+        );
+        yield* f.writeChild(
+          healthyChild,
+          f.row({ type: "session_start" }) +
+            f.user(DateTime.formatIso(yield* DateTime.now)) +
+            f.text("healthy-ready", "healthy ready"),
+        );
+        const settledPrior = yield* Deferred.make<void>();
+        const settledHealthy = yield* Deferred.make<void>();
+        f.trackChildSettled(priorChild, settledPrior);
+        f.trackChildSettled(healthyChild, settledHealthy);
+        const events = f.events;
+
+        yield* f.register("prior-tool", priorChild);
+        yield* f.fake.emitNotification({
+          type: "tool_result",
+          toolUseId: "prior-tool",
+          content: `Task launched in background.\nTask ID: ${priorChild}`,
+        });
+        yield* f.barrier;
+        yield* f.fake.emitNotification({
+          type: "agent_turn_completed",
+          reason: "completed",
+          turnId: f.input.message.messageId,
+        });
+        yield* Deferred.await(f.terminal);
+        assert.equal(f.status(priorChild)?.status, "running");
+
+        const nextInput = {
+          ...f.input,
+          runId: RunId.make("droid-two-child-run"),
+          attemptId: RunAttemptId.make("droid-two-child-attempt"),
+          message: { ...f.input.message, messageId: MessageId.make("droid-two-child-message") },
+        };
+        yield* f.runtime.startTurn(nextInput);
+        yield* f.fake.takeRequest("droid.add_user_message");
+        yield* f.register("healthy-tool", healthyChild);
+        yield* f.fake.emitNotification({
+          type: "tool_result",
+          toolUseId: "healthy-tool",
+          content: `Task launched in background.\nTask ID: ${healthyChild}`,
+        });
+        yield* f.barrier;
+        yield* f.complete("completed", priorChild);
+        assert.equal(f.status(priorChild)?.status, "running");
+        yield* f.append(
+          f.text("prior-final", "prior final work") +
+            f.row({ type: "agent_turn_outcome", reason: "failed" }),
+          priorChild,
+        );
+        const breakerTerminal = yield* Deferred.make<ProviderAdapter.ProviderAdapterV2Event>();
+        f.waitForTerminal(breakerTerminal);
+        for (const id of ["mixed-breaker-one", "mixed-breaker-two"]) {
+          yield* f.fake.emitNotification({
+            type: "create_message",
+            message: {
+              id: `${id}-message`,
+              role: "assistant",
+              content: [{ type: "tool_use", id, name: "ToolSearch", input: {} }],
+            },
+          });
+          yield* f.fake.emitNotification({
+            type: "tool_result",
+            toolUseId: id,
+            content: "Error: Invalid ToolSearch input: query: Required",
+            isError: true,
+          });
+        }
+        yield* f.fake.takeRequest("droid.interrupt_session");
+        const broken = yield* Deferred.await(breakerTerminal);
+        assert.equal(
+          broken.type === "turn.terminal" ? broken.threadDisposition : undefined,
+          "broken",
+        );
+        assert.isTrue(yield* Deferred.isDone(settledPrior));
+        assert.equal(f.status(priorChild)?.status, "completed");
+        assert.equal(f.status(priorChild)?.result, "parent result");
+        assert.isTrue(
+          events.some(
+            (event) =>
+              event.type === "message.updated" && event.message.text === "prior final work",
+          ),
+        );
+        assert.isTrue(f.watchers[0]!.closed);
+        assert.isFalse(f.watchers[1]!.closed);
+        assert.equal(f.status(healthyChild)?.status, "running");
+        assert.isTrue(yield* f.runtime.hasPendingBackgroundWorkForThread!(f.providerThread));
+        const latestRoster = f.events
+          .flatMap((event) =>
+            event.type === "provider_thread.updated" ? [event.providerThread] : [],
+          )
+          .at(-1)?.pendingBackgroundTasks;
+        assert.isTrue(latestRoster?.some((task) => task.taskId === healthyChild));
+        assert.isFalse(latestRoster?.some((task) => task.taskId === priorChild));
+
+        yield* f.append(
+          f.user(DateTime.formatIso(yield* DateTime.now)) +
+            f.text("healthy-final", "healthy fresh result") +
+            f.row({ type: "agent_turn_outcome", reason: "completed" }),
+          healthyChild,
+        );
+        f.listeners[1]!("change", healthyFile.split("/").at(-1)!);
+        yield* Deferred.await(settledHealthy);
+        assert.equal(f.status(healthyChild)?.status, "completed");
+        assert.equal(f.status(healthyChild)?.result, "healthy fresh result");
+        assert.isTrue(f.watchers[1]!.closed);
+        assert.equal(yield* f.runtime.hasPendingBackgroundWorkForThread!(f.providerThread), false);
+
+        const resumedInput = {
+          ...f.input,
+          runId: RunId.make("droid-resume-prior-child-run"),
+          attemptId: RunAttemptId.make("droid-resume-prior-child-attempt"),
+          message: {
+            ...f.input.message,
+            messageId: MessageId.make("droid-resume-prior-child-message"),
+          },
+        };
+        yield* f.runtime.startTurn(resumedInput);
+        yield* f.fake.takeRequest("droid.add_user_message");
+        yield* f.fake.emitNotification({
+          type: "create_message",
+          message: {
+            id: "resume-prior-child",
+            role: "assistant",
+            content: [
+              {
+                type: "tool_use",
+                id: "resume-prior-child-tool",
+                name: "Task",
+                input: { resume: priorChild, prompt: "continue previous task" },
+              },
+            ],
+          },
+        });
+        yield* f.fake.emitNotification({
+          type: "tool_result",
+          toolUseId: "resume-prior-child-tool",
+          content: `Task launched in background.\nTask ID: ${priorChild}`,
+        });
+        yield* f.barrier;
+        assert.equal(f.status(priorChild)?.status, "running");
+        assert.isTrue(yield* f.runtime.hasPendingBackgroundWorkForThread!(f.providerThread));
+        const resumedSettled = yield* Deferred.make<void>();
+        f.trackChildSettled(priorChild, resumedSettled);
+        const resumedAt = yield* DateTime.now;
+        yield* f.append(
+          f.user(DateTime.formatIso(resumedAt)) +
+            f.text("prior-resumed-final", "prior resumed fresh result") +
+            f.row({ type: "agent_turn_outcome", reason: "completed" }),
+          priorChild,
+        );
+        f.listeners[2]!("change", priorFile.split("/").at(-1)!);
+        yield* Deferred.await(resumedSettled);
+        assert.equal(f.status(priorChild)?.status, "completed");
+        assert.equal(f.status(priorChild)?.result, "prior resumed fresh result");
+        assert.equal(yield* f.runtime.hasPendingBackgroundWorkForThread!(f.providerThread), false);
+
+        // Keep the file reference live so the per-child fixture paths are verified as distinct.
+        assert.notEqual(priorFile, healthyFile);
+      }),
+    ),
   );
 
   it.effect.each(["completed", "failed"])(
@@ -885,6 +1221,931 @@ describe("Droid adapter", () => {
           turnId: "droid-adapter-following-message",
         });
         yield* Deferred.await(secondTerminal);
+      }),
+    ),
+  );
+
+  it.effect("does not stop after the first malformed ToolSearch call", () =>
+    provide(
+      Effect.gen(function* () {
+        const fake = yield* makeFakeDroid();
+        const { runtime, input } = yield* open(fake);
+        const terminal = yield* Deferred.make<ProviderAdapter.ProviderAdapterV2Event>();
+        const secondTerminal = yield* Deferred.make<ProviderAdapter.ProviderAdapterV2Event>();
+        let terminalCount = 0;
+        yield* runtime.events.pipe(
+          Stream.runForEach((event) => {
+            if (event.type !== "turn.terminal") return Effect.void;
+            terminalCount++;
+            return terminalCount === 1
+              ? Deferred.succeed(terminal, event)
+              : Deferred.succeed(secondTerminal, event);
+          }),
+          Effect.forkChild,
+        );
+        yield* runtime.startTurn(input);
+        yield* fake.takeRequest("droid.add_user_message");
+        yield* fake.emitNotification({
+          type: "create_message",
+          message: {
+            id: "tool-search-first",
+            role: "assistant",
+            content: [
+              { type: "tool_use", id: "tool-search-first-id", name: "ToolSearch", input: {} },
+            ],
+          },
+        });
+        yield* fake.emitNotification({
+          type: "tool_result",
+          toolUseId: "tool-search-first-id",
+          content: "Error: Invalid ToolSearch input: query: Required",
+          isError: true,
+        });
+        yield* fake.emitNotification({
+          type: "agent_turn_completed",
+          reason: "completed",
+          turnId: input.message.messageId,
+        });
+        const result = yield* Deferred.await(terminal);
+        assert.equal(result.type === "turn.terminal" ? result.status : undefined, "completed");
+        assert.equal(
+          fake.requestedMethods.filter((method) => method === "droid.interrupt_session").length,
+          0,
+        );
+        yield* runtime.startTurn({
+          ...input,
+          runId: RunId.make("droid-adapter-second-tool-search-run"),
+          attemptId: RunAttemptId.make("droid-adapter-second-tool-search-attempt"),
+          message: {
+            ...input.message,
+            messageId: MessageId.make("droid-adapter-second-tool-search-message"),
+          },
+        });
+        yield* fake.takeRequest("droid.add_user_message");
+        yield* fake.emitNotification({
+          turnId: input.message.messageId,
+          type: "create_message",
+          message: {
+            id: "late-first-turn-message",
+            role: "assistant",
+            content: [
+              { type: "tool_use", id: "late-first-turn-tool", name: "ToolSearch", input: {} },
+            ],
+          },
+        });
+        yield* fake.emitNotification({
+          turnId: input.message.messageId,
+          type: "tool_result",
+          toolUseId: "late-first-turn-tool",
+          content: "Error: Invalid ToolSearch input: query: Required",
+          isError: true,
+        });
+        const secondTurnFailure = (id: string) =>
+          Effect.gen(function* () {
+            yield* fake.emitNotification({
+              type: "create_message",
+              message: {
+                id: `${id}-message`,
+                role: "assistant",
+                content: [{ type: "tool_use", id, name: "ToolSearch", input: {} }],
+              },
+            });
+            yield* fake.emitNotification({
+              type: "tool_result",
+              toolUseId: id,
+              content: "Error: Invalid ToolSearch input: query: Required",
+              isError: true,
+            });
+          });
+        yield* secondTurnFailure("second-turn-error-one");
+        assert.equal(
+          fake.requestedMethods.filter((method) => method === "droid.interrupt_session").length,
+          0,
+        );
+        yield* secondTurnFailure("second-turn-error-two");
+        yield* fake.takeRequest("droid.interrupt_session");
+        yield* fake.emitNotification({
+          type: "agent_turn_completed",
+          reason: "cancelled",
+          turnId: MessageId.make("droid-adapter-second-tool-search-message"),
+        });
+        const secondResult = yield* Deferred.await(secondTerminal);
+        assert.equal(
+          secondResult.type === "turn.terminal" ? secondResult.status : undefined,
+          "failed",
+        );
+      }),
+    ),
+  );
+
+  it.effect("fails the active turn once after two malformed ToolSearch calls", () =>
+    provide(
+      Effect.gen(function* () {
+        const fake = yield* makeFakeDroid();
+        const { runtime, input, providerThread } = yield* open(fake);
+        const terminal = yield* Deferred.make<ProviderAdapter.ProviderAdapterV2Event>();
+        const events: ProviderAdapter.ProviderAdapterV2Event[] = [];
+        yield* runtime.events.pipe(
+          Stream.runForEach((event) => {
+            events.push(event);
+            return event.type === "turn.terminal" ? Deferred.succeed(terminal, event) : Effect.void;
+          }),
+          Effect.forkChild,
+        );
+        yield* runtime.startTurn(input);
+        yield* fake.takeRequest("droid.add_user_message");
+        const malformedSearch = (id: string) =>
+          Effect.gen(function* () {
+            yield* fake.emitNotification({
+              type: "create_message",
+              message: {
+                id: `${id}-message`,
+                role: "assistant",
+                content: [{ type: "tool_use", id, name: "ToolSearch", input: {} }],
+              },
+            });
+            yield* fake.emitNotification({
+              type: "tool_result",
+              toolUseId: id,
+              content: "Error: Invalid ToolSearch input: query: Required",
+              isError: true,
+            });
+          });
+        const toolResult = (id: string, name: string, input: unknown, content: string) =>
+          Effect.gen(function* () {
+            yield* fake.emitNotification({
+              type: "create_message",
+              message: {
+                id: `${id}-message`,
+                role: "assistant",
+                content: [{ type: "tool_use", id, name, input }],
+              },
+            });
+            yield* fake.emitNotification({
+              type: "tool_result",
+              toolUseId: id,
+              content,
+              isError: true,
+            });
+          });
+        yield* fake.emitNotification({
+          type: "create_message",
+          message: { id: "malformed-message", role: "assistant", content: "not an array" },
+        });
+        yield* fake.emitNotification(
+          {
+            turnId: input.message.messageId,
+            type: "create_message",
+            message: {
+              id: "stale-search-message",
+              role: "assistant",
+              content: [{ type: "tool_use", id: "stale-search", name: "ToolSearch", input: {} }],
+            },
+          },
+          "child-native-session",
+        );
+        yield* fake.emitNotification(
+          {
+            turnId: input.message.messageId,
+            type: "tool_result",
+            toolUseId: "stale-search",
+            content: "Error: Invalid ToolSearch input: query: Required",
+            isError: true,
+          },
+          "child-native-session",
+        );
+        yield* toolResult(
+          "valid-search",
+          "ToolSearch",
+          { query: "select:delegate_task" },
+          "Already loaded.",
+        );
+        yield* toolResult("non-matching-search", "ToolSearch", {}, "Already loaded.");
+        yield* toolResult(
+          "unknown-tool",
+          "UnknownTool",
+          {},
+          "Error: Invalid ToolSearch input: query: Required",
+        );
+        yield* fake.emitNotification({
+          type: "create_message",
+          message: {
+            id: "malformed-tool-call-notice",
+            role: "assistant",
+            content: [
+              { type: "tool_use", id: "malformed-tool-call", name: "ToolSearch", input: {} },
+            ],
+          },
+        });
+        yield* fake.emitNotification({
+          type: "tool_result",
+          toolUseId: "malformed-tool-call",
+          content: "Error: Invalid ToolSearch input: query: Required",
+          isError: false,
+        });
+        yield* malformedSearch("tool-search-one");
+        yield* fake.emitNotification({
+          type: "tool_result",
+          toolUseId: "tool-search-one",
+          content: "Error: Invalid ToolSearch input: query: Required",
+          isError: true,
+        });
+        assert.equal(
+          fake.requestedMethods.filter((method) => method === "droid.interrupt_session").length,
+          0,
+        );
+        yield* malformedSearch("tool-search-two");
+        const interrupt = yield* fake.takeRequest("droid.interrupt_session");
+        assert.isDefined(interrupt);
+        yield* fake.emitNotification({
+          type: "agent_turn_completed",
+          reason: "cancelled",
+          turnId: input.message.messageId,
+        });
+        yield* fake.emitNotification({
+          type: "create_message",
+          message: {
+            id: "after-break-message",
+            role: "assistant",
+            content: [
+              { type: "tool_use", id: "after-break-tool", name: "ShouldNotRun", input: {} },
+            ],
+          },
+        });
+        const result = yield* Deferred.await(terminal);
+        assert.equal(result.type === "turn.terminal" ? result.status : undefined, "failed");
+        assert.equal(
+          result.type === "turn.terminal" ? result.failure?.retryable : undefined,
+          false,
+        );
+        assert.equal(
+          result.type === "turn.terminal" ? result.failure?.message : undefined,
+          "Droid repeated a ToolSearch call without its required query. The turn was stopped.",
+        );
+        assert.equal(
+          fake.requestedMethods.filter((method) => method === "droid.interrupt_session").length,
+          1,
+        );
+        assert.equal(
+          fake.requestedMethods.filter((method) => method === "droid.add_user_message").length,
+          1,
+        );
+        assert.equal(
+          events.filter(
+            (event) =>
+              event.type === "provider_turn.updated" &&
+              event.providerTurn.status === "failed" &&
+              event.providerTurn.providerThreadId === providerThread.id &&
+              event.providerTurn.runAttemptId === input.attemptId,
+          ).length,
+          1,
+        );
+        assert.isFalse(
+          events.some(
+            (event) =>
+              event.type === "turn_item.updated" && event.turnItem.title === "ShouldNotRun",
+          ),
+        );
+        assert.equal(events.filter((event) => event.type === "turn.terminal").length, 1);
+      }),
+    ),
+  );
+
+  it.effect("waits for native completion after an interrupt acknowledgment", () =>
+    provide(
+      Effect.gen(function* () {
+        const fake = yield* makeFakeDroid({ holdInterruptSessionResponse: true });
+        const { runtime, input } = yield* open(fake);
+        const terminal = yield* Deferred.make<ProviderAdapter.ProviderAdapterV2Event>();
+        const events: ProviderAdapter.ProviderAdapterV2Event[] = [];
+        yield* runtime.events.pipe(
+          Stream.runForEach((event) => {
+            events.push(event);
+            return event.type === "turn.terminal" ? Deferred.succeed(terminal, event) : Effect.void;
+          }),
+          Effect.forkChild,
+        );
+        yield* runtime.startTurn(input);
+        yield* fake.takeRequest("droid.add_user_message");
+        for (const id of ["completion-wait-one", "completion-wait-two"]) {
+          yield* fake.emitNotification({
+            type: "create_message",
+            message: {
+              id: `${id}-message`,
+              role: "assistant",
+              content: [{ type: "tool_use", id, name: "ToolSearch", input: {} }],
+            },
+          });
+          yield* fake.emitNotification({
+            type: "tool_result",
+            toolUseId: id,
+            content: "Error: Invalid ToolSearch input: query: Required",
+            isError: true,
+          });
+        }
+        yield* fake.takeRequest("droid.interrupt_session");
+        assert.isFalse(yield* Deferred.isDone(terminal));
+        yield* fake.answerInterruptSession;
+        yield* Effect.yieldNow;
+        yield* Effect.yieldNow;
+        yield* TestClock.adjust("1 second");
+        assert.isFalse(yield* Deferred.isDone(terminal));
+        const blockedRestart = yield* runtime
+          .startTurn({
+            ...input,
+            runId: RunId.make("droid-blocked-restart-run"),
+            attemptId: RunAttemptId.make("droid-blocked-restart-attempt"),
+            message: {
+              ...input.message,
+              messageId: MessageId.make("droid-blocked-restart-message"),
+            },
+          })
+          .pipe(Effect.exit);
+        assert.isTrue(Exit.isFailure(blockedRestart));
+        assert.isFalse(yield* Deferred.isDone(terminal));
+        yield* fake.emitNotification({
+          type: "create_message",
+          message: {
+            id: "residual-after-interrupt-ack",
+            role: "assistant",
+            content: [{ type: "text", text: "must not be attributed" }],
+          },
+        });
+        yield* fake.emitNotification({
+          type: "agent_turn_completed",
+          reason: "cancelled",
+          turnId: "mismatched-turn-id",
+        });
+        assert.isFalse(yield* Deferred.isDone(terminal));
+        yield* fake.emitNotification({
+          type: "agent_turn_completed",
+          reason: "cancelled",
+          turnId: input.message.messageId,
+        });
+        const result = yield* Deferred.await(terminal);
+        assert.equal(result.type === "turn.terminal" ? result.status : undefined, "failed");
+        assert.equal(
+          result.type === "turn.terminal" ? result.threadDisposition : undefined,
+          "reusable",
+        );
+        assert.equal(
+          result.type === "turn.terminal" ? result.failure?.message : undefined,
+          "Droid repeated a ToolSearch call without its required query. The turn was stopped.",
+        );
+        assert.equal(
+          result.type === "turn.terminal" ? result.failure?.retryable : undefined,
+          false,
+        );
+        assert.equal(events.filter((event) => event.type === "turn.terminal").length, 1);
+        assert.isFalse(
+          events.some(
+            (event) =>
+              event.type === "message.updated" && event.message.text === "must not be attributed",
+          ),
+        );
+      }),
+    ),
+  );
+
+  it.effect("keeps the breaker as terminal owner when a restart is rejected", () =>
+    provide(
+      Effect.gen(function* () {
+        const f = yield* lifecycleFixture();
+        const childId = "43a7fb2d-79a1-4c49-a8d1-3b089cf7d202";
+        yield* f.register();
+        yield* f.fake.emitNotification({
+          type: "tool_result",
+          toolUseId: "lifecycle-task",
+          content: "Task launched in background.\nTask ID: 43a7fb2d-79a1-4c49-a8d1-3b089cf7d202",
+        });
+        yield* f.barrier;
+        for (const id of ["owner-restart-one", "owner-restart-two"]) {
+          yield* f.fake.emitNotification({
+            type: "create_message",
+            message: {
+              id: `${id}-message`,
+              role: "assistant",
+              content: [{ type: "tool_use", id, name: "ToolSearch", input: {} }],
+            },
+          });
+          yield* f.fake.emitNotification({
+            type: "tool_result",
+            toolUseId: id,
+            content: "Error: Invalid ToolSearch input: query: Required",
+            isError: true,
+          });
+        }
+        yield* f.fake.takeRequest("droid.interrupt_session");
+        const restart = yield* f.runtime
+          .startTurn({
+            ...f.input,
+            runId: RunId.make("droid-owner-restart-run"),
+            attemptId: RunAttemptId.make("droid-owner-restart-attempt"),
+            message: {
+              ...f.input.message,
+              messageId: MessageId.make("droid-owner-restart-message"),
+            },
+          })
+          .pipe(Effect.exit);
+        assert.isTrue(Exit.isFailure(restart));
+        const compactThread = f.runtime.compactThread;
+        assert.isDefined(compactThread);
+        if (compactThread === undefined) return;
+        const compact = yield* compactThread({
+          ...f.input,
+          runId: RunId.make("droid-owner-compact-run"),
+          attemptId: RunAttemptId.make("droid-owner-compact-attempt"),
+          message: {
+            ...f.input.message,
+            messageId: MessageId.make("droid-owner-compact-message"),
+          },
+        }).pipe(Effect.exit);
+        assert.isTrue(Exit.isFailure(compact));
+        yield* f.append(f.row({ type: "agent_turn_outcome", reason: "completed" }));
+        yield* f.complete("completed", childId, false);
+        yield* Deferred.await(f.finished);
+        assert.isFalse(yield* Deferred.isDone(f.terminal));
+        yield* f.fake.emitNotification({
+          type: "agent_turn_completed",
+          reason: "cancelled",
+          turnId: "wrong-turn-owner-restart",
+        });
+        assert.isFalse(yield* Deferred.isDone(f.terminal));
+        const activeTurn = (yield* f.runtime.readThreadSnapshot({
+          providerThread: f.providerThread,
+        })).providerTurns.find((turn) => turn.runAttemptId === f.input.attemptId);
+        assert.equal(activeTurn?.status, "running");
+        yield* f.fake.emitNotification({
+          type: "agent_turn_completed",
+          reason: "cancelled",
+          turnId: f.input.message.messageId,
+        });
+        const original = yield* Deferred.await(f.terminal);
+        assert.equal(
+          original.type === "turn.terminal" ? original.failure?.message : undefined,
+          "Droid repeated a ToolSearch call without its required query. The turn was stopped.",
+        );
+        assert.equal(
+          original.type === "turn.terminal" ? original.failure?.retryable : undefined,
+          false,
+        );
+        assert.equal(
+          original.type === "turn.terminal" ? original.threadDisposition : undefined,
+          "reusable",
+        );
+        assert.equal(f.events.filter((event) => event.type === "turn.terminal").length, 1);
+      }),
+    ),
+  );
+
+  it.effect("does not send a competing interrupt while the breaker owns stopping", () =>
+    provide(
+      Effect.gen(function* () {
+        const fake = yield* makeFakeDroid({ holdInterruptSessionResponse: true });
+        const { runtime, input, providerThread } = yield* open(fake);
+        const terminal = yield* Deferred.make<ProviderAdapter.ProviderAdapterV2Event>();
+        yield* runtime.events.pipe(
+          Stream.runForEach((event) =>
+            event.type === "turn.terminal" ? Deferred.succeed(terminal, event) : Effect.void,
+          ),
+          Effect.forkChild,
+        );
+        yield* runtime.startTurn(input);
+        yield* fake.takeRequest("droid.add_user_message");
+        for (const id of ["owner-interrupt-one", "owner-interrupt-two"]) {
+          yield* fake.emitNotification({
+            type: "create_message",
+            message: {
+              id: `${id}-message`,
+              role: "assistant",
+              content: [{ type: "tool_use", id, name: "ToolSearch", input: {} }],
+            },
+          });
+          yield* fake.emitNotification({
+            type: "tool_result",
+            toolUseId: id,
+            content: "Error: Invalid ToolSearch input: query: Required",
+            isError: true,
+          });
+        }
+        yield* fake.takeRequest("droid.interrupt_session");
+        const activeTurn = (yield* runtime.readThreadSnapshot({ providerThread })).providerTurns.at(
+          -1,
+        );
+        assert.isDefined(activeTurn);
+        yield* runtime.interruptTurn({
+          providerThread,
+          providerTurnId: activeTurn.id,
+        });
+        const steer = yield* runtime
+          .steerTurn({
+            threadId,
+            runId: input.runId,
+            providerThread,
+            providerTurnId: activeTurn.id,
+            message: {
+              ...input.message,
+              messageId: MessageId.make("droid-stopped-steer-message"),
+              text: "do not send this while stopping",
+            },
+          })
+          .pipe(Effect.exit);
+        assert.isTrue(Exit.isFailure(steer));
+        assert.equal(
+          fake.requestedMethods.filter((method) => method === "droid.interrupt_session").length,
+          1,
+        );
+        yield* fake.emitNotification({
+          type: "agent_turn_completed",
+          reason: "cancelled",
+          turnId: input.message.messageId,
+        });
+        yield* fake.answerInterruptSession;
+        const ended = yield* Deferred.await(terminal);
+        assert.equal(
+          ended.type === "turn.terminal" ? ended.failure?.message : undefined,
+          "Droid repeated a ToolSearch call without its required query. The turn was stopped.",
+        );
+        assert.equal(
+          fake.requestedMethods.filter((method) => method === "droid.interrupt_session").length,
+          1,
+        );
+      }),
+    ),
+  );
+
+  it.effect("keeps breaker failure identity when the notification stream fails", () =>
+    provide(
+      Effect.gen(function* () {
+        const fake = yield* makeFakeDroid();
+        const { runtime, input } = yield* open(fake);
+        const terminal = yield* Deferred.make<ProviderAdapter.ProviderAdapterV2Event>();
+        yield* runtime.events.pipe(
+          Stream.runForEach((event) =>
+            event.type === "turn.terminal" ? Deferred.succeed(terminal, event) : Effect.void,
+          ),
+          Effect.forkChild,
+        );
+        yield* runtime.startTurn(input);
+        yield* fake.takeRequest("droid.add_user_message");
+        for (const id of ["stream-owner-one", "stream-owner-two"]) {
+          yield* fake.emitNotification({
+            type: "create_message",
+            message: {
+              id: `${id}-message`,
+              role: "assistant",
+              content: [{ type: "tool_use", id, name: "ToolSearch", input: {} }],
+            },
+          });
+          yield* fake.emitNotification({
+            type: "tool_result",
+            toolUseId: id,
+            content: "Error: Invalid ToolSearch input: query: Required",
+            isError: true,
+          });
+        }
+        yield* fake.takeRequest("droid.interrupt_session");
+        yield* fake.closeStdout;
+        const result = yield* Deferred.await(terminal);
+        assert.equal(result.type === "turn.terminal" ? result.status : undefined, "failed");
+        assert.equal(
+          result.type === "turn.terminal" ? result.threadDisposition : undefined,
+          "broken",
+        );
+        assert.equal(
+          result.type === "turn.terminal" ? result.failure?.message : undefined,
+          "Droid repeated a ToolSearch call without its required query. The turn was stopped.",
+        );
+        assert.equal(
+          result.type === "turn.terminal" ? result.failure?.retryable : undefined,
+          false,
+        );
+        assert.equal(
+          fake.requestedMethods.filter((method) => method === "droid.interrupt_session").length,
+          1,
+        );
+      }),
+    ),
+  );
+
+  it.effect("breaks the connection when native completion never follows interrupt", () =>
+    provide(
+      Effect.gen(function* () {
+        const fake = yield* makeFakeDroid({ holdInterruptSessionResponse: true });
+        const { runtime, input } = yield* open(fake);
+        const terminal = yield* Deferred.make<ProviderAdapter.ProviderAdapterV2Event>();
+        yield* runtime.events.pipe(
+          Stream.runForEach((event) =>
+            event.type === "turn.terminal" ? Deferred.succeed(terminal, event) : Effect.void,
+          ),
+          Effect.forkChild,
+        );
+        yield* runtime.startTurn(input);
+        yield* fake.takeRequest("droid.add_user_message");
+        for (const id of ["missing-completion-one", "missing-completion-two"]) {
+          yield* fake.emitNotification({
+            type: "create_message",
+            message: {
+              id: `${id}-message`,
+              role: "assistant",
+              content: [{ type: "tool_use", id, name: "ToolSearch", input: {} }],
+            },
+          });
+          yield* fake.emitNotification({
+            type: "tool_result",
+            toolUseId: id,
+            content: "Error: Invalid ToolSearch input: query: Required",
+            isError: true,
+          });
+        }
+        yield* fake.takeRequest("droid.interrupt_session");
+        yield* fake.answerInterruptSession;
+        yield* TestClock.adjust("31 seconds");
+        const result = yield* Deferred.await(terminal);
+        assert.equal(result.type === "turn.terminal" ? result.status : undefined, "failed");
+        assert.equal(
+          result.type === "turn.terminal" ? result.threadDisposition : undefined,
+          "broken",
+        );
+        assert.equal(
+          result.type === "turn.terminal" ? result.failure?.message : undefined,
+          "Droid repeated a ToolSearch call without its required query. The turn was stopped.",
+        );
+        assert.equal(
+          result.type === "turn.terminal" ? result.failure?.retryable : undefined,
+          false,
+        );
+        assert.isTrue(fake.closed());
+      }),
+    ),
+  );
+
+  it.effect("counts each malformed ToolSearch call ID once across replayed pairs", () =>
+    provide(
+      Effect.gen(function* () {
+        const fake = yield* makeFakeDroid();
+        const { runtime, input } = yield* open(fake);
+        const terminal = yield* Deferred.make<ProviderAdapter.ProviderAdapterV2Event>();
+        yield* runtime.events.pipe(
+          Stream.runForEach((event) =>
+            event.type === "turn.terminal" ? Deferred.succeed(terminal, event) : Effect.void,
+          ),
+          Effect.forkChild,
+        );
+        yield* runtime.startTurn(input);
+        yield* fake.takeRequest("droid.add_user_message");
+        const malformedPair = (id: string) =>
+          Effect.gen(function* () {
+            yield* fake.emitNotification({
+              type: "create_message",
+              message: {
+                id: `${id}-message`,
+                role: "assistant",
+                content: [{ type: "tool_use", id, name: "ToolSearch", input: {} }],
+              },
+            });
+            yield* fake.emitNotification({
+              type: "tool_result",
+              toolUseId: id,
+              content: "Error: Invalid ToolSearch input: query: Required",
+              isError: true,
+            });
+          });
+        yield* malformedPair("replayed-failure");
+        yield* malformedPair("replayed-failure");
+        yield* fake.emitNotification({
+          type: "agent_turn_completed",
+          reason: "completed",
+          turnId: input.message.messageId,
+        });
+        const replayResult = yield* Deferred.await(terminal);
+        assert.equal(
+          fake.requestedMethods.filter((method) => method === "droid.interrupt_session").length,
+          0,
+        );
+        assert.equal(
+          replayResult.type === "turn.terminal" ? replayResult.status : undefined,
+          "completed",
+        );
+      }),
+    ),
+  );
+
+  it.effect("does not enroll old-turn-tagged call creation in the current turn", () =>
+    provide(
+      Effect.gen(function* () {
+        const fake = yield* makeFakeDroid();
+        const { runtime, input } = yield* open(fake);
+        const firstTerminal = yield* Deferred.make<ProviderAdapter.ProviderAdapterV2Event>();
+        const secondTerminal = yield* Deferred.make<ProviderAdapter.ProviderAdapterV2Event>();
+        const staleBarrier = yield* Deferred.make<void>();
+        const events: ProviderAdapter.ProviderAdapterV2Event[] = [];
+        let terminalCount = 0;
+        yield* runtime.events.pipe(
+          Stream.runForEach((event) => {
+            events.push(event);
+            if (
+              event.type === "turn_item.updated" &&
+              event.turnItem.type === "compaction" &&
+              event.turnItem.title === "Context compacted"
+            )
+              return Deferred.succeed(staleBarrier, undefined);
+            if (event.type !== "turn.terminal") return Effect.void;
+            terminalCount++;
+            return terminalCount === 1
+              ? Deferred.succeed(firstTerminal, event)
+              : Deferred.succeed(secondTerminal, event);
+          }),
+          Effect.forkChild,
+        );
+        yield* runtime.startTurn(input);
+        yield* fake.takeRequest("droid.add_user_message");
+        yield* fake.emitNotification({
+          type: "agent_turn_completed",
+          reason: "completed",
+          turnId: input.message.messageId,
+        });
+        yield* Deferred.await(firstTerminal);
+        const nextInput = {
+          ...input,
+          runId: RunId.make("droid-stale-call-run"),
+          attemptId: RunAttemptId.make("droid-stale-call-attempt"),
+          message: { ...input.message, messageId: MessageId.make("droid-stale-call-message") },
+        };
+        yield* runtime.startTurn(nextInput);
+        yield* fake.takeRequest("droid.add_user_message");
+        yield* fake.emitNotification({
+          type: "create_message",
+          turnId: input.message.messageId,
+          message: {
+            id: "old-tagged-call",
+            role: "assistant",
+            content: [{ type: "tool_use", id: "old-tagged-tool", name: "ToolSearch", input: {} }],
+          },
+        });
+        yield* fake.emitNotification({
+          type: "tool_result",
+          toolUseId: "old-tagged-tool",
+          content: "Error: Invalid ToolSearch input: query: Required",
+          isError: true,
+        });
+        yield* fake.emitNotification({ type: "session_compacted" });
+        yield* Deferred.await(staleBarrier);
+        const staleTools = events.filter(
+          (event) =>
+            event.type === "turn_item.updated" &&
+            event.turnItem.runId === nextInput.runId &&
+            event.turnItem.title === "ToolSearch",
+        );
+        assert.isEmpty(staleTools);
+        const addMalformed = (id: string) =>
+          Effect.gen(function* () {
+            yield* fake.emitNotification({
+              type: "create_message",
+              message: {
+                id: `${id}-message`,
+                role: "assistant",
+                content: [{ type: "tool_use", id, name: "ToolSearch", input: {} }],
+              },
+            });
+            yield* fake.emitNotification({
+              type: "tool_result",
+              toolUseId: id,
+              content: "Error: Invalid ToolSearch input: query: Required",
+              isError: true,
+            });
+          });
+        yield* addMalformed("current-failure-one");
+        yield* fake.emitRequest("current-failure-barrier", "droid.unknown_barrier", {});
+        yield* fake.takeReply;
+        assert.equal(
+          fake.requestedMethods.filter((method) => method === "droid.interrupt_session").length,
+          0,
+        );
+        yield* addMalformed("current-failure-two");
+        yield* fake.takeRequest("droid.interrupt_session");
+        yield* fake.emitNotification({
+          type: "agent_turn_completed",
+          reason: "cancelled",
+          turnId: nextInput.message.messageId,
+        });
+        const result = yield* Deferred.await(secondTerminal);
+        assert.equal(result.type === "turn.terminal" ? result.status : undefined, "failed");
+        assert.isTrue(
+          events.some(
+            (event) =>
+              event.type === "turn_item.updated" &&
+              event.turnItem.runId === nextInput.runId &&
+              event.turnItem.title === "ToolSearch",
+          ),
+        );
+      }),
+    ),
+  );
+
+  it.effect("fails closed and closes the captured connection when interrupt fails", () =>
+    provide(
+      Effect.gen(function* () {
+        const fake = yield* makeFakeDroid({ failInterruptSession: true });
+        const { runtime, input } = yield* open(fake);
+        const terminal = yield* Deferred.make<ProviderAdapter.ProviderAdapterV2Event>();
+        yield* runtime.events.pipe(
+          Stream.runForEach((event) =>
+            event.type === "turn.terminal" ? Deferred.succeed(terminal, event) : Effect.void,
+          ),
+          Effect.forkChild,
+        );
+        yield* runtime.startTurn(input);
+        yield* fake.takeRequest("droid.add_user_message");
+        for (const id of ["search-error-one", "search-error-two"]) {
+          yield* fake.emitNotification({
+            type: "create_message",
+            message: {
+              id: `${id}-message`,
+              role: "assistant",
+              content: [{ type: "tool_use", id, name: "ToolSearch", input: {} }],
+            },
+          });
+          yield* fake.emitNotification({
+            type: "tool_result",
+            toolUseId: id,
+            content: "Error: Invalid ToolSearch input: query: Required",
+            isError: true,
+          });
+        }
+        yield* fake.takeRequest("droid.interrupt_session");
+        const result = yield* Deferred.await(terminal);
+        assert.equal(result.type === "turn.terminal" ? result.status : undefined, "failed");
+        assert.equal(
+          result.type === "turn.terminal" ? result.threadDisposition : undefined,
+          "broken",
+        );
+        assert.equal(
+          result.type === "turn.terminal" ? result.failure?.message : undefined,
+          "Droid repeated a ToolSearch call without its required query. The turn was stopped.",
+        );
+        assert.equal(
+          result.type === "turn.terminal" ? result.failure?.retryable : undefined,
+          false,
+        );
+        assert.isTrue(fake.closed());
+      }),
+    ),
+  );
+
+  it.effect("applies the breaker to a native session loaded from an existing thread", () =>
+    provide(
+      Effect.gen(function* () {
+        const source = yield* open(yield* makeFakeDroid());
+        const fake = yield* makeFakeDroid();
+        const { runtime, input } = yield* open(
+          fake,
+          undefined,
+          policy.cwd,
+          undefined,
+          undefined,
+          {},
+          source.providerThread,
+        );
+        const terminal = yield* Deferred.make<ProviderAdapter.ProviderAdapterV2Event>();
+        yield* runtime.events.pipe(
+          Stream.runForEach((event) =>
+            event.type === "turn.terminal" ? Deferred.succeed(terminal, event) : Effect.void,
+          ),
+          Effect.forkChild,
+        );
+        yield* runtime.startTurn(input);
+        yield* fake.takeRequest("droid.add_user_message");
+        assert.isTrue(fake.requestedMethods.includes("droid.load_session"));
+        for (const id of ["loaded-search-one", "loaded-search-two"]) {
+          yield* fake.emitNotification({
+            type: "create_message",
+            message: {
+              id: `${id}-message`,
+              role: "assistant",
+              content: [{ type: "tool_use", id, name: "ToolSearch", input: {} }],
+            },
+          });
+          yield* fake.emitNotification({
+            type: "tool_result",
+            toolUseId: id,
+            content: "Error: Invalid ToolSearch input: query: Required",
+            isError: true,
+          });
+        }
+        yield* fake.takeRequest("droid.interrupt_session");
+        yield* fake.emitNotification({
+          type: "agent_turn_completed",
+          reason: "cancelled",
+          turnId: input.message.messageId,
+        });
+        yield* fake.emitNotification({
+          type: "agent_turn_completed",
+          reason: "cancelled",
+          turnId: input.message.messageId,
+        });
+        const result = yield* Deferred.await(terminal);
+        assert.equal(result.type === "turn.terminal" ? result.status : undefined, "failed");
       }),
     ),
   );

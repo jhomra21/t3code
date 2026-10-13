@@ -432,6 +432,10 @@ type ActiveTurn = {
   readonly blocks: Map<string, { text: string; reasoning: boolean }>;
   readonly tools: Map<string, typeof ToolUse.Type>;
   readonly toolProgress: Map<string, { timestamp: number; output: string }>;
+  readonly malformedToolSearchFailureIds: Set<string>;
+  readonly toolSearchCompletion: Deferred.Deferred<void>;
+  toolSearchStopped: boolean;
+  toolSearchFailure: ReturnType<typeof makeProviderFailure> | undefined;
   lastError: string | undefined;
   providerRetry:
     | {
@@ -1061,7 +1065,7 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
                   const pending = child.pendingCompletion;
                   if (child.task.status !== "running") return;
                   if (pending !== null) {
-                    yield* settleChild(child, pending.status, pending.result);
+                    yield* settleChild(child, pending.status, pending.result, work?.activityOffset);
                   } else if (work?.outcome !== undefined) {
                     yield* settleChild(
                       child,
@@ -1330,9 +1334,15 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
           broken = false,
           nativeTurnId?: string,
           failure?: ReturnType<typeof makeProviderFailure>,
+          expectedContext?: ActiveTurn,
         ) {
           const context = active;
-          if (context === null) return;
+          if (context === null || (expectedContext !== undefined && context !== expectedContext))
+            return;
+          if (context.toolSearchStopped && context.toolSearchFailure !== undefined) {
+            status = "failed";
+            failure = context.toolSearchFailure;
+          }
           const terminalFailure =
             failure ??
             makeProviderFailure({
@@ -1398,6 +1408,28 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
               failure: null,
               threadDisposition: broken ? "broken" : "reusable",
             });
+          }
+        });
+        const closeStoppedConnection = Effect.fnUntraced(function* (
+          context: ActiveTurn,
+          rpc: DroidRpc.DroidRpcConnection,
+        ) {
+          if (connection !== rpc || active !== context) return;
+          connection = null;
+          wakeGeneration++;
+          wakePending = false;
+          wakeBuffer = [];
+          yield* rpc.close;
+          if (connectionScope !== null) {
+            const failedScope = connectionScope;
+            connectionScope = null;
+            yield* Scope.close(failedScope, Exit.void);
+          }
+          for (const child of children.values()) {
+            if (child.task.status === "running" && child.pendingCompletion !== null) {
+              const pending = child.pendingCompletion;
+              yield* finishChild(child, pending.status, pending.result);
+            }
           }
         });
         const handleRequest = Effect.fnUntraced(function* (request: DroidRpc.DroidRpcRequest) {
@@ -1594,6 +1626,26 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
           const type = notification["type"];
           if (notice.sessionId !== undefined && nativeId !== null && notice.sessionId !== nativeId)
             return;
+          const explicitTurnId = stringField(notification, "turnId");
+          const isTaskCompletionNotice =
+            type === "create_message" &&
+            stringField(notification["message"], "id")?.startsWith("task-completion:") === true;
+          if (
+            active !== null &&
+            type === "create_message" &&
+            explicitTurnId !== undefined &&
+            explicitTurnId !== active.turn.nativeTurnRef?.nativeId &&
+            !isTaskCompletionNotice
+          )
+            return;
+          if (
+            active?.toolSearchStopped &&
+            type === "agent_turn_completed" &&
+            explicitTurnId === active.turn.nativeTurnRef?.nativeId
+          ) {
+            yield* Deferred.succeed(active.toolSearchCompletion, undefined);
+            return;
+          }
           if (type === "create_message") {
             const message = yield* decodeNotice(Message, notification["message"]);
             if (message === undefined) return;
@@ -1677,6 +1729,7 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
             nativeNotificationTurnId?.startsWith("task-completion:") && active.isWake
               ? (wakeOwner ?? active)
               : active;
+          if (context.toolSearchStopped && type !== "agent_turn_completed") return;
           if (type === "child_session_available") {
             const child = yield* decodeNotice(
               Schema.Struct({ ...Child.fields, toolUseId: Schema.String }),
@@ -1774,6 +1827,31 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
             if (toolUseId === undefined) return;
             const tool = context.tools.get(toolUseId);
             const output = stringField(notification, "content") ?? "";
+            const toolInput = tool === undefined ? Option.none() : fields(tool.input);
+            const notificationTurnId = stringField(notification, "turnId");
+            let toolSearchFailure: ReturnType<typeof makeProviderFailure> | undefined;
+            if (
+              !context.interrupted &&
+              (notificationTurnId === undefined ||
+                notificationTurnId === context.turn.nativeTurnRef?.nativeId) &&
+              tool?.name === "ToolSearch" &&
+              Option.isSome(toolInput) &&
+              Object.keys(toolInput.value).length === 0 &&
+              notification["isError"] === true &&
+              output === "Error: Invalid ToolSearch input: query: Required"
+            ) {
+              context.malformedToolSearchFailureIds.add(toolUseId);
+              if (context.malformedToolSearchFailureIds.size === 2) {
+                context.toolSearchStopped = true;
+                context.toolSearchFailure = makeProviderFailure({
+                  class: "provider_error",
+                  message:
+                    "Droid repeated a ToolSearch call without its required query. The turn was stopped.",
+                  retryable: false,
+                });
+                toolSearchFailure = context.toolSearchFailure;
+              }
+            }
             const patchResult =
               tool?.name === "ApplyPatch" ? decodeApplyPatchResult(output) : Option.none();
             if (tool !== undefined) {
@@ -1809,6 +1887,40 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
                   notification["isError"] === true ? "failed" : "completed",
                   output,
                 );
+              }
+            }
+            if (toolSearchFailure !== undefined) {
+              const rpc = connection;
+              if (rpc !== null) {
+                yield* Effect.gen(function* () {
+                  if (active !== context || connection !== rpc) return;
+                  yield* rpc.request("droid.interrupt_session", {}, "5 seconds");
+                  const completed = yield* Deferred.await(context.toolSearchCompletion).pipe(
+                    Effect.timeoutOption("30 seconds"),
+                  );
+                  if (Option.isSome(completed)) {
+                    yield* terminal("failed", false, undefined, toolSearchFailure, context);
+                    return;
+                  }
+                  yield* closeStoppedConnection(context, rpc);
+                  yield* terminal("failed", true, undefined, toolSearchFailure, context);
+                }).pipe(
+                  Effect.catchCause(() =>
+                    Effect.gen(function* () {
+                      yield* closeStoppedConnection(context, rpc);
+                      yield* terminal(
+                        context.interrupted ? "interrupted" : "failed",
+                        true,
+                        undefined,
+                        toolSearchFailure,
+                        context,
+                      );
+                    }),
+                  ),
+                  Effect.forkIn(sessionScope),
+                );
+              } else {
+                yield* terminal("failed", true, undefined, toolSearchFailure, context);
               }
             }
           } else if (type === "tool_progress_update") {
@@ -2088,14 +2200,25 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
               Effect.catchCause(() =>
                 Effect.gen(function* () {
                   if (connection !== rpc) return;
+                  const context = active;
                   connection = null;
                   yield* rpc.close;
                   wakePending = false;
                   wakeBuffer = [];
-                  yield* terminal("failed", true);
-                  for (const child of children.values()) {
-                    if (child.task.status === "running")
-                      yield* finishChild(child, "failed", "The parent Droid process exited.");
+                  if (context?.toolSearchStopped === true) {
+                    for (const child of children.values()) {
+                      if (child.task.status === "running" && child.pendingCompletion !== null) {
+                        const pending = child.pendingCompletion;
+                        yield* finishChild(child, pending.status, pending.result);
+                      }
+                    }
+                    yield* terminal("failed", true, undefined, context.toolSearchFailure, context);
+                  } else {
+                    yield* terminal("failed", true);
+                    for (const child of children.values()) {
+                      if (child.task.status === "running")
+                        yield* finishChild(child, "failed", "The parent Droid process exited.");
+                    }
                   }
                 }),
               ),
@@ -2234,6 +2357,10 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
             blocks: new Map(),
             tools: new Map(),
             toolProgress: new Map(),
+            malformedToolSearchFailureIds: new Set(),
+            toolSearchCompletion: yield* Deferred.make<void>(),
+            toolSearchStopped: false,
+            toolSearchFailure: undefined,
             lastError: undefined,
             providerRetry: undefined,
             interrupted: false,
@@ -2305,6 +2432,23 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
             messages: [...messages.values()],
             runtimeRequests: [...pending.values()].map((entry) => entry.request),
           } satisfies ProviderAdapter.ProviderAdapterV2ThreadSnapshot);
+        const startTurnWithFailureCleanup = (
+          input: ProviderAdapter.ProviderAdapterV2TurnInput,
+          compact = false,
+        ) =>
+          Effect.suspend(() => {
+            const previous = active;
+            return startTurn(input, compact).pipe(
+              Effect.onError(() =>
+                Effect.suspend(() => {
+                  const created = active;
+                  return created !== null && created !== previous && created.input === input
+                    ? terminal("failed", false, undefined, undefined, created)
+                    : Effect.void;
+                }),
+              ),
+            );
+          });
         yield* Effect.addFinalizer(() => closeConnection());
         return {
           instanceId: options.instanceId,
@@ -2358,8 +2502,7 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
               ),
             ),
           startTurn: (input) =>
-            startTurn(input).pipe(
-              Effect.onError(() => terminal("failed")),
+            startTurnWithFailureCleanup(input).pipe(
               Effect.mapError(
                 (cause) =>
                   new ProviderAdapter.ProviderAdapterTurnStartError({
@@ -2373,7 +2516,7 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
             ),
           steerTurn: (input) =>
             Effect.gen(function* () {
-              if (active?.turn.id !== input.providerTurnId)
+              if (active?.turn.id !== input.providerTurnId || active.toolSearchStopped)
                 return yield* protocolError("The requested Droid turn is not active");
               const rpc = yield* requireConnection();
               yield* rpc.request("droid.add_user_message", {
@@ -2401,6 +2544,7 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
               }
               if (active.turn.id !== input.providerTurnId)
                 return yield* protocolError("The requested Droid turn is not active");
+              if (active.toolSearchStopped) return;
               active.interrupted = true;
               const rpc = yield* requireConnection();
               yield* finishRequests();
@@ -2622,8 +2766,7 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
               }),
             ),
           compactThread: (input) =>
-            startTurn(input, true).pipe(
-              Effect.onError(() => terminal("failed")),
+            startTurnWithFailureCleanup(input, true).pipe(
               Effect.mapError(
                 (cause) =>
                   new ProviderAdapter.ProviderAdapterTurnStartError({
