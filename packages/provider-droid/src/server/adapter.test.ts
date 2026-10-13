@@ -67,8 +67,13 @@ const makeFakeDroid = (
     readonly contextBreakdown?: {
       readonly contextBudget: number;
       readonly usedTokens: number;
-      readonly lastCallCompactionTokens: number;
+      readonly lastCallCompactionTokens?: number;
     };
+    readonly contextBreakdownSequence?: ReadonlyArray<{
+      readonly contextBudget: number;
+      readonly usedTokens: number;
+      readonly lastCallCompactionTokens?: number;
+    }>;
     readonly holdAddUserMessageResponse?: boolean;
   } = {},
 ) =>
@@ -78,6 +83,7 @@ const makeFakeDroid = (
     const replies = yield* Queue.unbounded<RpcFrame>();
     const requestedMethods: string[] = [];
     let buffer = "";
+    let contextBreakdownIndex = 0;
     let closed = false;
     let heldAddUserMessage: RpcFrame | undefined;
     let heldAddUserMessageOnce = false;
@@ -113,7 +119,8 @@ const makeFakeDroid = (
                     heldAddUserMessage = frame;
                     heldAddUserMessageOnce = true;
                   } else {
-                    yield* emit(responseFor(frame, options));
+                    yield* emit(responseFor(frame, options, contextBreakdownIndex));
+                    if (frame.method === "droid.get_context_breakdown") contextBreakdownIndex += 1;
                   }
                 } else if (frame.type === "response") {
                   yield* Queue.offer(replies, frame);
@@ -171,9 +178,15 @@ const responseFor = (
     readonly contextBreakdown?: {
       readonly contextBudget: number;
       readonly usedTokens: number;
-      readonly lastCallCompactionTokens: number;
+      readonly lastCallCompactionTokens?: number;
     };
+    readonly contextBreakdownSequence?: ReadonlyArray<{
+      readonly contextBudget: number;
+      readonly usedTokens: number;
+      readonly lastCallCompactionTokens?: number;
+    }>;
   },
+  contextBreakdownIndex = 0,
 ) => ({
   type: "response",
   jsonrpc: "2.0",
@@ -183,7 +196,11 @@ const responseFor = (
     frame.method === "droid.initialize_session"
       ? { sessionId: "native-session", session: { messages: [] } }
       : frame.method === "droid.get_context_breakdown"
-        ? (options.contextBreakdown ?? {})
+        ? (options.contextBreakdownSequence?.[
+            Math.min(contextBreakdownIndex, (options.contextBreakdownSequence?.length ?? 1) - 1)
+          ] ??
+          options.contextBreakdown ??
+          {})
         : frame.method === "droid.compact_session"
           ? (options.compactSessionResult ?? {})
           : {},
@@ -504,7 +521,13 @@ describe("Droid adapter", () => {
   it.effect("folds Droid's repeated automatic compaction reports into one item", () =>
     provide(
       Effect.gen(function* () {
-        const fake = yield* makeFakeDroid();
+        const fake = yield* makeFakeDroid({
+          contextBreakdownSequence: [
+            { contextBudget: 300_000, usedTokens: 678_000, lastCallCompactionTokens: 281_000 },
+            { contextBudget: 300_000, usedTokens: 678_000, lastCallCompactionTokens: 281_000 },
+            { contextBudget: 300_000, usedTokens: 42_000, lastCallCompactionTokens: 20_000 },
+          ],
+        });
         const { runtime, input } = yield* open(fake);
         const events: Array<ProviderAdapter.ProviderAdapterV2Event> = [];
         const terminalSeen = yield* Deferred.make<void>();
@@ -547,6 +570,10 @@ describe("Droid adapter", () => {
         assert.lengthOf(new Set(compaction.map((item) => item.id)), 1);
         assert.equal(compaction.at(-1)?.status, "completed");
         assert.equal(compaction.at(-1)?.title, "Context compacted");
+        const snapshot = yield* runtime.readThreadSnapshot({
+          providerThread: input.providerThread,
+        });
+        assert.equal(snapshot.providerTurns.at(-1)?.tokenUsage?.usedTokens, 42_000);
         assert.isFalse(
           events.some(
             (event) =>

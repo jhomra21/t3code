@@ -507,6 +507,7 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
         const childByToolUseId = new Map<string, ChildState>();
         const reopenedChildren = new Set<string>();
         const contextWindows = new Map<string, number>();
+        let contextUsageAfterCompaction = false;
         const turns = new Map<string, OrchestrationV2ProviderTurn>();
         const messages = new Map<string, OrchestrationV2ConversationMessage>();
         const todoPlanIds = new Map<string, OrchestrationV2PlanArtifact["id"]>();
@@ -1350,6 +1351,7 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
         // `session_compacted` twice. One key per turn folds those, and the manual `/compact`
         // turn, into a single item.
         const emitCompaction = Effect.fnUntraced(function* (context: ActiveTurn) {
+          contextUsageAfterCompaction = true;
           const compactedAt = yield* DateTime.now;
           yield* emitItem({
             ...itemBase(context, `compaction:${context.turn.id}`, compactedAt),
@@ -1736,7 +1738,9 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
           if (Option.isNone(breakdown) || !(breakdown.value.contextBudget >= 1)) return undefined;
           const maxTokens = Math.floor(breakdown.value.contextBudget);
           if (settingsModel !== null) contextWindows.set(settingsModel, maxTokens);
-          const used = breakdown.value.lastCallCompactionTokens ?? breakdown.value.usedTokens;
+          const used = contextUsageAfterCompaction
+            ? breakdown.value.usedTokens
+            : (breakdown.value.lastCallCompactionTokens ?? breakdown.value.usedTokens);
           return { usedTokens: Math.max(0, Math.round(used)), maxTokens };
         });
         const applySettings = Effect.fnUntraced(function* (
@@ -2061,6 +2065,7 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
             return;
           }
           nativeNotificationTurnId = input.message.messageId;
+          contextUsageAfterCompaction = false;
           yield* rpc.request("droid.add_user_message", {
             messageId: input.message.messageId,
             text: messageText(input.message),
