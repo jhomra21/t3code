@@ -53,6 +53,7 @@ describe("Droid status", () => {
       const snapshot = yield* checkDroidProviderStatus(missingBinarySettings, {}, process.cwd());
       assert.isFalse(snapshot.installed);
       assert.include(snapshot.message ?? "", "not found");
+      assert.deepEqual(snapshot.skills, []);
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 

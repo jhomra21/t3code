@@ -22,6 +22,7 @@ import {
 } from "@t3tools/provider-core/server/snapshotProbe";
 import type { DroidSettings } from "../settings.ts";
 import { makeConnection } from "./rpc.ts";
+import { readDroidSkills } from "./skills.ts";
 import { parseDroidVersion } from "./maintenance.ts";
 import { mergeProviderInstanceEnvironment } from "@t3tools/provider-core/server/instanceEnvironment";
 
@@ -131,7 +132,8 @@ const discoverDroidModels = Effect.fn("discoverDroidModels")(function* (
   yield* rpc.notifications.pipe(Stream.runDrain, Effect.ignore, Effect.forkScoped);
   const response = yield* rpc.request("droid.list_models", {});
   const catalog = yield* decodeModels(response.result);
-  return modelsFromCatalog(catalog);
+  const skills = yield* readDroidSkills(rpc).pipe(Effect.result);
+  return { models: modelsFromCatalog(catalog), skills };
 });
 
 export const makePendingDroidProvider = Effect.fn("makePendingDroidProvider")(function* (
@@ -234,10 +236,14 @@ export const checkDroidProviderStatus = Effect.fn("checkDroidProviderStatus")(fu
     Effect.orElseSucceed(() => Option.none()),
   );
   const modelList = providerModelsFromSettings(
-    Option.isSome(models) ? models.value : [],
+    Option.isSome(models) ? models.value.models : [],
     settings.customModels,
     DEFAULT_CAPABILITIES,
   );
+  const skills =
+    Option.isSome(models) && models.value.skills._tag === "Success"
+      ? models.value.skills.success
+      : [];
   const message =
     auth === "unauthenticated"
       ? "Sign in with Factory Droid on this environment."
@@ -253,6 +259,7 @@ export const checkDroidProviderStatus = Effect.fn("checkDroidProviderStatus")(fu
       checkedAt: DateTime.formatIso(yield* DateTime.now),
       models: modelList,
       slashCommands: [COMPACT_SLASH_COMMAND],
+      skills,
       probe: {
         installed: version !== null,
         version,
