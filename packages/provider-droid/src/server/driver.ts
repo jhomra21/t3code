@@ -12,6 +12,7 @@ import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderS
 import * as ProviderContinuationRequests from "@t3tools/provider-core/server/ProviderContinuationRequests";
 import * as ProviderLatestVersions from "@t3tools/provider-core/server/ProviderLatestVersions";
 import { ProviderDriverError } from "@t3tools/provider-core/server/errors";
+import { discoverDroidSkills } from "./skills.ts";
 import {
   defaultProviderContinuationIdentity,
   type ProviderDriver,
@@ -143,6 +144,27 @@ export const DroidDriver: ProviderDriver<DroidSettings, DroidDriverEnv> = {
         modelCatalog: snapshot.getSnapshot.pipe(Effect.map((current) => current.models)),
         continuationRequests,
       });
+      const snapshotForCwd = (cwd: string) =>
+        !effectiveConfig.enabled
+          ? snapshot.getSnapshot
+          : Effect.all([
+              snapshot.getSnapshot,
+              discoverDroidSkills(effectiveConfig, processEnvironment, cwd).pipe(
+                Effect.scoped,
+                Effect.mapError(
+                  (cause) =>
+                    new ProviderDriverError({
+                      driver: DROID_PROVIDER,
+                      instanceId,
+                      detail: `Failed to discover Factory Droid skills for '${cwd}'`,
+                      cause,
+                    }),
+                ),
+              ),
+            ]).pipe(
+              Effect.map(([machineSnapshot, skills]) => ({ ...machineSnapshot, skills })),
+              Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+            );
       return {
         instanceId,
         driverKind: DROID_PROVIDER,
@@ -151,6 +173,7 @@ export const DroidDriver: ProviderDriver<DroidSettings, DroidDriverEnv> = {
         accentColor,
         enabled,
         snapshot,
+        snapshotForCwd,
         orchestrationAdapter,
         textGeneration: makeDroidTextGeneration(),
       } satisfies ProviderInstance;
