@@ -122,6 +122,28 @@ describe("Droid skills", () => {
     ]);
   });
 
+  it("lets a later project skill replace an earlier same-name user skill", () => {
+    expect(
+      mapDroidSkills({
+        skills: [
+          { name: "review", location: "user", filePath: "/home/.factory/skills/review/SKILL.md" },
+          {
+            name: "review",
+            location: "project",
+            filePath: "/repo/.factory/skills/review/SKILL.md",
+          },
+        ],
+      }),
+    ).toEqual([
+      {
+        name: "review",
+        path: "/repo/.factory/skills/review/SKILL.md",
+        scope: "project",
+        enabled: true,
+      },
+    ]);
+  });
+
   it("does not return names or entries without paths", () => {
     expect(
       mapDroidSkills({ skills: [{ name: "no-path" }, { filePath: "/tmp/SKILL.md" }] }),
