@@ -86,6 +86,20 @@ const VERIFIED_PROTOCOLS = new Set(["1.246.0", "1.252.0", "1.257.0"]);
 const SIGN_IN_LINK_INSTRUCTIONS = `\n\n<sign_in_links>
 When a tool result contains a sign-in or authorization link, such as one from ConnectApp, paste the full link in your reply to the user. Tool output is collapsed in T3 Code and the user may not see it.
 </sign_in_links>`;
+const DROID_EFFORT_BY_COMPLEXITY = new Map([
+  ["light", "low"],
+  ["medium", "medium"],
+  ["heavy", "high"],
+]);
+const droidChildModelSelection = (
+  instanceId: ProviderInstanceId,
+  model: string,
+  effort: string | undefined,
+): ModelSelection => ({
+  instanceId,
+  model,
+  ...(effort === undefined ? {} : { options: [{ id: "reasoning_effort", value: effort }] }),
+});
 // Droid's native Task children are provider-owned: T3 cannot stop or recover them, so
 // the only subagent path Droid is given is T3's delegate_task. Droid also lists MCP tools
 // as deferred (its MCP tool search), so they must be loaded once before the first call.
@@ -365,8 +379,9 @@ const decode = <A, I>(schema: Schema.Codec<A, I>, value: unknown) =>
 const isRollbackThreadError = Schema.is(ProviderAdapter.ProviderAdapterRollbackThreadError);
 /**
  * `contextBudget` is the window Droid compacts against. `lastCallCompactionTokens` is the size
- * of the last model call, which is what compaction measures; `usedTokens` is a text estimate of
- * the whole transcript and counts image base64 as text, so it can be more than twice as large.
+ * of the last model call, which is what compaction measures, but it is stale after compaction
+ * until the next model call. Until then, `usedTokens` estimates the whole transcript and counts
+ * image base64 as text, so it can be more than twice as large.
  */
 const decodeContextBreakdown = Schema.decodeUnknownEffect(
   Schema.Struct({
@@ -554,6 +569,7 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
         let wakeOwner: ActiveTurn | null = null;
         let nativeNotificationTurnId: string | null = null;
         let settingsModel: string | null = null;
+        let contextUsageAfterCompaction = false;
 
         const emit = (event: ProviderAdapter.ProviderAdapterV2Event) =>
           Queue.offer(events, event).pipe(Effect.asVoid);
@@ -969,7 +985,16 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
           if (childThreadId === null) return;
           const updatedAt = yield* DateTime.now;
           if (work.model !== undefined && work.model !== child.task.model) {
-            child.task = { ...child.task, model: work.model, updatedAt };
+            child.task = {
+              ...child.task,
+              model: work.model,
+              modelSelection: droidChildModelSelection(
+                options.instanceId,
+                work.model,
+                child.task.effort,
+              ),
+              updatedAt,
+            };
             yield* emitChild(child);
           }
           for (const step of work.steps) {
@@ -1137,8 +1162,10 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
             completedAt: yield* DateTime.now,
             updatedAt: yield* DateTime.now,
           };
-          yield* emitChild(child);
+          // The roster clear goes first: the consumer releases ingestion on the last settled
+          // child event, so a roster update queued after it can be dropped.
           yield* syncChildRoster();
+          yield* emitChild(child);
         });
         const finishChild = Effect.fnUntraced(function* (
           child: ChildState,
@@ -1177,6 +1204,13 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
           });
           const parentNodeId = context.input.rootNodeId;
           const tool = context.tools.get(notice.toolUseId);
+          const complexity = stringField(tool?.input, "complexity");
+          const effort =
+            (complexity === undefined ? undefined : DROID_EFFORT_BY_COMPLEXITY.get(complexity)) ??
+            existing?.task.effort;
+          const model =
+            existing?.task.model ??
+            readDroidDefinitionModel(options.environment, notice.subagentType);
           const childThreadId = ids.derive.threadFromProviderThread({
             driver: DROID_PROVIDER,
             providerInstanceId: options.instanceId,
@@ -1206,10 +1240,13 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
                   notice.description ??
                   ""),
             title: notice.description ?? notice.subagentType ?? null,
-            model:
-              existing?.task.model ??
-              readDroidDefinitionModel(options.environment, notice.subagentType) ??
-              null,
+            model: model ?? null,
+            modelSelection: droidChildModelSelection(
+              options.instanceId,
+              model ?? context.input.modelSelection.model,
+              effort,
+            ),
+            ...(effort === undefined ? {} : { effort }),
             status: "running",
             result: null,
             startedAt:

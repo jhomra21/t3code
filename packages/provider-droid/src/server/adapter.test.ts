@@ -99,12 +99,12 @@ const makeFakeDroid = (
     const replies = yield* Queue.unbounded<RpcFrame>();
     const requestedMethods: string[] = [];
     let buffer = "";
-    let contextBreakdownIndex = 0;
     let closed = false;
     let heldAddUserMessage: RpcFrame | undefined;
     let heldAddUserMessageOnce = false;
     let heldInterruptSession: RpcFrame | undefined;
     let heldInterruptSessionOnce = false;
+    let contextBreakdownIndex = 0;
     const emit = (frame: unknown) =>
       Queue.offer(stdout, new TextEncoder().encode(`${encodeJson(frame)}\n`)).pipe(Effect.asVoid);
     const spawner = ChildProcessSpawner.make(() =>
@@ -129,6 +129,17 @@ const makeFakeDroid = (
                 if (frame.type === "request" && frame.id !== undefined) {
                   if (frame.method !== undefined) requestedMethods.push(frame.method);
                   yield* Queue.offer(requests, frame);
+                  const contextBreakdown =
+                    frame.method === "droid.get_context_breakdown"
+                      ? options.contextBreakdownSequence?.[
+                          Math.min(
+                            contextBreakdownIndex++,
+                            (options.contextBreakdownSequence?.length ?? 1) - 1,
+                          )
+                        ]
+                      : undefined;
+                  const responseOptions =
+                    contextBreakdown === undefined ? options : { ...options, contextBreakdown };
                   if (
                     options.holdAddUserMessageResponse &&
                     !heldAddUserMessageOnce &&
@@ -144,8 +155,7 @@ const makeFakeDroid = (
                     heldInterruptSession = frame;
                     heldInterruptSessionOnce = true;
                   } else {
-                    yield* emit(responseFor(frame, options, contextBreakdownIndex));
-                    if (frame.method === "droid.get_context_breakdown") contextBreakdownIndex += 1;
+                    yield* emit(responseFor(frame, responseOptions));
                   }
                 } else if (frame.type === "response") {
                   yield* Queue.offer(replies, frame);
@@ -471,6 +481,7 @@ const lifecycleFixture = Effect.fnUntraced(function* (
   const events: ProviderAdapter.ProviderAdapterV2Event[] = [];
   const ready = yield* Deferred.make<void>();
   const finished = yield* Deferred.make<void>();
+  const childModelReady = yield* Deferred.make<void>();
   const terminal = yield* Deferred.make<ProviderAdapter.ProviderAdapterV2Event>();
   let notificationBarrier: Deferred.Deferred<void> | undefined;
   let terminalBarrier: Deferred.Deferred<ProviderAdapter.ProviderAdapterV2Event> | undefined;
@@ -495,6 +506,12 @@ const lifecycleFixture = Effect.fnUntraced(function* (
               ]
             : []),
         ]);
+      if (
+        event.type === "subagent.updated" &&
+        event.subagent.nativeTaskRef?.nativeId === childId &&
+        event.subagent.model !== null
+      )
+        return Deferred.succeed(childModelReady, undefined);
       if (event.type === "turn.terminal")
         return Effect.all([
           Deferred.succeed(terminal, event),
@@ -578,6 +595,7 @@ const lifecycleFixture = Effect.fnUntraced(function* (
     barrier,
     status,
     finished,
+    childModelReady,
     terminal,
     waitForTerminal: (deferred: Deferred.Deferred<ProviderAdapter.ProviderAdapterV2Event>) => {
       terminalBarrier = deferred;
@@ -590,6 +608,62 @@ const lifecycleFixture = Effect.fnUntraced(function* (
 });
 
 describe("Droid adapter", () => {
+  it.effect("projects reported native child effort without inheriting parent options", () =>
+    provide(
+      Effect.gen(function* () {
+        const f = yield* lifecycleFixture(false, false, false, false, false, false);
+        yield* Effect.promise(() =>
+          NodeFSP.writeFile(f.file.replace(/\.jsonl$/u, ".settings.json"), "{}"),
+        );
+        yield* f.fake.emitNotification({
+          type: "create_message",
+          message: {
+            id: "effort-parent",
+            role: "assistant",
+            content: [
+              {
+                type: "tool_use",
+                id: "lifecycle-task",
+                name: "Task",
+                input: { description: "Lifecycle child", prompt: "Do work", complexity: "medium" },
+              },
+            ],
+          },
+        });
+        yield* f.barrier;
+        yield* f.register();
+        assert.equal(f.status()?.model, null);
+        assert.equal(f.status()?.modelSelection?.model, f.input.modelSelection.model);
+        assert.deepEqual(f.status()?.modelSelection?.options, [
+          { id: "reasoning_effort", value: "medium" },
+        ]);
+        yield* Effect.promise(() =>
+          NodeFSP.writeFile(
+            f.file.replace(/\.jsonl$/u, ".settings.json"),
+            '{"model":"custom:GPT-6 Luna-12"}',
+          ),
+        );
+        f.listeners[0]!(
+          "change",
+          f.file
+            .replace(/\.jsonl$/u, ".settings.json")
+            .split("/")
+            .at(-1)!,
+        );
+        yield* Deferred.await(f.childModelReady);
+
+        const task = f.status();
+        assert.isDefined(task);
+        assert.equal(task.model, "GPT-6 Luna");
+        assert.equal(task.effort, "medium");
+        assert.equal(task.modelSelection?.model, "GPT-6 Luna");
+        assert.deepEqual(task.modelSelection?.options, [
+          { id: "reasoning_effort", value: "medium" },
+        ]);
+      }),
+    ),
+  );
+
   it.effect.each(["completed", "failed"])(
     "drains final child disk rows on a %s Task result when the watch callback is suppressed",
     (status) =>
@@ -692,6 +766,58 @@ describe("Droid adapter", () => {
           assert.equal(f.watchers[0]!.listenerCount("error"), 0);
         }),
       ),
+  );
+
+  it.effect("clears the parent roster before a transcript-only background child completion", () =>
+    provide(
+      Effect.gen(function* () {
+        const childId = "43a7fb2d-79a1-4c49-a8d1-3b089cf7d202";
+        const f = yield* lifecycleFixture();
+        yield* f.fake.emitNotification({
+          type: "tool_result",
+          toolUseId: "lifecycle-task",
+          content: "Task launched in background.\nTask ID: lifecycle-task",
+        });
+        yield* f.barrier;
+        yield* f.fake.emitNotification({
+          type: "agent_turn_completed",
+          reason: "completed",
+          turnId: f.input.message.messageId,
+        });
+        // No parent notification: only the child's transcript outcome settles it.
+        yield* f.append(
+          f.text("late", "late text") + f.row({ type: "agent_turn_outcome", reason: "completed" }),
+        );
+        f.listeners[0]!("change", f.file.split("/").at(-1)!);
+        yield* Deferred.await(f.finished);
+        yield* Deferred.await(f.terminal);
+        const rosterAdded = f.events.findIndex(
+          (event) =>
+            event.type === "provider_thread.updated" &&
+            (event.providerThread.pendingBackgroundTasks ?? []).some(
+              (task) => task.taskId === childId,
+            ),
+        );
+        const rosterCleared = f.events.findIndex(
+          (event, index) =>
+            index > rosterAdded &&
+            event.type === "provider_thread.updated" &&
+            event.providerThread.pendingBackgroundTasks?.length === 0,
+        );
+        const childCompleted = f.events.findIndex(
+          (event) =>
+            event.type === "subagent.updated" &&
+            event.subagent.nativeTaskRef?.nativeId === childId &&
+            event.subagent.status === "completed",
+        );
+        assert.isAbove(rosterAdded, -1);
+        assert.isAbove(childCompleted, -1);
+        // The consumer releases ingestion on the last settled child event, so the
+        // roster clear must already be queued before that event.
+        assert.isAbove(rosterCleared, rosterAdded);
+        assert.isBelow(rosterCleared, childCompleted);
+      }),
+    ),
   );
 
   it.effect("preserves the drained activity offset when watcher failure settles parked work", () =>
@@ -2297,6 +2423,166 @@ describe("Droid adapter", () => {
     ),
   );
 
+  it.effect("persists compacted transcript usage after a manual compaction", () =>
+    provide(
+      Effect.gen(function* () {
+        const fake = yield* makeFakeDroid({
+          compactSessionResult: { newSessionId: "compacted-session", removedCount: 1_097 },
+          contextBreakdown: {
+            contextBudget: 300_000,
+            usedTokens: 18_000,
+            lastCallCompactionTokens: 225_204,
+          },
+        });
+        const { runtime, input } = yield* open(fake);
+        const terminalSeen = yield* Deferred.make<void>();
+        yield* runtime.events.pipe(
+          Stream.runForEach((event) =>
+            event.type === "turn.terminal"
+              ? Deferred.succeed(terminalSeen, undefined)
+              : Effect.void,
+          ),
+          Effect.forkChild,
+        );
+
+        yield* runtime.compactThread?.(input) ?? Effect.void;
+        yield* Deferred.await(terminalSeen);
+        const snapshot = yield* runtime.readThreadSnapshot({
+          providerThread: input.providerThread,
+        });
+
+        assert.equal(snapshot.providerTurns.at(-1)?.tokenUsage?.usedTokens, 18_000);
+        assert.equal(snapshot.providerTurns.at(-1)?.tokenUsage?.maxTokens, 300_000);
+      }),
+    ),
+  );
+
+  it.effect("keeps ordinary-turn usage based on last-call tokens", () =>
+    provide(
+      Effect.gen(function* () {
+        const fake = yield* makeFakeDroid({
+          contextBreakdown: {
+            contextBudget: 300_000,
+            usedTokens: 12_000,
+            lastCallCompactionTokens: 40_000,
+          },
+        });
+        const { runtime, input } = yield* open(fake);
+        const terminalSeen = yield* Deferred.make<void>();
+        yield* runtime.events.pipe(
+          Stream.runForEach((event) =>
+            event.type === "turn.terminal"
+              ? Deferred.succeed(terminalSeen, undefined)
+              : Effect.void,
+          ),
+          Effect.forkChild,
+        );
+
+        yield* runtime.startTurn(input);
+        yield* fake.takeRequest("droid.add_user_message");
+        yield* fake.emitNotification({
+          type: "agent_turn_completed",
+          reason: "completed",
+          turnId: input.message.messageId,
+        });
+        yield* Deferred.await(terminalSeen);
+        const snapshot = yield* runtime.readThreadSnapshot({
+          providerThread: input.providerThread,
+        });
+
+        assert.equal(snapshot.providerTurns.at(-1)?.tokenUsage?.usedTokens, 40_000);
+        assert.equal(snapshot.providerTurns.at(-1)?.tokenUsage?.maxTokens, 300_000);
+      }),
+    ),
+  );
+
+  it.effect("uses fresh last-call usage on the turn after compaction", () =>
+    provide(
+      Effect.gen(function* () {
+        const fake = yield* makeFakeDroid({
+          contextBreakdownSequence: [
+            {
+              contextBudget: 300_000,
+              usedTokens: 18_000,
+              lastCallCompactionTokens: 225_204,
+            },
+            {
+              contextBudget: 300_000,
+              usedTokens: 18_000,
+              lastCallCompactionTokens: 225_204,
+            },
+            {
+              contextBudget: 300_000,
+              usedTokens: 18_000,
+              lastCallCompactionTokens: 225_204,
+            },
+            {
+              contextBudget: 300_000,
+              usedTokens: 60_000,
+              lastCallCompactionTokens: 41_000,
+            },
+          ],
+        });
+        const { runtime, input } = yield* open(fake);
+        const firstTerminal = yield* Deferred.make<void>();
+        const secondTerminal = yield* Deferred.make<void>();
+        let terminalCount = 0;
+        yield* runtime.events.pipe(
+          Stream.runForEach((event) => {
+            if (event.type !== "turn.terminal") return Effect.void;
+            terminalCount += 1;
+            return terminalCount === 1
+              ? Deferred.succeed(firstTerminal, undefined)
+              : Deferred.succeed(secondTerminal, undefined);
+          }),
+          Effect.forkChild,
+        );
+
+        yield* runtime.startTurn(input);
+        yield* fake.takeRequest("droid.initialize_session");
+        yield* fake.takeRequest("droid.get_context_breakdown");
+        yield* fake.takeRequest("droid.get_context_breakdown");
+        yield* fake.takeRequest("droid.add_user_message");
+        yield* fake.emitNotification({
+          type: "session_compacted",
+          summaryId: "summary-1",
+          removedCount: 1_097,
+          visibleBoundaryMessageId: null,
+        });
+        yield* fake.emitNotification({
+          type: "agent_turn_completed",
+          reason: "completed",
+          turnId: input.message.messageId,
+        });
+        yield* Deferred.await(firstTerminal);
+
+        const nextInput = {
+          ...input,
+          runId: RunId.make("droid-after-compaction-run"),
+          attemptId: RunAttemptId.make("droid-after-compaction-attempt"),
+          message: {
+            ...input.message,
+            messageId: MessageId.make("droid-after-compaction-message"),
+          },
+        };
+        yield* runtime.startTurn(nextInput);
+        yield* fake.takeRequest("droid.add_user_message");
+        yield* fake.emitNotification({
+          type: "agent_turn_completed",
+          reason: "completed",
+          turnId: nextInput.message.messageId,
+        });
+        yield* Deferred.await(secondTerminal);
+        const snapshot = yield* runtime.readThreadSnapshot({
+          providerThread: input.providerThread,
+        });
+
+        assert.equal(snapshot.providerTurns.at(-1)?.tokenUsage?.usedTokens, 41_000);
+        assert.equal(snapshot.providerTurns.at(-1)?.tokenUsage?.maxTokens, 300_000);
+      }),
+    ),
+  );
+
   it.effect("folds Droid's repeated automatic compaction reports into one item", () =>
     provide(
       Effect.gen(function* () {
@@ -2360,6 +2646,54 @@ describe("Droid adapter", () => {
               event.providerThread.nativeThreadRef?.nativeId !== "native-session",
           ),
         );
+      }),
+    ),
+  );
+
+  it.effect("persists current transcript usage after automatic mid-turn compaction", () =>
+    provide(
+      Effect.gen(function* () {
+        const fake = yield* makeFakeDroid({
+          contextBreakdown: {
+            contextBudget: 300_000,
+            usedTokens: 18_000,
+            lastCallCompactionTokens: 225_204,
+          },
+        });
+        const { runtime, input } = yield* open(fake);
+        const terminalSeen = yield* Deferred.make<void>();
+        yield* runtime.events.pipe(
+          Stream.runForEach((event) =>
+            event.type === "turn.terminal"
+              ? Deferred.succeed(terminalSeen, undefined)
+              : Effect.void,
+          ),
+          Effect.forkChild,
+        );
+
+        yield* runtime.startTurn(input);
+        yield* fake.takeRequest("droid.initialize_session");
+        yield* fake.takeRequest("droid.get_context_breakdown");
+        yield* fake.takeRequest("droid.get_context_breakdown");
+        yield* fake.takeRequest("droid.add_user_message");
+        yield* fake.emitNotification({
+          type: "session_compacted",
+          summaryId: "summary-1",
+          removedCount: 1_097,
+          visibleBoundaryMessageId: null,
+        });
+        yield* fake.emitNotification({
+          type: "agent_turn_completed",
+          reason: "completed",
+          turnId: input.message.messageId,
+        });
+        yield* Deferred.await(terminalSeen);
+        const snapshot = yield* runtime.readThreadSnapshot({
+          providerThread: input.providerThread,
+        });
+
+        assert.equal(snapshot.providerTurns.at(-1)?.tokenUsage?.usedTokens, 18_000);
+        assert.equal(snapshot.providerTurns.at(-1)?.tokenUsage?.maxTokens, 300_000);
       }),
     ),
   );
@@ -3659,6 +3993,43 @@ describe("Droid adapter", () => {
         });
         assert.equal(snapshot.providerTurns.at(-1)?.status, "completed");
         assert.isUndefined(snapshot.providerTurns.at(-1)?.tokenUsage);
+      }),
+    ),
+  );
+
+  it.effect("uses transcript usage when last-call usage is absent", () =>
+    provide(
+      Effect.gen(function* () {
+        const fake = yield* makeFakeDroid({
+          contextBreakdown: { contextBudget: 300_000, usedTokens: 18_000 },
+        });
+        const { runtime, input } = yield* open(fake);
+        const terminalSeen = yield* Deferred.make<void>();
+        yield* runtime.events.pipe(
+          Stream.runForEach((event) =>
+            event.type === "turn.terminal"
+              ? Deferred.succeed(terminalSeen, undefined)
+              : Effect.void,
+          ),
+          Effect.forkChild,
+        );
+        yield* runtime.startTurn(input);
+        yield* fake.takeRequest("droid.initialize_session");
+        yield* fake.takeRequest("droid.get_context_breakdown");
+        yield* fake.takeRequest("droid.get_context_breakdown");
+        yield* fake.takeRequest("droid.add_user_message");
+        yield* fake.emitNotification({
+          type: "agent_turn_completed",
+          reason: "completed",
+          turnId: input.message.messageId,
+        });
+        yield* Deferred.await(terminalSeen);
+        const snapshot = yield* runtime.readThreadSnapshot({
+          providerThread: input.providerThread,
+        });
+
+        assert.equal(snapshot.providerTurns.at(-1)?.tokenUsage?.usedTokens, 18_000);
+        assert.equal(snapshot.providerTurns.at(-1)?.tokenUsage?.maxTokens, 300_000);
       }),
     ),
   );
