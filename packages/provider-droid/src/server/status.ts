@@ -6,7 +6,9 @@ import {
 import { createModelCapabilities } from "@t3tools/shared/model";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
+import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as ChildProcess from "effect/process/ChildProcess";
@@ -103,9 +105,30 @@ export const makeDroidInstanceEnvironment = Effect.fn(function* (
 const discoverDroidModels = Effect.fn("discoverDroidModels")(function* (
   binary: string,
   environment: NodeJS.ProcessEnv,
-  cwd: string,
 ) {
-  const rpc = yield* makeConnection({ command: binary, env: environment, cwd });
+  const fileSystem = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-droid-status-" });
+  const isolatedCwd = path.join(root, "cwd");
+  const isolatedHome = path.join(root, "home");
+  const factoryHome = path.join(root, "factory-home");
+  yield* fileSystem.makeDirectory(isolatedCwd);
+  yield* fileSystem.makeDirectory(isolatedHome);
+  yield* fileSystem.makeDirectory(factoryHome);
+  const { FACTORY_RUNTIME_SETTINGS_PATH: _runtimeSettingsPath, ...isolatedEnvironment } =
+    environment;
+  // Droid 0.236.0's droid.list_models did not start hooks or create sessions, but did
+  // launch project MCP servers. Keep discovery off the project path and user Factory home.
+  const rpc = yield* makeConnection({
+    command: binary,
+    env: {
+      ...isolatedEnvironment,
+      HOME: isolatedHome,
+      FACTORY_HOME_OVERRIDE: factoryHome,
+    },
+    cwd: isolatedCwd,
+    closeSession: false,
+  });
   yield* rpc.notifications.pipe(Stream.runDrain, Effect.ignore, Effect.forkScoped);
   const response = yield* rpc.request("droid.list_models", {});
   const catalog = yield* decodeModels(response.result);
@@ -206,7 +229,7 @@ export const checkDroidProviderStatus = Effect.fn("checkDroidProviderStatus")(fu
       : authResult?.status === "fail"
         ? "unauthenticated"
         : "unknown";
-  const models = yield* discoverDroidModels(binary, env, cwd).pipe(
+  const models = yield* discoverDroidModels(binary, env).pipe(
     Effect.scoped,
     Effect.timeoutOption("10 seconds"),
     Effect.orElseSucceed(() => Option.none()),

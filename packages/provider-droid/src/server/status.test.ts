@@ -1,7 +1,10 @@
 import { assert, describe, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
+import * as NodeOS from "node:os";
 
 import { DroidSettings } from "../settings.ts";
 import {
@@ -43,6 +46,91 @@ describe("Droid status", () => {
       const snapshot = yield* checkDroidProviderStatus(missingBinarySettings, {}, process.cwd());
       assert.isFalse(snapshot.installed);
       assert.include(snapshot.message ?? "", "not found");
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("isolates model discovery from project hooks and MCP configuration", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const directory = yield* fileSystem.makeTempDirectoryScoped({
+        directory: NodeOS.tmpdir(),
+        prefix: "droid-status-probe-",
+      });
+      const binary = path.join(directory, "droid");
+      const calls = path.join(directory, "calls.jsonl");
+      yield* fileSystem.writeFileString(
+        binary,
+        `#!${process.execPath}
+const fs = require("node:fs");
+const args = process.argv.slice(2);
+fs.appendFileSync(process.env.DROID_STATUS_CALLS, JSON.stringify({
+  args,
+  cwd: process.cwd(),
+  home: process.env.HOME,
+  factoryHome: process.env.FACTORY_HOME_OVERRIDE,
+  runtimeSettingsPath: process.env.FACTORY_RUNTIME_SETTINGS_PATH
+}) + "\\n");
+if (args[0] === "--version") {
+  console.log("0.236.0");
+} else if (args[0] === "doctor") {
+  console.log(JSON.stringify({ results: [{ id: "auth.verify", status: "pass" }] }));
+} else {
+  let input = "";
+  process.stdin.setEncoding("utf8");
+  process.stdin.on("data", (chunk) => {
+    input += chunk;
+    while (input.includes("\\n")) {
+      const index = input.indexOf("\\n");
+      const request = JSON.parse(input.slice(0, index));
+      input = input.slice(index + 1);
+      if (request.method !== "droid.close_session") {
+        fs.appendFileSync(process.env.DROID_STATUS_CALLS, JSON.stringify({ method: request.method }) + "\\n");
+      }
+      const result = request.method === "droid.list_models"
+        ? { models: [] }
+        : {};
+      process.stdout.write(JSON.stringify({
+        jsonrpc: "2.0",
+        type: "response",
+        id: request.id,
+        result
+      }) + "\\n");
+      if (request.method === "droid.close_session") process.exit(0);
+    }
+  });
+}
+`,
+      );
+      yield* fileSystem.chmod(binary, 0o755);
+      const snapshot = yield* checkDroidProviderStatus(
+        { ...missingBinarySettings, binaryPath: binary },
+        {
+          DROID_STATUS_CALLS: calls,
+          FACTORY_RUNTIME_SETTINGS_PATH: "/project/settings.json",
+        },
+        process.cwd(),
+      );
+      const invocations = (yield* fileSystem.readFileString(calls))
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      const modelDiscovery = invocations.find(
+        (invocation) => Array.isArray(invocation.args) && invocation.args[0] === "exec",
+      );
+      const requests = invocations
+        .filter((invocation) => typeof invocation.method === "string")
+        .map((invocation) => invocation.method);
+      assert.isTrue(snapshot.installed);
+      assert.equal(snapshot.auth.status, "authenticated");
+      assert.deepEqual(requests, ["droid.list_models"]);
+      assert.isString(modelDiscovery?.cwd);
+      assert.notEqual(modelDiscovery?.cwd, process.cwd());
+      assert.isString(modelDiscovery?.home);
+      assert.notEqual(modelDiscovery?.home, process.env.HOME);
+      assert.isString(modelDiscovery?.factoryHome);
+      assert.notEqual(modelDiscovery?.factoryHome, process.env.HOME);
+      assert.isUndefined(modelDiscovery?.runtimeSettingsPath);
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 
