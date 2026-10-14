@@ -2,7 +2,8 @@ import * as Schema from "effect/Schema";
 import { IsoDateTime, NonNegativeInt, ProjectId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
 
-export const AgentSessionSource = Schema.Literals(["claudeAgent", "codex"]);
+/** Coding agent home directories the scanner knows how to read. */
+export const AgentSessionSource = Schema.Literals(["claudeAgent", "codex", "droid"]);
 export type AgentSessionSource = typeof AgentSessionSource.Type;
 
 export const AgentSessionImportSource = Schema.Struct({

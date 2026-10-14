@@ -33,4 +33,13 @@ describe("AgentSessionScanResult", () => {
 
     expect(result.candidates[0]?.git).toEqual(git);
   });
+
+  it("accepts Factory Droid as an import source", () => {
+    const result = decodeScanResult({
+      candidates: [{ ...candidate, sources: ["droid"] }],
+      scannedAt: "2026-08-22T12:00:00.000Z",
+    });
+
+    expect(result.candidates[0]?.sources).toEqual(["droid"]);
+  });
 });
