@@ -20,6 +20,7 @@ import { DroidRpcError } from "./rpc.ts";
 const makeRpcSpawner = (
   results: Readonly<Record<string, unknown>>,
   requestedMethods: Array<string> = [],
+  failingMethods: ReadonlySet<string> = new Set(),
 ) =>
   ChildProcessSpawner.make(() =>
     Effect.gen(function* () {
@@ -34,9 +35,11 @@ const makeRpcSpawner = (
             const frame = JSON.parse(inputBuffer.slice(0, newline));
             inputBuffer = inputBuffer.slice(newline + 1);
             requestedMethods.push(frame.method);
-            const response = Object.hasOwn(results, frame.method)
-              ? { result: results[frame.method] }
-              : { error: { code: -32601, message: "Method not found" } };
+            const response = failingMethods.has(frame.method)
+              ? { error: { code: -32000, message: "RPC failed" } }
+              : Object.hasOwn(results, frame.method)
+                ? { result: results[frame.method] }
+                : { error: { code: -32601, message: "Method not found" } };
             yield* Queue.offer(
               output,
               new TextEncoder().encode(
@@ -159,7 +162,7 @@ describe("Droid skills", () => {
     ).toEqual([]);
   });
 
-  it.effect("preserves personal and plugin skills without the native skills RPC", () =>
+  it.effect("preserves personal and plugin skills when the native skills RPC fails", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
@@ -189,7 +192,7 @@ describe("Droid skills", () => {
       const skills = yield* discoverDroidSkills({ binaryPath: "droid" }, {}, home).pipe(
         Effect.provideService(
           ChildProcessSpawner.ChildProcessSpawner,
-          makeRpcSpawner({}, requestedMethods),
+          makeRpcSpawner({}, requestedMethods, new Set(["droid.list_skills"])),
         ),
       );
       expect(skills).toEqual([

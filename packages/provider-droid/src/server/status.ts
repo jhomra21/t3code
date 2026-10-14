@@ -242,6 +242,9 @@ export const checkDroidProviderStatus = Effect.fn("checkDroidProviderStatus")(fu
     Effect.timeoutOption("10 seconds"),
     Effect.orElseSucceed(() => Option.none()),
   );
+  if (Option.isNone(skills)) {
+    yield* Effect.logWarning("Droid skill discovery failed; refresh to retry.");
+  }
   const modelList = providerModelsFromSettings(
     Option.isSome(models) ? models.value : [],
     settings.customModels,
@@ -253,9 +256,11 @@ export const checkDroidProviderStatus = Effect.fn("checkDroidProviderStatus")(fu
       ? "Sign in with Factory Droid on this environment."
       : Option.isNone(models)
         ? "Factory Droid model discovery failed. Refresh to retry."
-        : auth === "unknown"
-          ? "Factory Droid authentication could not be verified."
-          : undefined;
+        : Option.isNone(skills)
+          ? "Factory Droid skill discovery failed. Refresh to retry."
+          : auth === "unknown"
+            ? "Factory Droid authentication could not be verified."
+            : undefined;
   return {
     ...buildServerProvider({
       presentation: PRESENTATION,
@@ -268,7 +273,10 @@ export const checkDroidProviderStatus = Effect.fn("checkDroidProviderStatus")(fu
         installed: version !== null,
         version,
         auth: { status: auth },
-        status: auth === "authenticated" && Option.isSome(models) ? "ready" : "warning",
+        status:
+          auth === "authenticated" && Option.isSome(models) && Option.isSome(skills)
+            ? "ready"
+            : "warning",
         ...(message === undefined ? {} : { message }),
       },
     }),

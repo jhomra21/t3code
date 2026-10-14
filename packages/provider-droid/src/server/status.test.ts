@@ -104,8 +104,13 @@ if (args[0] === "--version") {
         fs.appendFileSync(process.env.DROID_STATUS_CALLS, JSON.stringify({ method: request.method }) + "\\n");
       }
       const result = request.method === "droid.list_models"
-        ? { models: [] }
-        : {};
+        ? { models: [{
+            id: "test-model",
+            displayName: "Test model",
+            supportedReasoningEfforts: [],
+            defaultReasoningEffort: ""
+          }] }
+        : { skills: [] };
       process.stdout.write(JSON.stringify({
         jsonrpc: "2.0",
         type: "response",
@@ -119,12 +124,13 @@ if (args[0] === "--version") {
 `,
       );
       yield* fileSystem.chmod(binary, 0o755);
+      const statusEnvironment = {
+        DROID_STATUS_CALLS: calls,
+        FACTORY_RUNTIME_SETTINGS_PATH: "/project/settings.json",
+      };
       const snapshot = yield* checkDroidProviderStatus(
         { ...missingBinarySettings, binaryPath: binary },
-        {
-          DROID_STATUS_CALLS: calls,
-          FACTORY_RUNTIME_SETTINGS_PATH: "/project/settings.json",
-        },
+        statusEnvironment,
         projectCwd,
         home,
       );
@@ -132,27 +138,51 @@ if (args[0] === "--version") {
         .trim()
         .split("\n")
         .map((line) => JSON.parse(line));
-      const modelDiscovery = invocations.find(
+      const discovery = invocations.filter(
         (invocation) => Array.isArray(invocation.args) && invocation.args[0] === "exec",
       );
+      const modelDiscovery = discovery[0];
       const requests = invocations
         .filter((invocation) => typeof invocation.method === "string")
         .map((invocation) => invocation.method);
       assert.isTrue(snapshot.installed);
       assert.equal(snapshot.auth.status, "authenticated");
+      assert.equal(snapshot.status, "ready");
+      assert.isUndefined(snapshot.message);
+      assert.isTrue(snapshot.models.some((model) => model.slug === "test-model"));
       assert.deepEqual(requests, ["droid.list_models", "droid.list_skills"]);
-      assert.isString(modelDiscovery?.cwd);
-      assert.notEqual(modelDiscovery?.cwd, process.cwd());
-      assert.isString(modelDiscovery?.home);
-      assert.notEqual(modelDiscovery?.home, process.env.HOME);
-      assert.isString(modelDiscovery?.factoryHome);
-      assert.notEqual(modelDiscovery?.factoryHome, process.env.HOME);
-      assert.isUndefined(modelDiscovery?.runtimeSettingsPath);
+      assert.lengthOf(discovery, 2);
+      for (const invocation of discovery) {
+        assert.isString(invocation.cwd);
+        assert.notEqual(invocation.cwd, projectCwd);
+        assert.isString(invocation.factoryHome);
+        assert.notEqual(invocation.factoryHome, process.env.HOME);
+        assert.isString(invocation.home);
+        assert.notEqual(invocation.home, process.env.HOME);
+        assert.isUndefined(invocation.runtimeSettingsPath);
+      }
       assert.deepEqual(
         snapshot.skills.map((skill) => [skill.name, skill.scope]),
         [["project-skill", "personal"]],
       );
       assert.isFalse(snapshot.skills.some((skill) => skill.scope === "project"));
+
+      const failedHome = path.join(directory, "failed-home");
+      yield* fileSystem.makeDirectory(path.join(failedHome, ".factory"), { recursive: true });
+      yield* fileSystem.writeFileString(
+        path.join(failedHome, ".factory", "skills"),
+        "not a directory",
+      );
+      const failedSkillsSnapshot = yield* checkDroidProviderStatus(
+        { ...missingBinarySettings, binaryPath: binary },
+        statusEnvironment,
+        projectCwd,
+        failedHome,
+      );
+      assert.include(failedSkillsSnapshot.message ?? "", "skill discovery failed");
+      assert.include(failedSkillsSnapshot.message ?? "", "Refresh to retry");
+      assert.equal(failedSkillsSnapshot.status, "warning");
+      assert.isTrue(failedSkillsSnapshot.models.some((model) => model.slug === "test-model"));
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 
