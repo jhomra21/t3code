@@ -174,7 +174,6 @@ const discoverDroidUserSkills = Effect.fn("discoverDroidUserSkills")(function* (
 export const discoverDroidSkills = Effect.fn("discoverDroidSkills")(function* (
   settings: { readonly binaryPath: string },
   environment: NodeJS.ProcessEnv,
-  cwd: string,
   home: string,
 ) {
   const fileSystem = yield* FileSystem.FileSystem;
@@ -214,6 +213,5 @@ export const discoverDroidSkills = Effect.fn("discoverDroidSkills")(function* (
     }),
   );
   const personalSkills = yield* discoverDroidUserSkills(home, pluginsContents);
-  const projectSkills = yield* discoverDroidProjectSkills(cwd);
-  return mergeDroidSkills(mergeDroidSkills(builtinSkills, personalSkills), projectSkills);
+  return mergeDroidSkills(builtinSkills, personalSkills);
 });
