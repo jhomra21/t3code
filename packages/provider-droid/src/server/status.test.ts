@@ -29,6 +29,13 @@ describe("Droid status", () => {
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 
+  it.effect("lets clients offer conversation rollback", () =>
+    Effect.gen(function* () {
+      const snapshot = yield* makePendingDroidProvider(missingBinarySettings);
+      assert.notStrictEqual(snapshot.supportsConversationRollback, false);
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
   it.effect("offers manual compaction only while enabled", () =>
     Effect.gen(function* () {
       const disabled = yield* makePendingDroidProvider(settings);
