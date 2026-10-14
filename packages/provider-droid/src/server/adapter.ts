@@ -2289,9 +2289,6 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
                 return yield* fail(
                   "Stop background work before rewinding the native Droid session",
                 );
-              if (input.providerThread.id !== providerThread?.id)
-                return yield* fail("Cannot rewind a Droid provider thread that is not loaded");
-
               const orderedTurns = [...input.providerThreadTurns].sort(
                 (left, right) => left.ordinal - right.ordinal,
               );
@@ -2318,19 +2315,17 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
               const messageId = nextTurn?.nativeTurnRef?.nativeId;
               if (messageId == null || messageId.startsWith("task-completion:"))
                 return yield* fail("The next Droid turn has no rewindable user message id");
-              const currentNativeId = nativeId ?? input.providerThread.nativeThreadRef?.nativeId;
-              if (currentNativeId === undefined)
+              yield* makeThread({
+                threadId: input.providerThread.appThreadId ?? sessionInput.threadId,
+                existingProviderThread: input.providerThread,
+                modelSelection: sessionInput.modelSelection,
+                runtimePolicy: sessionInput.runtimePolicy,
+              });
+              if (nativeId === null)
                 return yield* fail("Droid provider thread has no native session id");
               const rpc = yield* requireConnection();
-              if (nativeId !== currentNativeId) {
-                yield* rpc.request("droid.load_session", {
-                  sessionId: currentNativeId,
-                  autoRejectPermissionRequests: false,
-                });
-                nativeId = currentNativeId;
-              }
               const rewind = yield* rpc.request("droid.execute_rewind", {
-                sessionId: currentNativeId,
+                sessionId: nativeId,
                 messageId,
                 filesToRestore: [],
                 filesToDelete: [],
