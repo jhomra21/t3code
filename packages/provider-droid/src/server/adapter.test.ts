@@ -11,6 +11,7 @@ import {
   ProjectId,
   ProviderInstanceId,
   ProviderSessionId,
+  ProviderTurnId,
   RunAttemptId,
   RunId,
   ThreadId,
@@ -76,6 +77,7 @@ const makeFakeDroid = (
       readonly lastCallCompactionTokens?: number;
     }>;
     readonly holdAddUserMessageResponse?: boolean;
+    readonly nativeSessionId?: string;
     readonly rewindSessionId?: string;
   } = {},
 ) =>
@@ -145,7 +147,7 @@ const makeFakeDroid = (
           type: "notification",
           jsonrpc: "2.0",
           method: "droid.session_notification",
-          params: { sessionId: "native-session", notification },
+          params: { sessionId: options.nativeSessionId ?? "native-session", notification },
         }),
       emitRequest: (id: string, method: string, params: unknown) =>
         emit({ type: "request", jsonrpc: "2.0", id, method, params }),
@@ -187,6 +189,7 @@ const responseFor = (
       readonly usedTokens: number;
       readonly lastCallCompactionTokens?: number;
     }>;
+    readonly nativeSessionId?: string;
     readonly rewindSessionId?: string;
   },
   contextBreakdownIndex = 0,
@@ -197,18 +200,20 @@ const responseFor = (
   factoryProtocolVersion: options.protocolVersion ?? "1.257.0",
   result:
     frame.method === "droid.initialize_session"
-      ? { sessionId: "native-session", session: { messages: [] } }
-      : frame.method === "droid.get_context_breakdown"
-        ? (options.contextBreakdownSequence?.[
-            Math.min(contextBreakdownIndex, (options.contextBreakdownSequence?.length ?? 1) - 1)
-          ] ??
-          options.contextBreakdown ??
-          {})
-        : frame.method === "droid.compact_session"
-          ? (options.compactSessionResult ?? {})
-          : frame.method === "droid.execute_rewind"
-            ? { newSessionId: options.rewindSessionId ?? "rewound-session" }
-            : {},
+      ? { sessionId: options.nativeSessionId ?? "native-session", session: { messages: [] } }
+      : frame.method === "droid.load_session"
+        ? { session: { messages: [] } }
+        : frame.method === "droid.get_context_breakdown"
+          ? (options.contextBreakdownSequence?.[
+              Math.min(contextBreakdownIndex, (options.contextBreakdownSequence?.length ?? 1) - 1)
+            ] ??
+            options.contextBreakdown ??
+            {})
+          : frame.method === "droid.compact_session"
+            ? (options.compactSessionResult ?? {})
+            : frame.method === "droid.execute_rewind"
+              ? { newSessionId: options.rewindSessionId ?? "rewound-session" }
+              : {},
 });
 
 const RpcFrameSchema = Schema.Struct({
@@ -228,6 +233,8 @@ const open = Effect.fnUntraced(function* (
   resolveAttachmentPath?: (
     attachment: Parameters<ProviderHost.ProviderHost["Service"]["resolveAttachmentPath"]>[0],
   ) => string | null,
+  existingProviderThread?: ProviderAdapter.ProviderAdapterV2EnsureThreadInput["existingProviderThread"],
+  skipEnsureThread = false,
 ) {
   const providerHost = yield* ProviderHost.ProviderHost;
   if (mcpSession !== undefined)
@@ -254,11 +261,16 @@ const open = Effect.fnUntraced(function* (
     modelSelection: selection,
     runtimePolicy: { ...policy, cwd },
   });
-  const providerThread = yield* runtime.ensureThread({
-    threadId,
-    modelSelection: selection,
-    runtimePolicy: { ...policy, cwd },
-  });
+  const providerThread = skipEnsureThread
+    ? existingProviderThread
+    : yield* runtime.ensureThread({
+        threadId,
+        modelSelection: selection,
+        runtimePolicy: { ...policy, cwd },
+        ...(existingProviderThread === undefined ? {} : { existingProviderThread }),
+      });
+  if (providerThread === undefined)
+    return yield* Effect.die(new Error("Fresh Droid session requires a persisted provider thread"));
   const now = yield* DateTime.now;
   const appThread = yield* decodeAppThread({
     id: threadId,
@@ -2242,6 +2254,10 @@ describe("Droid adapter", () => {
         });
         assert.equal(result.providerThread.id, providerThread.id);
         assert.equal(result.providerThread.nativeThreadRef?.nativeId, "rewound-native-session");
+        assert.deepEqual(
+          fake.requestedMethods.filter((method) => method === "droid.load_session"),
+          ["droid.load_session"],
+        );
         assert.equal(result.providerThread.status, "idle");
         assert.equal(result.providerThread.lastRunOrdinal, 1);
         assert.equal(
@@ -2309,6 +2325,125 @@ describe("Droid adapter", () => {
         );
       }),
     ),
+  );
+
+  it.effect.each(["provider_turn", "thread_start"] as const)(
+    "loads a persisted session before rewinding a %s target",
+    (targetType) =>
+      provide(
+        Effect.gen(function* () {
+          const sourceFake = yield* makeFakeDroid({ nativeSessionId: "old-session" });
+          const source = yield* open(sourceFake);
+          const terminal = yield* Deferred.make<void>();
+          yield* source.runtime.events.pipe(
+            Stream.runForEach((event) =>
+              event.type === "turn.terminal" ? Deferred.succeed(terminal, undefined) : Effect.void,
+            ),
+            Effect.forkChild,
+          );
+          yield* source.runtime.startTurn(source.input);
+          yield* sourceFake.takeRequest("droid.initialize_session");
+          yield* sourceFake.takeRequest("droid.get_context_breakdown");
+          yield* sourceFake.takeRequest("droid.get_context_breakdown");
+          yield* sourceFake.takeRequest("droid.add_user_message");
+          yield* sourceFake.emitNotification({
+            type: "agent_turn_completed",
+            reason: "completed",
+            turnId: source.input.message.messageId,
+          });
+          yield* Deferred.await(terminal);
+          const sourceTurn = (yield* source.runtime.readThreadSnapshot({
+            providerThread: source.providerThread,
+          })).providerTurns[0];
+          assert.isDefined(sourceTurn);
+          if (sourceTurn === undefined) return;
+
+          const secondTurn = {
+            ...sourceTurn,
+            id: ProviderTurnId.make("droid-persisted-second-turn"),
+            ordinal: sourceTurn.ordinal + 1,
+            nativeTurnRef: {
+              driver: DROID_PROVIDER,
+              nativeId: "droid-next-user-message",
+              strength: "strong",
+            },
+          } satisfies typeof sourceTurn;
+          const persistedThread = {
+            ...source.providerThread,
+            nativeThreadRef: {
+              driver: DROID_PROVIDER,
+              nativeId: "old-session",
+              strength: "strong",
+            },
+            lastRunOrdinal: 2,
+          } satisfies typeof source.providerThread;
+          const freshFake = yield* makeFakeDroid({ rewindSessionId: "rewound-session" });
+          const fresh = yield* open(
+            freshFake,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            persistedThread,
+            true,
+          );
+          const target: ProviderAdapter.ProviderAdapterV2RollbackTarget =
+            targetType === "thread_start"
+              ? {
+                  type: "thread_start" as const,
+                  checkpointId: CheckpointId.make("droid-fresh-start-rollback"),
+                  appRunOrdinal: 0,
+                }
+              : {
+                  type: "provider_turn" as const,
+                  checkpointId: CheckpointId.make("droid-fresh-turn-rollback"),
+                  appRunOrdinal: 1,
+                  providerTurn: sourceTurn,
+                };
+          const result = yield* fresh.runtime.rollbackThread({
+            providerThread: persistedThread,
+            target,
+            providerThreadTurns:
+              targetType === "thread_start" ? [sourceTurn] : [sourceTurn, secondTurn],
+          });
+          const sourceLoad = yield* freshFake.takeRequest("droid.load_session");
+          assert.deepEqual(sourceLoad.params, {
+            sessionId: "old-session",
+            mcpServers: [],
+            autoRejectPermissionRequests: false,
+          });
+          const rewind = yield* freshFake.takeRequest("droid.execute_rewind");
+          assert.equal(
+            typeof rewind.params === "object" && rewind.params !== null
+              ? Reflect.get(rewind.params, "messageId")
+              : null,
+            targetType === "thread_start"
+              ? source.input.message.messageId
+              : "droid-next-user-message",
+          );
+          assert.deepEqual(
+            typeof rewind.params === "object" && rewind.params !== null
+              ? Reflect.get(rewind.params, "filesToRestore")
+              : null,
+            [],
+          );
+          assert.deepEqual(
+            typeof rewind.params === "object" && rewind.params !== null
+              ? Reflect.get(rewind.params, "filesToDelete")
+              : null,
+            [],
+          );
+          const rewoundLoad = yield* freshFake.takeRequest("droid.load_session");
+          assert.deepEqual(rewoundLoad.params, {
+            sessionId: "rewound-session",
+            autoRejectPermissionRequests: false,
+          });
+          assert.equal(result.providerThread.id, persistedThread.id);
+          assert.equal(result.providerThread.nativeThreadRef?.nativeId, "rewound-session");
+          assert.equal(result.providerThread.status, "idle");
+          assert.equal(result.providerThread.lastRunOrdinal, target.appRunOrdinal);
+        }),
+      ),
   );
 
   it.effect("refuses rewind during an active turn or pending wake work", () =>
