@@ -1,4 +1,5 @@
 import type { ServerProviderSkill } from "@t3tools/contracts";
+import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
@@ -204,7 +205,13 @@ export const discoverDroidSkills = Effect.fn("discoverDroidSkills")(function* (
     closeSession: false,
   });
   yield* rpc.notifications.pipe(Stream.runDrain, Effect.ignore, Effect.forkScoped);
-  const builtinSkills = yield* readDroidSkills(rpc);
+  const builtinSkills = yield* readDroidSkills(rpc).pipe(
+    Effect.catchCause((cause) =>
+      Effect.logWarning("Droid builtin skill discovery failed.", {
+        cause: Cause.pretty(cause),
+      }).pipe(Effect.as([])),
+    ),
+  );
   const pluginsFile = path.join(home, ".factory", "plugins", "installed_plugins.json");
   const pluginsContents = yield* fileSystem.readFileString(pluginsFile).pipe(
     Effect.catchTags({
