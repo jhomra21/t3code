@@ -6,7 +6,8 @@ import * as HttpClientRequest from "effect/http/HttpClientRequest";
 import * as ProviderLatestVersions from "@t3tools/provider-core/server/ProviderLatestVersions";
 import {
   enrichProviderSnapshotWithVersionAdvisory,
-  makeManualOnlyProviderMaintenanceCapabilities,
+  makePackageManagedProviderMaintenanceResolver,
+  normalizeCommandPath,
   type ProviderMaintenanceCapabilities,
 } from "@t3tools/provider-core/server/maintenanceResolver";
 import { parseGenericCliVersion } from "@t3tools/provider-core/server/snapshotProbe";
@@ -17,9 +18,15 @@ const LatestPackage = Schema.fromJsonString(Schema.Struct({ version: Schema.Stri
 
 export const parseDroidVersion = parseGenericCliVersion;
 
-/** Droid's binary can be installed by several unrelated tools; updates stay manual. */
-export const droidMaintenance: ProviderMaintenanceCapabilities =
-  makeManualOnlyProviderMaintenanceCapabilities({ provider: DRIVER, packageName: null });
+export const droidMaintenanceResolver = makePackageManagedProviderMaintenanceResolver({
+  provider: DRIVER,
+  npmPackageName: "droid",
+  nativeUpdate: {
+    args: ["update"],
+    isCommandPath: (commandPath) =>
+      /\/\.local\/bin\/droid(?:\.exe)?$/.test(normalizeCommandPath(commandPath)),
+  },
+});
 
 const latestDroidVersion = Effect.fn("latestDroidVersion")(function* (options?: {
   readonly fresh?: boolean;
