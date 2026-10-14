@@ -141,7 +141,6 @@ if (args[0] === "--version") {
       const discovery = invocations.filter(
         (invocation) => Array.isArray(invocation.args) && invocation.args[0] === "exec",
       );
-      const modelDiscovery = discovery[0];
       const requests = invocations
         .filter((invocation) => typeof invocation.method === "string")
         .map((invocation) => invocation.method);
