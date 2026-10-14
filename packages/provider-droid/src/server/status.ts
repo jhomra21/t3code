@@ -27,7 +27,6 @@ import { mergeProviderInstanceEnvironment } from "@t3tools/provider-core/server/
 
 const PRESENTATION = {
   displayName: "Factory Droid",
-  supportsConversationRollback: false,
   showInteractionModeToggle: false,
   supportedRuntimeModes: ["approval-required", "auto-accept-edits", "auto", "full-access"],
   reportsContextWindow: false,
