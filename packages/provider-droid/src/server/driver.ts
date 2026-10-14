@@ -24,6 +24,10 @@ import {
 } from "@t3tools/provider-core/server/snapshotSettings";
 import { withInstanceIdentity } from "@t3tools/provider-core/server/instanceIdentity";
 import { expandHomePath } from "@t3tools/provider-core/server/pathExpansion";
+import {
+  makeCachedProviderMaintenanceResolution,
+  resolveProviderMaintenanceCapabilitiesEffect,
+} from "@t3tools/provider-core/server/maintenanceResolver";
 
 import { DroidSettings } from "../settings.ts";
 import { makeDroidTextGeneration } from "./textGeneration.ts";
@@ -33,7 +37,7 @@ import {
   makeDroidInstanceEnvironment,
   makePendingDroidProvider,
 } from "./status.ts";
-import { droidMaintenance, enrichDroidSnapshot } from "./maintenance.ts";
+import { droidMaintenanceResolver, enrichDroidSnapshot } from "./maintenance.ts";
 
 const decodeDroidSettings = Schema.decodeSync(DroidSettings);
 
@@ -79,20 +83,33 @@ export const DroidDriver: ProviderDriver<DroidSettings, DroidDriverEnv> = {
         accentColor,
         continuationGroupKey: continuationIdentity.continuationKey,
       });
+      const resolveMaintenance = yield* makeCachedProviderMaintenanceResolution(
+        resolveProviderMaintenanceCapabilitiesEffect(droidMaintenanceResolver, {
+          binaryPath: effectiveConfig.binaryPath,
+          env: processEnvironment,
+        }).pipe(
+          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+          Effect.provideService(FileSystem.FileSystem, fileSystem),
+          Effect.provideService(Path.Path, path),
+        ),
+      );
       const snapshotSettings = yield* makeProviderSnapshotSettingsSource(effectiveConfig);
       const snapshot = yield* makeManagedServerProvider({
-        resolveMaintenance: () => Effect.succeed(droidMaintenance),
+        resolveMaintenance,
         getSettings: snapshotSettings.getSettings,
         streamSettings: snapshotSettings.streamSettings,
         haveSettingsChanged: haveProviderSnapshotSettingsChanged,
         initialSnapshot: (settings) =>
           makePendingDroidProvider(settings.provider).pipe(Effect.map(stampIdentity)),
         enrichSnapshot: ({ settings, snapshot: currentSnapshot, publishSnapshot }) =>
-          enrichDroidSnapshot({
-            snapshot: currentSnapshot,
-            maintenanceCapabilities: droidMaintenance,
-            enableProviderUpdateChecks: settings.enableProviderUpdateChecks,
-          }).pipe(
+          resolveMaintenance().pipe(
+            Effect.flatMap((maintenanceCapabilities) =>
+              enrichDroidSnapshot({
+                snapshot: currentSnapshot,
+                maintenanceCapabilities,
+                enableProviderUpdateChecks: settings.enableProviderUpdateChecks,
+              }),
+            ),
             Effect.provideService(HttpClient.HttpClient, httpClient),
             Effect.provideService(ProviderLatestVersions.ProviderLatestVersions, latestVersions),
             Effect.map(stampIdentity),
