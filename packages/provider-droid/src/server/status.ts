@@ -237,7 +237,7 @@ export const checkDroidProviderStatus = Effect.fn("checkDroidProviderStatus")(fu
     Effect.timeoutOption("10 seconds"),
     Effect.orElseSucceed(() => Option.none()),
   );
-  const skills = yield* discoverDroidSkills({ binaryPath: binary }, env, cwd, home).pipe(
+  const skills = yield* discoverDroidSkills({ binaryPath: binary }, env, home).pipe(
     Effect.scoped,
     Effect.timeoutOption("10 seconds"),
     Effect.orElseSucceed(() => Option.none()),

@@ -186,7 +186,7 @@ describe("Droid skills", () => {
         }),
       );
       const requestedMethods: Array<string> = [];
-      const skills = yield* discoverDroidSkills({ binaryPath: "droid" }, {}, "/repo", home).pipe(
+      const skills = yield* discoverDroidSkills({ binaryPath: "droid" }, {}, home).pipe(
         Effect.provideService(
           ChildProcessSpawner.ChildProcessSpawner,
           makeRpcSpawner({}, requestedMethods),
@@ -269,6 +269,12 @@ describe("Droid skills", () => {
             scope: "builtin",
             enabled: true,
           },
+          {
+            name: "personal-only",
+            path: "/home/.factory/skills/personal-only/SKILL.md",
+            scope: "personal",
+            enabled: true,
+          },
         ],
         [
           {
@@ -284,6 +290,12 @@ describe("Droid skills", () => {
         name: "builtin",
         path: "builtin:builtin",
         scope: "builtin",
+        enabled: true,
+      },
+      {
+        name: "personal-only",
+        path: "/home/.factory/skills/personal-only/SKILL.md",
+        scope: "personal",
         enabled: true,
       },
       {
