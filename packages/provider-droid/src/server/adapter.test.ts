@@ -4,6 +4,7 @@ import * as NodeOS from "node:os";
 import {
   EnvironmentId,
   ChatAttachmentId,
+  CheckpointId,
   MessageId,
   NodeId,
   OrchestrationV2AppThread,
@@ -36,7 +37,7 @@ import type { McpProviderSessionConfig } from "@t3tools/provider-core/server/mcp
 import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 import type * as ProviderContinuationRequests from "@t3tools/provider-core/server/ProviderContinuationRequests";
 import * as TestProviderHost from "@t3tools/provider-testing/TestProviderHost";
-import { droidSystemPromptAppend, makeDroidAdapterV2 } from "./adapter.ts";
+import { DROID_PROVIDER, droidSystemPromptAppend, makeDroidAdapterV2 } from "./adapter.ts";
 
 const instanceId = ProviderInstanceId.make("droid-adapter-test");
 const selection = { instanceId, model: "custom:GPT-6 Luna-12" };
@@ -75,6 +76,7 @@ const makeFakeDroid = (
       readonly lastCallCompactionTokens?: number;
     }>;
     readonly holdAddUserMessageResponse?: boolean;
+    readonly rewindSessionId?: string;
   } = {},
 ) =>
   Effect.gen(function* () {
@@ -185,6 +187,7 @@ const responseFor = (
       readonly usedTokens: number;
       readonly lastCallCompactionTokens?: number;
     }>;
+    readonly rewindSessionId?: string;
   },
   contextBreakdownIndex = 0,
 ) => ({
@@ -203,7 +206,9 @@ const responseFor = (
           {})
         : frame.method === "droid.compact_session"
           ? (options.compactSessionResult ?? {})
-          : {},
+          : frame.method === "droid.execute_rewind"
+            ? { newSessionId: options.rewindSessionId ?? "rewound-session" }
+            : {},
 });
 
 const RpcFrameSchema = Schema.Struct({
@@ -2137,6 +2142,331 @@ describe("Droid adapter", () => {
         const snapshot = yield* runtime.readThreadSnapshot({ providerThread });
         assert.equal(snapshot.providerTurns[0]?.status, "failed");
         assert.isFalse(yield* runtime.hasPendingBackgroundWorkForThread!(providerThread));
+      }),
+    ),
+  );
+
+  it.effect("rewinds after the target turn and discards the later in-memory snapshot", () =>
+    provide(
+      Effect.gen(function* () {
+        const fake = yield* makeFakeDroid({ rewindSessionId: "rewound-native-session" });
+        const { runtime, input, providerThread } = yield* open(fake);
+        const terminals = yield* Queue.unbounded<void>();
+        yield* runtime.events.pipe(
+          Stream.runForEach((event) =>
+            event.type === "turn.terminal" ? Queue.offer(terminals, undefined) : Effect.void,
+          ),
+          Effect.forkChild,
+        );
+        let initialized = false;
+        const finishTurn = (turnInput: typeof input, assistantId: string) =>
+          Effect.gen(function* () {
+            yield* runtime.startTurn(turnInput);
+            if (!initialized) {
+              yield* fake.takeRequest("droid.initialize_session");
+              initialized = true;
+            }
+            yield* fake.takeRequest("droid.get_context_breakdown");
+            yield* fake.takeRequest("droid.get_context_breakdown");
+            yield* fake.takeRequest("droid.add_user_message");
+            yield* fake.emitNotification({
+              type: "create_message",
+              message: {
+                id: assistantId,
+                role: "assistant",
+                content: [{ type: "text", text: assistantId }],
+              },
+            });
+            yield* fake.emitNotification({
+              type: "agent_turn_completed",
+              reason: "completed",
+              turnId: turnInput.message.messageId,
+            });
+            yield* Queue.take(terminals);
+          });
+        const firstInput = {
+          ...input,
+          attemptId: RunAttemptId.make("droid-rollback-first"),
+          message: { ...input.message, messageId: MessageId.make("droid-rollback-first-message") },
+        };
+        yield* finishTurn(firstInput, "droid-rollback-first-assistant");
+        const firstTurn = (yield* runtime.readThreadSnapshot({ providerThread })).providerTurns[0];
+        assert.isDefined(firstTurn);
+        const secondInput = {
+          ...input,
+          providerTurnOrdinal: 2,
+          attemptId: RunAttemptId.make("droid-rollback-second"),
+          message: { ...input.message, messageId: MessageId.make("droid-rollback-second-message") },
+        };
+        yield* finishTurn(secondInput, "droid-rollback-second-assistant");
+        const secondTurn = (yield* runtime.readThreadSnapshot({ providerThread })).providerTurns[1];
+        assert.isDefined(secondTurn);
+        const capabilities = runtime.providerSession.capabilities;
+        assert.isTrue(capabilities.threads.canRollbackThread);
+        assert.isTrue(capabilities.checkpointing.providerCanRollbackConversation);
+        assert.isTrue(capabilities.checkpointing.providerRollbackReturnsSnapshot);
+        if (firstTurn === undefined || secondTurn === undefined) return;
+
+        const result = yield* runtime.rollbackThread({
+          providerThread,
+          target: {
+            type: "provider_turn",
+            checkpointId: CheckpointId.make("droid-rollback-checkpoint"),
+            appRunOrdinal: 1,
+            providerTurn: firstTurn,
+          },
+          providerThreadTurns: [firstTurn, secondTurn],
+        });
+        const rewind = yield* fake.takeRequest("droid.execute_rewind");
+        const params = rewind.params;
+        assert.equal(
+          typeof params === "object" && params !== null ? Reflect.get(params, "messageId") : null,
+          "droid-rollback-second-message",
+        );
+        assert.deepEqual(
+          typeof params === "object" && params !== null
+            ? Reflect.get(params, "filesToRestore")
+            : null,
+          [],
+        );
+        assert.deepEqual(
+          typeof params === "object" && params !== null
+            ? Reflect.get(params, "filesToDelete")
+            : null,
+          [],
+        );
+        const load = yield* fake.takeRequest("droid.load_session");
+        assert.deepEqual(load.params, {
+          sessionId: "rewound-native-session",
+          autoRejectPermissionRequests: false,
+        });
+        assert.equal(result.providerThread.id, providerThread.id);
+        assert.equal(result.providerThread.nativeThreadRef?.nativeId, "rewound-native-session");
+        assert.equal(result.providerThread.status, "idle");
+        assert.equal(result.providerThread.lastRunOrdinal, 1);
+        assert.equal(
+          (yield* runtime.readThreadSnapshot({ providerThread: result.providerThread }))
+            .providerThread.nativeThreadRef?.nativeId,
+          "rewound-native-session",
+        );
+        const snapshot = yield* runtime.readThreadSnapshot({
+          providerThread: result.providerThread,
+        });
+        assert.deepEqual(
+          snapshot.providerTurns.map((turn) => turn.id),
+          [firstTurn.id],
+        );
+        assert.deepEqual(
+          snapshot.messages.map((message) => message.text),
+          ["droid-rollback-first-assistant"],
+        );
+      }),
+    ),
+  );
+
+  it.effect("rewinds thread start to the first user message", () =>
+    provide(
+      Effect.gen(function* () {
+        const fake = yield* makeFakeDroid();
+        const { runtime, input, providerThread } = yield* open(fake);
+        const terminal = yield* Deferred.make<void>();
+        yield* runtime.events.pipe(
+          Stream.runForEach((event) =>
+            event.type === "turn.terminal" ? Deferred.succeed(terminal, undefined) : Effect.void,
+          ),
+          Effect.forkChild,
+        );
+        yield* runtime.startTurn(input);
+        yield* fake.takeRequest("droid.initialize_session");
+        yield* fake.takeRequest("droid.get_context_breakdown");
+        yield* fake.takeRequest("droid.get_context_breakdown");
+        yield* fake.takeRequest("droid.add_user_message");
+        yield* fake.emitNotification({
+          type: "agent_turn_completed",
+          reason: "completed",
+          turnId: input.message.messageId,
+        });
+        yield* Deferred.await(terminal);
+        const turn = (yield* runtime.readThreadSnapshot({ providerThread })).providerTurns[0];
+        assert.isDefined(turn);
+        if (turn === undefined) return;
+
+        yield* runtime.rollbackThread({
+          providerThread,
+          target: {
+            type: "thread_start",
+            checkpointId: CheckpointId.make("droid-rollback-start"),
+            appRunOrdinal: 0,
+          },
+          providerThreadTurns: [turn],
+        });
+        const rewind = yield* fake.takeRequest("droid.execute_rewind");
+        assert.equal(
+          typeof rewind.params === "object" && rewind.params !== null
+            ? Reflect.get(rewind.params, "messageId")
+            : null,
+          input.message.messageId,
+        );
+      }),
+    ),
+  );
+
+  it.effect("refuses rewind during an active turn or pending wake work", () =>
+    provide(
+      Effect.gen(function* () {
+        const fake = yield* makeFakeDroid();
+        const { runtime, input, providerThread } = yield* open(fake);
+        yield* runtime.startTurn(input);
+        yield* fake.takeRequest("droid.initialize_session");
+        yield* fake.takeRequest("droid.get_context_breakdown");
+        yield* fake.takeRequest("droid.get_context_breakdown");
+        yield* fake.takeRequest("droid.add_user_message");
+        const activeTurn = (yield* runtime.readThreadSnapshot({ providerThread })).providerTurns[0];
+        assert.isDefined(activeTurn);
+        if (activeTurn === undefined) return;
+        const target = {
+          type: "provider_turn",
+          checkpointId: CheckpointId.make("droid-active-rollback"),
+          appRunOrdinal: 1,
+          providerTurn: activeTurn,
+        } satisfies ProviderAdapter.ProviderAdapterV2RollbackTarget;
+        const activeError = yield* Effect.flip(
+          runtime.rollbackThread({ providerThread, target, providerThreadTurns: [activeTurn] }),
+        );
+        assert.instanceOf(activeError, ProviderAdapter.ProviderAdapterRollbackThreadError);
+        assert.isEmpty(fake.requestedMethods.filter((method) => method === "droid.execute_rewind"));
+
+        yield* fake.emitNotification({
+          type: "agent_turn_completed",
+          reason: "completed",
+          turnId: input.message.messageId,
+        });
+        yield* fake.emitNotification({
+          type: "create_message",
+          message: {
+            id: "task-completion:rollback-child",
+            role: "system",
+            content: [{ type: "text", text: "task_id: rollback-child\nreason: completed" }],
+          },
+        });
+        yield* fake.emitRequest("rollback-wake-barrier", "droid.unknown_barrier", {});
+        yield* fake.takeReply;
+        assert.isTrue(yield* runtime.hasPendingBackgroundWorkForThread!(providerThread));
+        const wakeError = yield* Effect.flip(
+          runtime.rollbackThread({ providerThread, target, providerThreadTurns: [activeTurn] }),
+        );
+        assert.instanceOf(wakeError, ProviderAdapter.ProviderAdapterRollbackThreadError);
+        assert.isEmpty(fake.requestedMethods.filter((method) => method === "droid.execute_rewind"));
+      }),
+    ),
+  );
+
+  it.effect("refuses rewind when the next turn has no rewindable user message id", () =>
+    provide(
+      Effect.gen(function* () {
+        const fake = yield* makeFakeDroid();
+        const { runtime, input, providerThread } = yield* open(fake);
+        const terminal = yield* Deferred.make<void>();
+        yield* runtime.events.pipe(
+          Stream.runForEach((event) =>
+            event.type === "turn.terminal" ? Deferred.succeed(terminal, undefined) : Effect.void,
+          ),
+          Effect.forkChild,
+        );
+        yield* runtime.startTurn(input);
+        yield* fake.takeRequest("droid.initialize_session");
+        yield* fake.takeRequest("droid.get_context_breakdown");
+        yield* fake.takeRequest("droid.get_context_breakdown");
+        yield* fake.takeRequest("droid.add_user_message");
+        yield* fake.emitNotification({
+          type: "agent_turn_completed",
+          reason: "completed",
+          turnId: input.message.messageId,
+        });
+        yield* Deferred.await(terminal);
+        const firstTurn = (yield* runtime.readThreadSnapshot({ providerThread })).providerTurns[0];
+        assert.isDefined(firstTurn);
+        if (firstTurn === undefined) return;
+        const wakeTurn = {
+          ...firstTurn,
+          ordinal: firstTurn.ordinal + 1,
+          nativeTurnRef: {
+            driver: firstTurn.nativeTurnRef?.driver ?? DROID_PROVIDER,
+            nativeId: "task-completion:rollback-child",
+            strength: "strong",
+          },
+        } satisfies NonNullable<typeof firstTurn>;
+        const error = yield* Effect.flip(
+          runtime.rollbackThread({
+            providerThread,
+            target: {
+              type: "provider_turn",
+              checkpointId: CheckpointId.make("droid-unrewindable-next-turn"),
+              appRunOrdinal: 1,
+              providerTurn: firstTurn,
+            },
+            providerThreadTurns: [firstTurn, wakeTurn],
+          }),
+        );
+        assert.instanceOf(error, ProviderAdapter.ProviderAdapterRollbackThreadError);
+        assert.isEmpty(fake.requestedMethods.filter((method) => method === "droid.execute_rewind"));
+      }),
+    ),
+  );
+
+  it.effect("refuses rewind while a native background child is still running", () =>
+    provide(
+      Effect.gen(function* () {
+        const fake = yield* makeFakeDroid();
+        const { runtime, input, providerThread } = yield* open(fake);
+        const terminal = yield* Deferred.make<void>();
+        yield* runtime.events.pipe(
+          Stream.runForEach((event) =>
+            event.type === "turn.terminal" ? Deferred.succeed(terminal, undefined) : Effect.void,
+          ),
+          Effect.forkChild,
+        );
+        yield* runtime.startTurn(input);
+        yield* fake.takeRequest("droid.initialize_session");
+        yield* fake.takeRequest("droid.get_context_breakdown");
+        yield* fake.takeRequest("droid.get_context_breakdown");
+        yield* fake.takeRequest("droid.add_user_message");
+        yield* fake.emitNotification({
+          type: "child_session_available",
+          childSessionId: "rollback-pending-child",
+          toolUseId: "rollback-pending-tool",
+          description: "Still running",
+        });
+        yield* fake.emitNotification({
+          type: "tool_result",
+          toolUseId: "rollback-pending-tool",
+          content: "Task launched in background.\nTask ID: rollback-pending-child",
+        });
+        yield* fake.emitRequest("rollback-child-barrier", "droid.unknown_barrier", {});
+        yield* fake.takeReply;
+        yield* fake.emitNotification({
+          type: "agent_turn_completed",
+          reason: "completed",
+          turnId: input.message.messageId,
+        });
+        yield* Deferred.await(terminal);
+        const turn = (yield* runtime.readThreadSnapshot({ providerThread })).providerTurns[0];
+        assert.isDefined(turn);
+        assert.isTrue(yield* runtime.hasPendingBackgroundWorkForThread!(providerThread));
+        if (turn === undefined) return;
+        const error = yield* Effect.flip(
+          runtime.rollbackThread({
+            providerThread,
+            target: {
+              type: "thread_start",
+              checkpointId: CheckpointId.make("droid-pending-child-rollback"),
+              appRunOrdinal: 0,
+            },
+            providerThreadTurns: [turn],
+          }),
+        );
+        assert.instanceOf(error, ProviderAdapter.ProviderAdapterRollbackThreadError);
+        assert.isEmpty(fake.requestedMethods.filter((method) => method === "droid.execute_rewind"));
       }),
     ),
   );

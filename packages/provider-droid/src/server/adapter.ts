@@ -100,7 +100,7 @@ const droidProviderCapabilitiesV2 = {
   threads: {
     canCreateEmptyThread: true,
     canReadThreadSnapshot: true,
-    canRollbackThread: false,
+    canRollbackThread: true,
     canForkThread: false,
     canForkFromTurn: false,
     canForkFromSubagentThread: false,
@@ -169,8 +169,8 @@ const droidProviderCapabilitiesV2 = {
   checkpointing: {
     appCanCheckpointFilesystem: true,
     supportsNestedCheckpointScopes: true,
-    providerCanRollbackConversation: false,
-    providerRollbackReturnsSnapshot: false,
+    providerCanRollbackConversation: true,
+    providerRollbackReturnsSnapshot: true,
     providerCanReadConversationSnapshot: false,
   },
   identity: {
@@ -351,6 +351,7 @@ const decode = <A, I>(schema: Schema.Codec<A, I>, value: unknown) =>
   Schema.decodeUnknownEffect(schema)(value).pipe(
     Effect.mapError((cause) => protocolError("Invalid native Droid payload", cause)),
   );
+const isRollbackThreadError = Schema.is(ProviderAdapter.ProviderAdapterRollbackThreadError);
 /**
  * `contextBudget` is the window Droid compacts against. `lastCallCompactionTokens` is the size
  * of the last model call, which is what compaction measures; `usedTokens` is a text estimate of
@@ -510,6 +511,7 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
         let contextUsageAfterCompaction = false;
         const turns = new Map<string, OrchestrationV2ProviderTurn>();
         const messages = new Map<string, OrchestrationV2ConversationMessage>();
+        const messageTurns = new Map<string, OrchestrationV2ProviderTurn["id"]>();
         const todoPlanIds = new Map<string, OrchestrationV2PlanArtifact["id"]>();
         const todoStepSignatures = new Map<string, string>();
         let active: ActiveTurn | null = null;
@@ -718,6 +720,7 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
             updatedAt,
           };
           messages.set(id, message);
+          messageTurns.set(id, context.turn.id);
           yield* emit({ type: "message.updated", driver: DROID_PROVIDER, message });
           yield* emitItem({
             ...base,
@@ -2264,18 +2267,133 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
                   }),
               ),
             ),
-          // Rewind is before a USER message and changes session identity. A T3
-          // checkpoint is after a provider turn; that cursor mapping is not yet
-          // implemented, so refuse before checkpoint rollback changes files.
           rollbackThread: (input) =>
-            Effect.fail(
-              new ProviderAdapter.ProviderAdapterRollbackThreadError({
+            Effect.gen(function* () {
+              const fail = (detail: string) =>
+                new ProviderAdapter.ProviderAdapterRollbackThreadError({
+                  driver: DROID_PROVIDER,
+                  providerThreadId: input.providerThread.id,
+                  checkpointId: input.target.checkpointId,
+                  cause: protocolError(detail),
+                });
+              if (active !== null)
+                return yield* fail("Cannot rewind Droid while a provider turn is active");
+              if (
+                wakePending ||
+                Array.from(children.values()).some(
+                  (child) =>
+                    child.task.providerThreadId === input.providerThread.id &&
+                    child.task.status === "running",
+                )
+              )
+                return yield* fail(
+                  "Stop background work before rewinding the native Droid session",
+                );
+              if (input.providerThread.id !== providerThread?.id)
+                return yield* fail("Cannot rewind a Droid provider thread that is not loaded");
+
+              const orderedTurns = [...input.providerThreadTurns].sort(
+                (left, right) => left.ordinal - right.ordinal,
+              );
+              const targetTurn =
+                input.target.type === "provider_turn" ? input.target.providerTurn : undefined;
+              let boundaryOrdinal = 0;
+              let nextTurn: OrchestrationV2ProviderTurn | undefined;
+              if (targetTurn !== undefined) {
+                if (targetTurn.providerThreadId !== input.providerThread.id)
+                  return yield* fail(
+                    "Rollback target belongs to a different Droid provider thread",
+                  );
+                const targetIndex = orderedTurns.findIndex((turn) => turn.id === targetTurn.id);
+                if (targetIndex < 0)
+                  return yield* fail(
+                    "Rollback target was not found in Droid provider turn history",
+                  );
+                boundaryOrdinal = targetTurn.ordinal;
+                nextTurn = orderedTurns[targetIndex + 1];
+              } else {
+                nextTurn = orderedTurns[0];
+              }
+
+              const messageId = nextTurn?.nativeTurnRef?.nativeId;
+              if (messageId == null || messageId.startsWith("task-completion:"))
+                return yield* fail("The next Droid turn has no rewindable user message id");
+              const currentNativeId = nativeId ?? input.providerThread.nativeThreadRef?.nativeId;
+              if (currentNativeId === undefined)
+                return yield* fail("Droid provider thread has no native session id");
+              const rpc = yield* requireConnection();
+              if (nativeId !== currentNativeId) {
+                yield* rpc.request("droid.load_session", {
+                  sessionId: currentNativeId,
+                  autoRejectPermissionRequests: false,
+                });
+                nativeId = currentNativeId;
+              }
+              const rewind = yield* rpc.request("droid.execute_rewind", {
+                sessionId: currentNativeId,
+                messageId,
+                filesToRestore: [],
+                filesToDelete: [],
+                forkTitle: `Rollback ${input.providerThread.id}`,
+              });
+              const result = yield* decode(
+                Schema.Struct({ newSessionId: Schema.String }),
+                rewind.result,
+              );
+              yield* rpc.request("droid.load_session", {
+                sessionId: result.newSessionId,
+                autoRejectPermissionRequests: false,
+              });
+
+              const rolledBackTurns = new Set(
+                Array.from(turns.values())
+                  .filter(
+                    (turn) =>
+                      turn.providerThreadId === input.providerThread.id &&
+                      (input.target.type === "thread_start" || turn.ordinal > boundaryOrdinal),
+                  )
+                  .map((turn) => turn.id),
+              );
+              for (const turnId of rolledBackTurns) turns.delete(turnId);
+              for (const [messageId, turnId] of messageTurns) {
+                if (rolledBackTurns.has(turnId)) {
+                  messages.delete(messageId);
+                  messageTurns.delete(messageId);
+                }
+              }
+              nativeId = result.newSessionId;
+              lastContext = null;
+              wakeOwner = null;
+              nativeNotificationTurnId = null;
+              providerThread = {
+                ...input.providerThread,
+                nativeThreadRef: nativeRef(result.newSessionId),
+                status: "idle",
+                lastRunOrdinal: input.target.appRunOrdinal,
+                updatedAt: yield* DateTime.now,
+              };
+              yield* emit({
+                type: "provider_thread.updated",
                 driver: DROID_PROVIDER,
-                providerThreadId: input.providerThread.id,
-                cause: protocolError(
-                  "Droid rewind requires a verified after-turn checkpoint to before-user-message cursor mapping",
-                ),
-              }),
+                providerThread,
+              });
+              return {
+                providerThread,
+                providerTurns: [],
+                messages: [],
+                runtimeRequests: [],
+              } satisfies ProviderAdapter.ProviderAdapterV2ThreadSnapshot;
+            }).pipe(
+              Effect.mapError((cause) =>
+                isRollbackThreadError(cause)
+                  ? cause
+                  : new ProviderAdapter.ProviderAdapterRollbackThreadError({
+                      driver: DROID_PROVIDER,
+                      providerThreadId: input.providerThread.id,
+                      checkpointId: input.target.checkpointId,
+                      cause,
+                    }),
+              ),
             ),
           forkThread: (input) =>
             Effect.fail(
