@@ -51,8 +51,13 @@ const Doctor = Schema.fromJsonString(
     results: Schema.Array(Schema.Struct({ id: Schema.String, status: Schema.String })),
   }),
 );
+const UserSettings = Schema.fromJsonString(
+  Schema.Struct({ customModels: Schema.Array(Schema.Record(Schema.String, Schema.Unknown)) }),
+);
 const decodeModels = Schema.decodeUnknownEffect(Models);
 const decodeDoctor = Schema.decodeOption(Doctor);
+const decodeUserSettings = Schema.decodeOption(UserSettings);
+const encodeUserSettings = Schema.encodeSync(UserSettings);
 
 const modelsFromCatalog = (catalog: typeof Models.Type): ReadonlyArray<ServerProviderModel> =>
   catalog.models
@@ -102,6 +107,29 @@ export const makeDroidInstanceEnvironment = Effect.fn(function* (
   );
 });
 
+const readUserCustomModels = Effect.fn("readUserCustomModels")(function* (
+  environment: NodeJS.ProcessEnv,
+) {
+  const fileSystem = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const userFactoryHome = environment.FACTORY_HOME_OVERRIDE || environment.HOME;
+  if (!userFactoryHome) return [];
+  const contents = yield* fileSystem
+    .readFileString(path.join(userFactoryHome, ".factory", "settings.json"))
+    .pipe(Effect.option);
+  const settings = Option.flatMap(contents, decodeUserSettings);
+  if (Option.isNone(settings)) return [];
+  return settings.value.customModels.map(
+    ({
+      apiKey: _apiKey,
+      apiKeyHelper: _apiKeyHelper,
+      apiKeyHelperTtlMs: _apiKeyHelperTtlMs,
+      extraHeaders: _extraHeaders,
+      ...model
+    }) => model,
+  );
+});
+
 const discoverDroidModels = Effect.fn("discoverDroidModels")(function* (
   binary: string,
   environment: NodeJS.ProcessEnv,
@@ -115,6 +143,16 @@ const discoverDroidModels = Effect.fn("discoverDroidModels")(function* (
   yield* fileSystem.makeDirectory(isolatedCwd);
   yield* fileSystem.makeDirectory(isolatedHome);
   yield* fileSystem.makeDirectory(factoryHome);
+  // The isolated home hides the user's customModels from model listing. Copy only
+  // their definitions; credential fields stay on the host.
+  const customModels = yield* readUserCustomModels(environment);
+  if (customModels.length > 0) {
+    yield* fileSystem.makeDirectory(path.join(factoryHome, ".factory"));
+    yield* fileSystem.writeFileString(
+      path.join(factoryHome, ".factory", "settings.json"),
+      encodeUserSettings({ customModels }),
+    );
+  }
   const {
     FACTORY_RUNTIME_SETTINGS_PATH: _runtimeSettingsPath,
     FACTORY_HOME_OVERRIDE: _factoryHomeOverride,
