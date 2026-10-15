@@ -20,6 +20,108 @@ const missingBinarySettings = Schema.decodeSync(DroidSettings)({
   binaryPath: "/definitely-missing/droid",
 });
 
+const userCustomModels = [
+  {
+    model: "claude-haiku-5-5",
+    id: "custom:Claude Haiku 5.5-0",
+    displayName: "Claude Haiku 5.5",
+    provider: "anthropic",
+    baseUrl: "https://models.example.test/anthropic",
+    apiKey: "sk-user-secret",
+    extraHeaders: { "x-tenant-token": "header-user-secret" },
+  },
+  {
+    model: "gpt-6-luna",
+    id: "custom:GPT-6-Luna-1",
+    provider: "generic-chat-completion-api",
+    baseUrl: "https://models.example.test/v1",
+    apiKeyHelper: "/usr/local/bin/print-user-secret",
+    apiKeyHelperTtlMs: 60000,
+  },
+];
+
+const writeFakeDroid = Effect.fn("writeFakeDroid")(function* (directory: string) {
+  const fileSystem = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const binary = path.join(directory, "droid");
+  const calls = path.join(directory, "calls.jsonl");
+  yield* fileSystem.writeFileString(
+    binary,
+    `#!${process.execPath}
+const fs = require("node:fs");
+const path = require("node:path");
+const args = process.argv.slice(2);
+const sandboxSettingsPath = process.env.FACTORY_HOME_OVERRIDE && path.join(process.env.FACTORY_HOME_OVERRIDE, ".factory", "settings.json");
+const sandboxSettings = sandboxSettingsPath && fs.existsSync(sandboxSettingsPath) ? fs.readFileSync(sandboxSettingsPath, "utf8") : null;
+fs.appendFileSync(process.env.DROID_STATUS_CALLS, JSON.stringify({
+  args,
+  cwd: process.cwd(),
+  home: process.env.HOME,
+  factoryHome: process.env.FACTORY_HOME_OVERRIDE,
+  runtimeSettingsPath: process.env.FACTORY_RUNTIME_SETTINGS_PATH,
+  sandboxSettings
+}) + "\\n");
+if (args[0] === "--version") {
+  console.log("0.236.0");
+} else if (args[0] === "doctor") {
+  console.log(JSON.stringify({ results: [{ id: "auth.verify", status: "pass" }] }));
+} else {
+  let input = "";
+  process.stdin.setEncoding("utf8");
+  process.stdin.on("data", (chunk) => {
+    input += chunk;
+    while (input.includes("\\n")) {
+      const index = input.indexOf("\\n");
+      const request = JSON.parse(input.slice(0, index));
+      input = input.slice(index + 1);
+      if (request.method !== "droid.close_session") {
+        fs.appendFileSync(process.env.DROID_STATUS_CALLS, JSON.stringify({ method: request.method }) + "\\n");
+      }
+      const result = request.method === "droid.list_models"
+        ? { models: [{
+            id: "test-model",
+            displayName: "Test model",
+            supportedReasoningEfforts: [],
+            defaultReasoningEffort: ""
+          }] }
+        : { skills: [] };
+      process.stdout.write(JSON.stringify({
+        jsonrpc: "2.0",
+        type: "response",
+        id: request.id,
+        result
+      }) + "\\n");
+      if (request.method === "droid.close_session") process.exit(0);
+    }
+  });
+}
+`,
+  );
+  yield* fileSystem.chmod(binary, 0o755);
+  return { binary, calls };
+});
+
+const writeUserSettings = Effect.fn("writeUserSettings")(function* (
+  home: string,
+  contents: string,
+) {
+  const fileSystem = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  yield* fileSystem.makeDirectory(path.join(home, ".factory"), { recursive: true });
+  yield* fileSystem.writeFileString(path.join(home, ".factory", "settings.json"), contents);
+});
+
+const readDiscoveryInvocations = Effect.fn("readDiscoveryInvocations")(function* (calls: string) {
+  const fileSystem = yield* FileSystem.FileSystem;
+  const invocations = (yield* fileSystem.readFileString(calls))
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line));
+  return invocations.filter(
+    (invocation) => Array.isArray(invocation.args) && invocation.args[0] === "exec",
+  );
+});
+
 describe("Droid status", () => {
   it.effect("does not probe a disabled provider", () =>
     Effect.gen(function* () {
@@ -73,57 +175,7 @@ describe("Droid status", () => {
         path.join(personalSkillDirectory, "SKILL.md"),
         ["---", "name: project-skill", "description: Personal skill", "---", ""].join("\n"),
       );
-      const binary = path.join(directory, "droid");
-      const calls = path.join(directory, "calls.jsonl");
-      yield* fileSystem.writeFileString(
-        binary,
-        `#!${process.execPath}
-const fs = require("node:fs");
-const args = process.argv.slice(2);
-fs.appendFileSync(process.env.DROID_STATUS_CALLS, JSON.stringify({
-  args,
-  cwd: process.cwd(),
-  home: process.env.HOME,
-  factoryHome: process.env.FACTORY_HOME_OVERRIDE,
-  runtimeSettingsPath: process.env.FACTORY_RUNTIME_SETTINGS_PATH
-}) + "\\n");
-if (args[0] === "--version") {
-  console.log("0.236.0");
-} else if (args[0] === "doctor") {
-  console.log(JSON.stringify({ results: [{ id: "auth.verify", status: "pass" }] }));
-} else {
-  let input = "";
-  process.stdin.setEncoding("utf8");
-  process.stdin.on("data", (chunk) => {
-    input += chunk;
-    while (input.includes("\\n")) {
-      const index = input.indexOf("\\n");
-      const request = JSON.parse(input.slice(0, index));
-      input = input.slice(index + 1);
-      if (request.method !== "droid.close_session") {
-        fs.appendFileSync(process.env.DROID_STATUS_CALLS, JSON.stringify({ method: request.method }) + "\\n");
-      }
-      const result = request.method === "droid.list_models"
-        ? { models: [{
-            id: "test-model",
-            displayName: "Test model",
-            supportedReasoningEfforts: [],
-            defaultReasoningEffort: ""
-          }] }
-        : { skills: [] };
-      process.stdout.write(JSON.stringify({
-        jsonrpc: "2.0",
-        type: "response",
-        id: request.id,
-        result
-      }) + "\\n");
-      if (request.method === "droid.close_session") process.exit(0);
-    }
-  });
-}
-`,
-      );
-      yield* fileSystem.chmod(binary, 0o755);
+      const { binary, calls } = yield* writeFakeDroid(directory);
       const statusEnvironment = {
         DROID_STATUS_CALLS: calls,
         FACTORY_RUNTIME_SETTINGS_PATH: "/project/settings.json",
@@ -183,6 +235,141 @@ if (args[0] === "--version") {
       assert.equal(failedSkillsSnapshot.status, "warning");
       assert.isTrue(failedSkillsSnapshot.models.some((model) => model.slug === "test-model"));
     }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("gives model discovery the user's custom models without credentials", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const directory = yield* fileSystem.makeTempDirectoryScoped({
+        directory: NodeOS.tmpdir(),
+        prefix: "droid-status-custom-models-",
+      });
+      const home = path.join(directory, "home");
+      yield* writeUserSettings(home, JSON.stringify({ customModels: userCustomModels }));
+      const { binary, calls } = yield* writeFakeDroid(directory);
+      const snapshot = yield* checkDroidProviderStatus(
+        { ...missingBinarySettings, binaryPath: binary },
+        { DROID_STATUS_CALLS: calls, HOME: home },
+        directory,
+        home,
+      );
+      const discovery = yield* readDiscoveryInvocations(calls);
+      // Model listing runs first; skill discovery uses its own sandbox.
+      assert.lengthOf(discovery, 2);
+      assert.deepStrictEqual(JSON.parse(discovery[0].sandboxSettings), {
+        customModels: [
+          {
+            model: "claude-haiku-5-5",
+            id: "custom:Claude Haiku 5.5-0",
+            displayName: "Claude Haiku 5.5",
+            provider: "anthropic",
+            baseUrl: "https://models.example.test/anthropic",
+          },
+          {
+            model: "gpt-6-luna",
+            id: "custom:GPT-6-Luna-1",
+            provider: "generic-chat-completion-api",
+            baseUrl: "https://models.example.test/v1",
+          },
+        ],
+      });
+      assert.isTrue(snapshot.models.some((model) => model.slug === "test-model"));
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("reads user custom models from FACTORY_HOME_OVERRIDE before HOME", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const directory = yield* fileSystem.makeTempDirectoryScoped({
+        directory: NodeOS.tmpdir(),
+        prefix: "droid-status-custom-models-",
+      });
+      const home = path.join(directory, "home");
+      const overrideHome = path.join(directory, "override-home");
+      yield* writeUserSettings(
+        home,
+        JSON.stringify({
+          customModels: [
+            { model: "home-model", id: "custom:home", provider: "anthropic", baseUrl: "https://h" },
+          ],
+        }),
+      );
+      yield* writeUserSettings(
+        overrideHome,
+        JSON.stringify({
+          customModels: [
+            {
+              model: "override-model",
+              id: "custom:override",
+              provider: "anthropic",
+              baseUrl: "https://o",
+            },
+          ],
+        }),
+      );
+      const { binary, calls } = yield* writeFakeDroid(directory);
+      yield* checkDroidProviderStatus(
+        { ...missingBinarySettings, binaryPath: binary },
+        { DROID_STATUS_CALLS: calls, HOME: home, FACTORY_HOME_OVERRIDE: overrideHome },
+        directory,
+        home,
+      );
+      const discovery = yield* readDiscoveryInvocations(calls);
+      assert.deepStrictEqual(JSON.parse(discovery[0].sandboxSettings), {
+        customModels: [
+          {
+            model: "override-model",
+            id: "custom:override",
+            provider: "anthropic",
+            baseUrl: "https://o",
+          },
+        ],
+      });
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect(
+    "keeps model discovery working without sandbox settings when user settings are missing, malformed, or empty",
+    () =>
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const directory = yield* fileSystem.makeTempDirectoryScoped({
+          directory: NodeOS.tmpdir(),
+          prefix: "droid-status-custom-models-",
+        });
+        const cases: ReadonlyArray<readonly [string, string | undefined]> = [
+          ["missing", undefined],
+          ["malformed", "{ not json"],
+          ["invalid-entry", JSON.stringify({ customModels: ["not-a-model"] })],
+          ["empty", JSON.stringify({ customModels: [] })],
+        ];
+        for (const [name, contents] of cases) {
+          const caseDirectory = path.join(directory, name);
+          const home = path.join(caseDirectory, "home");
+          yield* fileSystem.makeDirectory(home, { recursive: true });
+          if (contents !== undefined) yield* writeUserSettings(home, contents);
+          const { binary, calls } = yield* writeFakeDroid(caseDirectory);
+          const snapshot = yield* checkDroidProviderStatus(
+            { ...missingBinarySettings, binaryPath: binary },
+            { DROID_STATUS_CALLS: calls, HOME: home },
+            caseDirectory,
+            home,
+          );
+          const discovery = yield* readDiscoveryInvocations(calls);
+          assert.equal(snapshot.status, "ready", name);
+          assert.isTrue(
+            snapshot.models.some((model) => model.slug === "test-model"),
+            name,
+          );
+          assert.lengthOf(discovery, 2, name);
+          for (const invocation of discovery) {
+            assert.isNull(invocation.sandboxSettings, name);
+          }
+        }
+      }).pipe(Effect.provide(NodeServices.layer)),
   );
 
   it("adds non-interactive settings without mutating the given environment", () => {
