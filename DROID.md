@@ -50,6 +50,12 @@ node scripts/build-desktop-artifact.ts --platform mac --target dmg --arch arm64 
 
 A local build is not signed with a Developer ID, so macOS asks you to approve it the first time you open it. To sign it yourself, see [Desktop artifacts](docs/operations/development.md#desktop-artifacts).
 
+If the build stops with `Expected @voidzero-dev/vite-plus-core@<version>`, your global `vp` is newer than the one this checkout pins. Put the checkout's own `vp` first on your `PATH` for the build:
+
+```sh
+PATH="$PWD/node_modules/.bin:$PATH" node scripts/build-desktop-artifact.ts --platform mac --target dmg --arch arm64 --output-dir <dir>
+```
+
 ## Enable Factory Droid
 
 Open **Settings → Providers**, select the environment that runs Droid, and enable **Factory Droid**. The Droid CLI must be installed and signed in on that environment's machine.
