@@ -50,14 +50,15 @@ Droid does not request approval for file reads.
 
 Droid subagents appear in the shared subagent view with their status and
 result. When a subagent asks for approval or asks a question, the request is
-shown on that subagent.
-Their conversation transcripts are not available as child-thread history, and
+shown on that subagent. T3 Code follows the child session transcript and shows
+its conversation, tool activity, model, and effort in the child thread.
 T3 Code cannot wait for or close a subagent independently.
 
 ## Limits
 
 T3 Code has no flow for importing an existing Factory Droid session.
-Conversation rollback and forking a thread are not supported. Droid can finish
+Conversation rollback uses Droid's native rewind; forking a thread is not
+supported. Droid can finish
 background tasks after a turn; T3 Code brings their completion back into the
 thread. The context meter shows Droid's context window and usage, and
 **Compact context** (or `/compact`) compacts the session. Droid also compacts
