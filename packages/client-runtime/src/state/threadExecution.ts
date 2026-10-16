@@ -144,14 +144,40 @@ export function deriveReportedModelSelection(
   return providerThread?.nativeMetadata?.modelSelection ?? null;
 }
 
-const REASONING_EFFORT_OPTION_IDS = ["reasoningEffort", "effort", "reasoning", "variant"] as const;
+// Option ids providers use for reasoning effort (Codex, Claude, Grok/ACP, OpenCode).
+const REASONING_EFFORT_OPTION_IDS = [
+  "reasoningEffort",
+  "reasoning_effort",
+  "effort",
+  "reasoning",
+  "variant",
+] as const;
+
+/**
+ * Finds the catalog model a selection names. Native subagents report the
+ * display name or an alias, not the catalog slug.
+ */
+function findSelectionCatalogModel(
+  models: ReadonlyArray<ServerProviderModel>,
+  model: string,
+): ServerProviderModel | undefined {
+  const name = model.trim().toLowerCase();
+  return (
+    models.find((candidate) => candidate.slug === model) ??
+    models.find(
+      (candidate) =>
+        candidate.name.trim().toLowerCase() === name ||
+        candidate.aliases?.some((alias) => alias.trim().toLowerCase() === name),
+    )
+  );
+}
 
 export function formatModelSelectionEffort(
   selection: ModelSelection,
   models: ReadonlyArray<ServerProviderModel> = [],
   reportedSelection?: ModelSelection | null,
 ): string | null {
-  const caps = models.find((model) => model.slug === selection.model)?.capabilities;
+  const caps = findSelectionCatalogModel(models, selection.model)?.capabilities;
   if (!caps) return null;
   const descriptors = getProviderOptionDescriptors({ caps, selections: selection.options });
   for (const id of REASONING_EFFORT_OPTION_IDS) {
