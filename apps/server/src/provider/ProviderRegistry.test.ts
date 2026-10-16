@@ -46,6 +46,7 @@ import * as ModelManifest from "./ModelManifest.ts";
 import { applyProviderCompatibility } from "./providerCompatibility.ts";
 import * as ResetCreditCoordinator from "./resetCreditCoordinator.ts";
 import * as ProviderLatestVersions from "@t3tools/provider-core/server/ProviderLatestVersions";
+import * as ProviderContinuationRequests from "@t3tools/provider-core/server/ProviderContinuationRequests";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import * as OpenCodeRuntime from "@t3tools/provider-opencode/server/OpenCodeRuntime";
 import * as OpenCodeServerLedger from "@t3tools/provider-opencode/server/OpenCodeServerLedger";
@@ -1112,6 +1113,72 @@ it.layer(
       const afterFailure = ProviderRegistry.mergeProviderSnapshot(afterRemoval, failedProvider);
 
       assert.deepStrictEqual(afterFailure.models, [authoritativeProvider.models[0]!]);
+    });
+
+    it("replaces Droid models after a ready probe and keeps them after a failed discovery", () => {
+      const staleCapabilities = createModelCapabilities({ optionDescriptors: [] });
+      const freshCapabilities = createModelCapabilities({
+        optionDescriptors: [
+          {
+            type: "select",
+            id: "reasoning_effort",
+            label: "Reasoning",
+            currentValue: "high",
+            options: [
+              { id: "low", label: "low", isDefault: false },
+              { id: "high", label: "high", isDefault: true },
+            ],
+          },
+        ],
+      });
+      const readyProvider = {
+        instanceId: ProviderInstanceId.make("droid"),
+        driver: ProviderDriverKind.make("droid"),
+        status: "ready",
+        enabled: true,
+        installed: true,
+        auth: { status: "authenticated" },
+        checkedAt: "2026-10-15T09:00:00.000Z",
+        version: "0.241.1",
+        models: [
+          { slug: "auto", name: "Auto", isCustom: false, capabilities: staleCapabilities },
+          {
+            slug: "custom:Claude Haiku 5.5-16",
+            name: "Claude Haiku 5.5",
+            isCustom: false,
+            capabilities: staleCapabilities,
+          },
+        ],
+        slashCommands: [],
+        skills: [],
+      } satisfies ServerProvider;
+      const refreshedProvider = {
+        ...readyProvider,
+        checkedAt: "2026-10-15T09:01:00.000Z",
+        models: [
+          {
+            slug: "custom:Claude Haiku 5.5-16",
+            name: "Claude Haiku 5.5",
+            isCustom: false,
+            capabilities: freshCapabilities,
+          },
+        ],
+      } satisfies ServerProvider;
+      const failedDiscoveryProvider = {
+        ...readyProvider,
+        checkedAt: "2026-10-15T09:02:00.000Z",
+        status: "warning",
+        models: [],
+      } satisfies ServerProvider;
+
+      assert.deepStrictEqual(
+        ProviderRegistry.mergeProviderSnapshot(readyProvider, refreshedProvider).models,
+        refreshedProvider.models,
+      );
+      assert.deepStrictEqual(
+        ProviderRegistry.mergeProviderSnapshot(readyProvider, failedDiscoveryProvider).models,
+        readyProvider.models,
+      );
     });
 
     describe("Codex model inventories", () => {
@@ -2740,6 +2807,7 @@ it.layer(
             ),
           ),
           Layer.provideMerge(ProviderLatestVersions.layer),
+          Layer.provideMerge(ProviderContinuationRequests.layer),
           Layer.provideMerge(McpProviderSessions.layer),
           Layer.provideMerge(ModelManifest.layerTest),
           Layer.provideMerge(ResetCreditCoordinator.layerTest),
@@ -2839,6 +2907,7 @@ it.layer(
             ),
           ),
           Layer.provideMerge(ProviderLatestVersions.layer),
+          Layer.provideMerge(ProviderContinuationRequests.layer),
           Layer.provideMerge(McpProviderSessions.layer),
           Layer.provideMerge(ModelManifest.layerTest),
           Layer.provideMerge(ResetCreditCoordinator.layerTest),
@@ -2955,6 +3024,7 @@ it.layer(
             ),
           ),
           Layer.provideMerge(ProviderLatestVersions.layer),
+          Layer.provideMerge(ProviderContinuationRequests.layer),
           Layer.provideMerge(McpProviderSessions.layer),
           Layer.provideMerge(ModelManifest.layerTest),
           Layer.provideMerge(ResetCreditCoordinator.layerTest),
@@ -3015,6 +3085,7 @@ it.layer(
               ),
             ),
             Layer.provideMerge(ProviderLatestVersions.layer),
+            Layer.provideMerge(ProviderContinuationRequests.layer),
             Layer.provideMerge(McpProviderSessions.layer),
             Layer.provideMerge(ModelManifest.layerTest),
             Layer.provideMerge(ResetCreditCoordinator.layerTest),
@@ -3065,6 +3136,7 @@ it.layer(
               "claudeAgent",
               "codex",
               "cursor",
+              "droid",
               "grok",
               "muse",
               "opencode",
@@ -3076,6 +3148,9 @@ it.layer(
             const museProvider = providers.find((provider) => provider.driver === "muse");
             assert.strictEqual(museProvider?.enabled, false);
             assert.strictEqual(museProvider?.status, "disabled");
+            const droidProvider = providers.find((provider) => provider.driver === "droid");
+            assert.strictEqual(droidProvider?.enabled, false);
+            assert.strictEqual(droidProvider?.status, "disabled");
             assert.strictEqual(cursorSpawned, false);
           }).pipe(Effect.provide(runtimeServices));
         }),
