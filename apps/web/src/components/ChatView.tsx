@@ -126,7 +126,10 @@ import {
 } from "@t3tools/shared/model";
 import { projectScriptCwd, resolveProjectScripts } from "@t3tools/shared/projectScripts";
 import { CHAT_LIST_ANCHOR_OFFSET } from "@t3tools/shared/chatList";
-import { derivePendingBackgroundWork } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
+import {
+  derivePendingBackgroundWork,
+  pendingBackgroundRosterForActiveThread,
+} from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import {
   latestUnheldRun,
   usageLimitRunPresentedAsLatest,
@@ -4968,9 +4971,19 @@ export default function ChatView(props: ChatViewProps) {
   const handleSwitchCheckoutToThreadStable = useStableCallback(() => {
     void handleSwitchCheckoutToThread();
   });
-  // The interrupt path also accepts a completed run while its provider still
-  // has background work.
-  const activeBackgroundTasks = !isWorking && activeThread ? pendingBackgroundTasks : [];
+  // The interrupt path also accepts a completed run while its provider still has background work.
+  const activeProviderBackgroundRoster =
+    serverProjection === null
+      ? []
+      : pendingBackgroundRosterForActiveThread({
+          providerThreads: serverProjection.providerThreads,
+          activeProviderThreadId: serverProjection.thread.activeProviderThreadId,
+        });
+  const activeBackgroundTasks = !activeThread
+    ? []
+    : isWorking
+      ? activeProviderBackgroundRoster
+      : pendingBackgroundTasks;
   const [stoppingBackgroundWorkKey, setStoppingBackgroundWorkKey] = useState<string | null>(null);
   const isStoppingBackgroundWork =
     stoppingBackgroundWorkKey === `${environmentId}:${activeThreadId}`;
@@ -5183,7 +5196,7 @@ export default function ChatView(props: ChatViewProps) {
                 </Fragment>
               );
             }),
-      actions: (
+      actions: isWorking ? undefined : (
         <Button
           size="xs"
           variant="ghost"
