@@ -11,6 +11,7 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
+import * as NodeOS from "node:os";
 import * as ChildProcess from "effect/process/ChildProcess";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
 import {
@@ -107,13 +108,15 @@ export const makeDroidInstanceEnvironment = Effect.fn(function* (
   );
 });
 
+// Windows rarely sets HOME; os.homedir() honors HOME where it is set and uses USERPROFILE otherwise.
+const droidUserHome = (environment: NodeJS.ProcessEnv) => environment.HOME || NodeOS.homedir();
+
 const readUserCustomModels = Effect.fn("readUserCustomModels")(function* (
   environment: NodeJS.ProcessEnv,
 ) {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const userFactoryHome = environment.FACTORY_HOME_OVERRIDE || environment.HOME;
-  if (!userFactoryHome) return [];
+  const userFactoryHome = environment.FACTORY_HOME_OVERRIDE || droidUserHome(environment);
   const contents = yield* fileSystem
     .readFileString(path.join(userFactoryHome, ".factory", "settings.json"))
     .pipe(Effect.option);
@@ -201,7 +204,7 @@ export const checkDroidProviderStatus = Effect.fn("checkDroidProviderStatus")(fu
   settings: DroidSettings,
   environment: NodeJS.ProcessEnv,
   cwd: string,
-  home = environment.HOME || process.env.HOME || cwd,
+  home = droidUserHome(environment),
 ) {
   if (!settings.enabled) return yield* makePendingDroidProvider(settings);
   const binary = settings.binaryPath.trim() || "droid";
