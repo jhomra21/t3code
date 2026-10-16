@@ -447,7 +447,7 @@ const lifecycleFixture = Effect.fnUntraced(function* (
     holdInterruptSessionResponse,
   });
   const sessionScope = yield* Scope.fork(yield* Effect.scope, "sequential");
-  const opened = yield* open(fake, undefined, undefined, undefined, undefined, {
+  const opened = yield* open(fake, undefined, undefined, undefined, undefined, undefined, false, {
     FACTORY_HOME_OVERRIDE: home,
   }).pipe(
     Effect.provideService(Scope.Scope, sessionScope),
@@ -2230,7 +2230,6 @@ describe("Droid adapter", () => {
           policy.cwd,
           undefined,
           undefined,
-          {},
           source.providerThread,
         );
         const terminal = yield* Deferred.make<ProviderAdapter.ProviderAdapterV2Event>();
@@ -2943,9 +2942,16 @@ describe("Droid adapter", () => {
           ),
         );
         const fake = yield* makeFakeDroid({ nativeSessionId: parentId });
-        const { runtime, input } = yield* open(fake, undefined, undefined, undefined, undefined, {
-          FACTORY_HOME_OVERRIDE: home,
-        });
+        const { runtime, input } = yield* open(
+          fake,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          false,
+          { FACTORY_HOME_OVERRIDE: home },
+        );
         const childMessage = yield* Deferred.make<void>();
         const childModel = yield* Deferred.make<void>();
         const childToolStarted = yield* Deferred.make<void>();

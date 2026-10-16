@@ -569,7 +569,6 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
         let wakeOwner: ActiveTurn | null = null;
         let nativeNotificationTurnId: string | null = null;
         let settingsModel: string | null = null;
-        let contextUsageAfterCompaction = false;
 
         const emit = (event: ProviderAdapter.ProviderAdapterV2Event) =>
           Queue.offer(events, event).pipe(Effect.asVoid);
