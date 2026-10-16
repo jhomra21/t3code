@@ -224,17 +224,11 @@ const responseFor = (
       readonly usedTokens: number;
       readonly lastCallCompactionTokens?: number;
     };
-    readonly contextBreakdownSequence?: ReadonlyArray<{
-      readonly contextBudget: number;
-      readonly usedTokens: number;
-      readonly lastCallCompactionTokens?: number;
-    }>;
     readonly nativeSessionId?: string;
     readonly rewindSessionId?: string;
     readonly failInterruptSession?: boolean;
     readonly holdInterruptSessionResponse?: boolean;
   },
-  contextBreakdownIndex = 0,
 ) => ({
   type: "response",
   jsonrpc: "2.0",
@@ -252,14 +246,7 @@ const responseFor = (
             : frame.method === "droid.load_session"
               ? { session: { messages: [] } }
               : frame.method === "droid.get_context_breakdown"
-                ? (options.contextBreakdownSequence?.[
-                    Math.min(
-                      contextBreakdownIndex,
-                      (options.contextBreakdownSequence?.length ?? 1) - 1,
-                    )
-                  ] ??
-                  options.contextBreakdown ??
-                  {})
+                ? (options.contextBreakdown ?? {})
                 : frame.method === "droid.compact_session"
                   ? (options.compactSessionResult ?? {})
                   : frame.method === "droid.execute_rewind"
