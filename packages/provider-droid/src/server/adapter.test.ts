@@ -2685,98 +2685,112 @@ describe("Droid adapter", () => {
   );
 
   it.effect.each([
-    ["foreground", "Task completed.", false],
-    ["background", "Task launched in background.\nTask ID: child", true],
-  ] as const)("projects only a %s Task in the provider roster", ([, result, expected]) =>
-    provide(
-      Effect.gen(function* () {
-        const fake = yield* makeFakeDroid();
-        const { runtime, input } = yield* open(fake);
-        const providerThreadEvents: ProviderAdapter.ProviderAdapterV2Event[] = [];
-        const rosterReady = yield* Deferred.make<void>();
-        const childReady = yield* Deferred.make<void>();
-        const taskResultReady = yield* Deferred.make<void>();
-        const turnSettled = yield* Deferred.make<void>();
-        const childId = "child-session";
-        yield* runtime.events.pipe(
-          Stream.runForEach((event) => {
-            if (event.type === "provider_thread.updated") {
-              providerThreadEvents.push(event);
-              if (
-                (event.providerThread.pendingBackgroundTasks ?? []).some(
-                  (task) => task.taskId === childId,
+    ["foreground", "Task completed.", false, "heavy", "high"],
+    ["background", "Task launched in background.\nTask ID: child", true, "light", "low"],
+    ["medium", "Task completed.", false, "medium", "medium"],
+    ["missing", "Task completed.", false, undefined, undefined],
+    ["unknown", "Task completed.", false, "unrecognized", undefined],
+  ] as const)(
+    "projects only a %s Task in the provider roster",
+    ([, result, expected, complexity, expectedEffort]) =>
+      provide(
+        Effect.gen(function* () {
+          const fake = yield* makeFakeDroid();
+          const { runtime, input } = yield* open(fake);
+          const providerThreadEvents: ProviderAdapter.ProviderAdapterV2Event[] = [];
+          const subagentEvents: ProviderAdapter.ProviderAdapterV2Event[] = [];
+          const rosterReady = yield* Deferred.make<void>();
+          const childReady = yield* Deferred.make<void>();
+          const taskResultReady = yield* Deferred.make<void>();
+          const turnSettled = yield* Deferred.make<void>();
+          const childId = "child-session";
+          yield* runtime.events.pipe(
+            Stream.runForEach((event) => {
+              if (event.type === "provider_thread.updated") {
+                providerThreadEvents.push(event);
+                if (
+                  (event.providerThread.pendingBackgroundTasks ?? []).some(
+                    (task) => task.taskId === childId,
+                  )
                 )
+                  return Deferred.succeed(rosterReady, undefined);
+              }
+              if (
+                event.type === "subagent.updated" &&
+                event.subagent.nativeTaskRef?.nativeId === childId
+              ) {
+                subagentEvents.push(event);
+                return Deferred.succeed(childReady, undefined);
+              }
+              if (
+                event.type === "turn_item.updated" &&
+                event.turnItem.type === "dynamic_tool" &&
+                event.turnItem.title === "Task" &&
+                event.turnItem.status === "completed"
               )
-                return Deferred.succeed(rosterReady, undefined);
-            }
-            if (
-              event.type === "subagent.updated" &&
-              event.subagent.nativeTaskRef?.nativeId === childId
-            )
-              return Deferred.succeed(childReady, undefined);
-            if (
-              event.type === "turn_item.updated" &&
-              event.turnItem.type === "dynamic_tool" &&
-              event.turnItem.title === "Task" &&
-              event.turnItem.status === "completed"
-            )
-              return Deferred.succeed(taskResultReady, undefined);
-            if (event.type === "turn.terminal") return Deferred.succeed(turnSettled, undefined);
-            return Effect.void;
-          }),
-          Effect.forkChild,
-        );
-        yield* runtime.startTurn(input);
-        yield* fake.takeRequest("droid.add_user_message");
-        yield* fake.emitNotification({
-          type: "create_message",
-          message: {
-            id: "parent",
-            role: "assistant",
-            content: [
-              {
-                type: "tool_use",
-                id: "task-call",
-                name: "Task",
-                input: { description: "Background child", prompt: "Do work" },
-              },
-            ],
-          },
-        });
-        yield* fake.emitNotification({
-          type: "child_session_available",
-          childSessionId: childId,
-          toolUseId: "task-call",
-          description: "Background child",
-        });
-        yield* Deferred.await(childReady);
-        yield* fake.emitNotification({
-          type: "tool_result",
-          toolUseId: "task-call",
-          content: result,
-        });
-        yield* Deferred.await(taskResultReady);
-        yield* fake.emitNotification({
-          type: "agent_turn_completed",
-          reason: "completed",
-          turnId: input.message.messageId,
-        });
-        yield* Deferred.await(turnSettled);
-        if (expected) yield* Deferred.await(rosterReady);
-        assert.equal(
-          providerThreadEvents.some(
-            (event) =>
-              event.type === "provider_thread.updated" &&
-              event.providerThread.pendingBackgroundTasks?.some((task) => task.taskId === childId),
-          ),
-          expected,
-        );
-        assert.equal(
-          yield* runtime.hasPendingBackgroundWorkForThread!(input.providerThread),
-          expected,
-        );
-      }),
-    ),
+                return Deferred.succeed(taskResultReady, undefined);
+              if (event.type === "turn.terminal") return Deferred.succeed(turnSettled, undefined);
+              return Effect.void;
+            }),
+            Effect.forkChild,
+          );
+          yield* runtime.startTurn(input);
+          yield* fake.takeRequest("droid.add_user_message");
+          yield* fake.emitNotification({
+            type: "create_message",
+            message: {
+              id: "parent",
+              role: "assistant",
+              content: [
+                {
+                  type: "tool_use",
+                  id: "task-call",
+                  name: "Task",
+                  input: { description: "Background child", prompt: "Do work", complexity },
+                },
+              ],
+            },
+          });
+          yield* fake.emitNotification({
+            type: "child_session_available",
+            childSessionId: childId,
+            toolUseId: "task-call",
+            description: "Background child",
+          });
+          yield* Deferred.await(childReady);
+          yield* fake.emitNotification({
+            type: "tool_result",
+            toolUseId: "task-call",
+            content: result,
+          });
+          yield* Deferred.await(taskResultReady);
+          yield* fake.emitNotification({
+            type: "agent_turn_completed",
+            reason: "completed",
+            turnId: input.message.messageId,
+          });
+          yield* Deferred.await(turnSettled);
+          if (expected) yield* Deferred.await(rosterReady);
+          assert.equal(
+            providerThreadEvents.some(
+              (event) =>
+                event.type === "provider_thread.updated" &&
+                event.providerThread.pendingBackgroundTasks?.some(
+                  (task) => task.taskId === childId,
+                ),
+            ),
+            expected,
+          );
+          assert.equal(
+            yield* runtime.hasPendingBackgroundWorkForThread!(input.providerThread),
+            expected,
+          );
+          const child = subagentEvents
+            .flatMap((event) => (event.type === "subagent.updated" ? [event.subagent] : []))
+            .find((subagent) => subagent.nativeTaskRef?.nativeId === childId);
+          assert.equal(Reflect.get(child ?? {}, "effort"), expectedEffort);
+        }),
+      ),
   );
   it.effect("reconciles the persisted roster after an idle background completion", () =>
     provide(
