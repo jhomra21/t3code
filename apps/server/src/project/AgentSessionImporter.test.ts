@@ -23,6 +23,110 @@ const providerInstanceId = ProviderInstanceId.make("codex");
 const providerSessionId = "native-codex-thread";
 const threadId = ThreadId.make(`import:${providerInstanceId}:${providerSessionId}`);
 
+it.effect("imports Droid sessions with the native session resume cursor", () => {
+  const droidInstanceId = ProviderInstanceId.make("droid");
+  const droidSessionId = "native-droid-session";
+  const droidThreadId = ThreadId.make(`import:${droidInstanceId}:${droidSessionId}`);
+  const writes: Array<ReadonlyArray<OrchestrationV2DomainEvent>> = [];
+  const upserts: Array<unknown> = [];
+  let imported = false;
+  const scanner = AgentSessionScanner.AgentSessionScanner.of({
+    scan: Effect.die("unused"),
+    recentThreads: () =>
+      Stream.succeed({
+        _tag: "Importable",
+        source: {
+          provider: "droid",
+          providerInstanceId: droidInstanceId,
+          providerSessionId: droidSessionId,
+          filePath: "/tmp/droid-session.jsonl",
+          size: 100,
+          mtimeMs: 2,
+          device: 3,
+          inode: 4,
+          birthtimeMs: 1,
+        },
+        thread: {
+          source: "droid",
+          providerInstanceId: droidInstanceId,
+          providerSessionId: droidSessionId,
+          title: "Droid thread",
+          model: null,
+          createdAt: "2026-09-01T10:00:00.000Z",
+          updatedAt: "2026-09-01T10:01:00.000Z",
+          messages: [
+            { role: "user", text: "Synthetic prompt", createdAt: "2026-09-01T10:00:00.000Z" },
+            {
+              role: "assistant",
+              text: "Synthetic response",
+              createdAt: "2026-09-01T10:01:00.000Z",
+            },
+          ],
+        },
+      }),
+  });
+  const layerTest = AgentSessionImporter.layer.pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        Layer.succeed(AgentSessionScanner.AgentSessionScanner, scanner),
+        Layer.mock(ProjectService.ProjectService)({
+          getById: () =>
+            Effect.succeed(
+              Option.some({ id: projectId, workspaceRoot: "/workspace/project" } as never),
+            ),
+        }),
+        Layer.mock(Orchestrator.OrchestratorV2)({
+          getThreadRecords: () =>
+            imported
+              ? Effect.succeed({
+                  thread: { id: droidThreadId, projectId, historyOrigin: "v1_import" },
+                } as never)
+              : Effect.fail(
+                  new Orchestrator.OrchestratorProjectionError({ threadId: droidThreadId }),
+                ),
+        }),
+        Layer.mock(EventSink.EventSinkV2)({
+          write: (input) =>
+            Effect.sync(() => {
+              writes.push(input.events);
+              imported = true;
+              return [];
+            }),
+        }),
+        Layer.mock(ProviderSessionRuntime.ProviderSessionRuntimeRepository)({
+          list: () => Effect.succeed([]),
+          upsert: (input) => Effect.sync(() => void upserts.push(input)),
+          recordImportedTranscript: () => Effect.void,
+        }),
+        IdAllocator.layer,
+      ),
+    ),
+  );
+
+  return Effect.gen(function* () {
+    const importer = yield* AgentSessionImporter.AgentSessionImporter;
+    yield* importer.importRecentAgentThreads({ projectId });
+    yield* importer.importRecentAgentThreads({ projectId });
+    expect(writes).toHaveLength(1);
+    expect(upserts).toHaveLength(1);
+    expect(
+      writes[0]?.find((event) => event.type === "provider-thread.updated")?.payload,
+    ).toMatchObject({
+      driver: "droid",
+      nativeThreadRef: { driver: "droid", nativeId: droidSessionId, strength: "strong" },
+    });
+    expect(writes[0]?.find((event) => event.type === "thread.created")?.payload).toMatchObject({
+      modelSelection: { instanceId: droidInstanceId, model: "default" },
+    });
+    expect(upserts[0]).toEqual(
+      expect.objectContaining({
+        providerName: "droid",
+        resumeCursor: { sessionId: droidSessionId },
+      }),
+    );
+  }).pipe(Effect.provide(layerTest));
+});
+
 it.effect("imports messages once and preserves the provider native resume binding", () => {
   const writes: Array<ReadonlyArray<OrchestrationV2DomainEvent>> = [];
   const upserts: Array<unknown> = [];
