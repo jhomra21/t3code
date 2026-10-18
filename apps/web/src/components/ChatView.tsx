@@ -500,6 +500,7 @@ import {
   waitForRevertedMessage,
   reconcileMountedTerminalThreadIds,
   resolveComposerInteractionMode,
+  resolveBackgroundWorkBanner,
   resolveComposerProviderSelection,
   getAntigravitySendBlockReason,
   resolveThreadMetadataUpdateForNextTurn,
@@ -4979,11 +4980,12 @@ export default function ChatView(props: ChatViewProps) {
           providerThreads: serverProjection.providerThreads,
           activeProviderThreadId: serverProjection.thread.activeProviderThreadId,
         });
-  const activeBackgroundTasks = !activeThread
-    ? []
-    : isWorking
-      ? activeProviderBackgroundRoster
-      : pendingBackgroundTasks;
+  const backgroundWork = resolveBackgroundWorkBanner({
+    hasActiveThread: Boolean(activeThread),
+    isWorking,
+    activeRoster: activeProviderBackgroundRoster,
+    settledTasks: pendingBackgroundTasks,
+  });
   const [stoppingBackgroundWorkKey, setStoppingBackgroundWorkKey] = useState<string | null>(null);
   const isStoppingBackgroundWork =
     stoppingBackgroundWorkKey === `${environmentId}:${activeThreadId}`;
@@ -5149,7 +5151,7 @@ export default function ChatView(props: ChatViewProps) {
   })() as ComposerBannerStackItem | null;
 
   const backgroundWorkBannerItem = (() => {
-    const presentation = presentPendingBackgroundWork(activeBackgroundTasks);
+    const presentation = presentPendingBackgroundWork(backgroundWork.tasks);
     if (presentation === null || !activeThread) {
       return null;
     }
@@ -5196,7 +5198,7 @@ export default function ChatView(props: ChatViewProps) {
                 </Fragment>
               );
             }),
-      actions: isWorking ? undefined : (
+      actions: backgroundWork.canStop ? (
         <Button
           size="xs"
           variant="ghost"
@@ -5205,7 +5207,7 @@ export default function ChatView(props: ChatViewProps) {
         >
           {isStoppingBackgroundWork ? "Stopping..." : "Stop"}
         </Button>
-      ),
+      ) : undefined,
     };
   })() as ComposerBannerStackItem | null;
   // The relative times read the clock; nowMinute re-renders them on the minute.
