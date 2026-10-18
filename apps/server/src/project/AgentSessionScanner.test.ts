@@ -1596,6 +1596,57 @@ it.layer(NodeServices.layer)("AgentSessionScanner", (it) => {
         expect(repeated.map((outcome) => outcome._tag)).toEqual(["AlreadyImported"]);
       }),
     );
+    it.effect("skips Droid transcripts with a valid cwd but no user message", () =>
+      Effect.gen(function* () {
+        const path = yield* Path.Path;
+        yield* TestClock.setTime(Date.parse("2026-05-03T10:00:00.000Z"));
+        const home = yield* makeTempDir("t3code-droid-no-user-home-");
+        const workspace = yield* makeTempDir("t3code-droid-no-user-project-");
+        const sessionsDir = path.join(home, ".factory", "sessions", "-synthetic");
+        const sessionStart = (id: string) =>
+          JSON.stringify({ type: "session_start", id, cwd: workspace, title: id });
+        const message = (role: string, text: string) =>
+          JSON.stringify({
+            type: "message",
+            timestamp: "2026-05-03T10:00:00.000Z",
+            message: { role, content: [{ type: "text", text }] },
+          });
+        for (const [name, contents, mtimeMs] of [
+          [
+            "valid.jsonl",
+            [sessionStart("valid-session"), message("user", "Valid prompt")].join("\n"),
+            2,
+          ],
+          [
+            "assistant-only.jsonl",
+            [sessionStart("assistant-only-session"), message("assistant", "Unprompted reply")].join(
+              "\n",
+            ),
+            1,
+          ],
+        ] as const) {
+          yield* writeTranscript({
+            filePath: path.join(sessionsDir, name),
+            contents,
+            mtimeMs: Date.parse("2026-05-03T10:00:00.000Z") - mtimeMs,
+          });
+        }
+        const outcomes = yield* runRecentThreadOutcomes({
+          claudeHomePath: path.join(home, "claude"),
+          codexHomePath: path.join(home, "codex"),
+          workspaceRoot: workspace,
+          providerInstances: {
+            [ProviderInstanceId.make("droid")]: {
+              driver: ProviderDriverKind.make("droid"),
+              config: { enabled: true },
+            },
+          },
+        }).pipe(Effect.provideService(HostProcess.HomeDirectory, home));
+        expect(outcomes.filter((outcome) => outcome._tag === "Importable")).toMatchObject([
+          { _tag: "Importable", thread: { providerSessionId: "valid-session" } },
+        ]);
+      }),
+    );
     it.effect.each([false, true])(
       "counts terminal newlines correctly with record overflow=%s",
       (overflow) =>
