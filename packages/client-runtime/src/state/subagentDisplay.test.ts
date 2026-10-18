@@ -5,7 +5,29 @@ import {
   subagentGroupSummary,
   resolveSubagentMetadata,
   subagentDetailPreview,
+  isThreadListed,
 } from "./subagentDisplay.js";
+
+describe("isThreadListed", () => {
+  const makeThread = (providerInstanceId: string, status: string) => ({
+    lineage: { relationshipToParent: "subagent" },
+    providerInstanceId,
+    runtime: { status },
+  });
+
+  it("lists working Droid subagents but keeps settled and other-provider children nested", () => {
+    expect(isThreadListed(makeThread("factory_droid", "running"))).toBe(true);
+    expect(isThreadListed(makeThread("droid-worker", "waiting"))).toBe(true);
+    expect(isThreadListed(makeThread("factory_droid", "completed"))).toBe(false);
+    expect(isThreadListed(makeThread("codex", "running"))).toBe(false);
+    expect(
+      isThreadListed({
+        ...makeThread("factory_droid", "running"),
+        lineage: { relationshipToParent: null },
+      }),
+    ).toBe(true);
+  });
+});
 
 describe("subagentGroupSummary", () => {
   it.each(["pending", "running", "waiting"] as const)(
