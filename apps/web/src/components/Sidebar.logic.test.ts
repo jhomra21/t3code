@@ -499,6 +499,43 @@ describe("sidebar thread lineage helpers", () => {
     expect(resolveSidebarRowThreadId(loopA.id, environmentId, [loopA, loopB])).toBe(loopA.id);
   });
 
+  it("lists only active Droid subagents", () => {
+    const parentId = ThreadId.make("thread-parent");
+    const make = (id: string, providerInstanceId: string, status: "running" | "completed") =>
+      makeThreadFixture({
+        id: ThreadId.make(id),
+        environmentId: localEnvironmentId,
+        projectId: ProjectId.make("project-1"),
+        lineage: {
+          rootThreadId: parentId,
+          parentThreadId: parentId,
+          relationshipToParent: "subagent",
+        },
+        providerInstanceId: ProviderInstanceId.make(providerInstanceId),
+        runtime: {
+          status,
+          activeRunId: null,
+          providerInstanceId: ProviderInstanceId.make(providerInstanceId),
+          providerName: null,
+          lastError: null,
+          lastErrorClass: null,
+          usageLimitResetAt: null,
+          updatedAt: "2026-01-01T00:00:00.000Z",
+        },
+      });
+
+    expect(
+      filterSidebarV2VisibleThreads(
+        [
+          make("droid-running", "factory_droid", "running"),
+          make("droid-completed", "factory_droid", "completed"),
+          make("codex-running", "codex", "running"),
+        ],
+        null,
+      ).map(({ id }) => id),
+    ).toEqual([ThreadId.make("droid-running")]);
+  });
+
   it("resolves the parent thread for fork sidebar affordances", () => {
     const parentId = ThreadId.make("thread-parent");
     const fallbackParentId = ThreadId.make("thread-fallback-parent");

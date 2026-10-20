@@ -941,6 +941,19 @@ it("shows readable models and only differing workspace details in agent tooltips
   expect(text()).not.toContain("Worktree");
   expect(text()).not.toContain("Workspace");
 
+  const modelOptions = child.modelSelection.options;
+  child.modelSelection.options = [];
+  const originalProjection = state.projection;
+  state.projection = {
+    ...projection,
+    subagents: [{ ...projection.subagents[0], effort: "high" }],
+  };
+  await rerender();
+  expect(text()).toContain("My GPT · high");
+  child.modelSelection.options = modelOptions;
+  state.projection = originalProjection;
+  await rerender();
+
   for (const [model, expected] of [
     [null, "Not reported"],
     ["", "Not reported"],

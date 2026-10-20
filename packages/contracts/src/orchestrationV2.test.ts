@@ -894,6 +894,7 @@ describe("orchestration V2 contracts", () => {
       prompt: "Inspect package.json",
       title: "Package audit",
       model: "gpt-5.4",
+      effort: "high",
       status: "completed",
       progress: "Inspecting package metadata",
       result: "Package is private.",
@@ -928,11 +929,34 @@ describe("orchestration V2 contracts", () => {
     });
 
     expect(subagent.origin).toBe("provider_native");
+    expect(subagent.effort).toBe("high");
     expect(subagent.progress).toBe("Inspecting package metadata");
     expect(subagent.childThreadId).toBeNull();
     expect(turnItem.type).toBe("subagent");
     if (turnItem.type !== "subagent") throw new Error("expected subagent item");
     expect(turnItem.progress).toBe("Inspecting package metadata");
+    const legacySubagent = decodeOrchestrationV2Subagent({
+      id: "node-legacy-subagent",
+      threadId: "thread-1",
+      runId: null,
+      parentNodeId: "node-root-1",
+      origin: "provider_native",
+      createdBy: "agent",
+      driver: "codex",
+      providerInstanceId: "codex",
+      providerThreadId: null,
+      childThreadId: null,
+      nativeTaskRef: null,
+      prompt: "Legacy child",
+      title: null,
+      model: null,
+      status: "running",
+      result: null,
+      startedAt: null,
+      completedAt: null,
+      updatedAt: now,
+    });
+    expect(legacySubagent.effort).toBeUndefined();
   });
 
   it.each(["  indented prompt\n", "\n \t\n"])(

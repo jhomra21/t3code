@@ -7,8 +7,44 @@ import {
 import {
   backgroundWorkHoldsCompletion,
   derivePendingBackgroundWork,
+  pendingBackgroundRosterForActiveThread,
   turnItemUpdateCanEndBackgroundWork,
 } from "./orchestrationV2PendingBackgroundWork.ts";
+
+describe("pendingBackgroundRosterForActiveThread", () => {
+  it("returns the active provider roster while a run is active, without turn items", () => {
+    expect(
+      pendingBackgroundRosterForActiveThread({
+        activeProviderThreadId: ProviderThreadId.make("active"),
+        providerThreads: [
+          {
+            id: ProviderThreadId.make("other"),
+            pendingBackgroundTasks: [{ taskId: "wrong", kind: "subagent" }],
+          },
+          {
+            id: ProviderThreadId.make("active"),
+            pendingBackgroundTasks: [{ taskId: "roster", kind: "subagent" }],
+          },
+        ],
+      }),
+    ).toEqual([{ taskId: "roster", kind: "subagent" }]);
+  });
+
+  it("returns empty when there is no active provider roster", () => {
+    expect(
+      pendingBackgroundRosterForActiveThread({
+        providerThreads: [],
+        activeProviderThreadId: ProviderThreadId.make("missing"),
+      }),
+    ).toEqual([]);
+    expect(
+      pendingBackgroundRosterForActiveThread({
+        providerThreads: [],
+        activeProviderThreadId: null,
+      }),
+    ).toEqual([]);
+  });
+});
 
 describe("turnItemUpdateCanEndBackgroundWork", () => {
   it.each([

@@ -1,3 +1,18 @@
+/**
+ * AgentSessionScanner - discovery of projects a user already works on.
+ *
+ * Claude Code, Codex, and Factory Droid keep per-session transcripts on disk, and each
+ * transcript records the directory the session ran in. Reading those `cwd`
+ * values gives us the set of directories worth offering as projects during
+ * onboarding, without asking the user to browse the filesystem.
+ *
+ * The scan is read-only and best-effort: an unreadable home, a malformed
+ * transcript, or a directory that has since been deleted is skipped rather
+ * than failing the scan. Project creation stays with the client, which
+ * dispatches `project.create` for whichever candidates the user picks.
+ *
+ * @module project/AgentSessionScanner
+ */
 import * as NodeOS from "node:os";
 
 import {
@@ -37,6 +52,7 @@ import * as ServerConfig from "../config.ts";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import { resolveCodexHomeLayout } from "../provider/Drivers/CodexHomeLayout.ts";
 import { expandHomePath } from "@t3tools/provider-core/server/pathExpansion";
+import { DroidSettings } from "@t3tools/provider-droid/settings";
 import * as ServerSettings from "../serverSettings.ts";
 import {
   createTranscriptJsonReader,
@@ -86,6 +102,11 @@ const CodexTurnMetadata = Schema.Struct({
 const TranscriptRecord = Schema.Struct({
   type: Schema.optional(Schema.String),
   timestamp: Schema.optional(Schema.String),
+  id: Schema.optional(Schema.String),
+  title: Schema.optional(Schema.String),
+  callingSessionId: Schema.optional(Schema.String),
+  callingToolUseId: Schema.optional(Schema.String),
+  seq: Schema.optional(Schema.Number),
   cwd: Schema.optional(Schema.String),
   sessionId: Schema.optional(Schema.String),
   aiTitle: Schema.optional(Schema.String),
@@ -111,6 +132,10 @@ const TranscriptRecord = Schema.Struct({
 
 const decodeClaudeSettings = Schema.decodeUnknownOption(ClaudeSettings);
 const decodeCodexSettings = Schema.decodeUnknownOption(CodexSettings);
+const decodeDroidSettings = Schema.decodeUnknownOption(DroidSettings);
+const decodeDroidSessionSettings = Schema.decodeUnknownOption(
+  Schema.fromJsonString(Schema.Struct({ model: Schema.optional(Schema.String) })),
+);
 const decodeTranscriptRecord = Schema.decodeUnknownOption(Schema.fromJsonString(TranscriptRecord));
 const decodeTranscriptValue = Schema.decodeUnknownOption(TranscriptRecord);
 const selectTranscriptPath = createTranscriptJsonSelector(TranscriptRecord);
@@ -155,6 +180,12 @@ export type AgentSessionRecentThread =
 export class AgentSessionScanner extends Context.Service<
   AgentSessionScanner,
   {
+    /**
+     * Discover every directory the configured agent homes have run
+     * a session in. Candidates are returned newest-first; the client decides
+     * which ones to import and how far back to look. Fails with the contract
+     * error directly — there is no server-local context worth wrapping.
+     */
     readonly scan: Effect.Effect<AgentSessionScanResult, AgentSessionScanError>;
     readonly recentThreads: (
       workspaceRoot: string,
@@ -319,9 +350,10 @@ function parseAgentSessionRecords(
   // timestamp text, so only transcript metadata can provide a resumable ID.
   let providerSessionId =
     input.source === "codex" ? "" : (claudeFields.sessionId ?? input.fallbackSessionId);
-  const title = claudeFields.title ?? null;
+  let title = claudeFields.title ?? null;
   let model = claudeFields.model ?? null;
   let derivedTitle: string | undefined;
+  let isDroidChildSession = false;
   let hasCodexSessionId = false;
   const messages: Array<AgentSessionThreadMessage & { readonly codexResponseUser: boolean }> = [];
   let firstUserMessage:
@@ -412,6 +444,28 @@ function parseAgentSessionRecords(
   let recordIndex = -1;
   for (const record of records) {
     recordIndex += 1;
+    if (input.source === "droid") {
+      if (record.type === "session_start") {
+        if (record.id?.trim()) providerSessionId = record.id.trim();
+        if (record.title?.trim()) title = record.title.trim();
+        isDroidChildSession ||=
+          (record.callingSessionId?.trim().length ?? 0) > 0 ||
+          (record.callingToolUseId?.trim().length ?? 0) > 0;
+        continue;
+      }
+      if (record.type !== "message") continue;
+      const role = record.message?.role;
+      if (role !== "user" && role !== "assistant") continue;
+      const text = extractText(record.message?.content);
+      if (text.length === 0) continue;
+      retainMessage({
+        role,
+        text,
+        createdAt: normalizeTimestamp(record.timestamp, fallbackTimestamp),
+        codexResponseUser: false,
+      });
+      continue;
+    }
     if (input.source === "claudeAgent") {
       if (isHiddenClaudeRecord(record)) continue;
       if (record.type !== "user" && record.type !== "assistant") continue;
@@ -485,6 +539,7 @@ function parseAgentSessionRecords(
     });
   }
 
+  if (isDroidChildSession) return null;
   const visibleMessages = messages.map(
     ({ codexResponseUser: _codexResponseUser, ...message }) => message,
   );
@@ -508,6 +563,12 @@ function parseAgentSessionRecords(
 }
 
 function extractDecodedCwd(record: DecodedTranscriptRecord): string | null {
+  if (
+    record.type === "session_start" &&
+    (record.callingSessionId?.trim() || record.callingToolUseId?.trim())
+  ) {
+    return null;
+  }
   const cwd = record.cwd?.trim() || record.payload?.cwd?.trim();
   return cwd && cwd.length > 0 ? cwd : null;
 }
@@ -526,6 +587,9 @@ function shouldRetainDecodedRecord(
       : (content?.some(
           (block) => isTextContentBlock(block) && (block.text?.trim().length ?? 0) > 0,
         ) ?? false);
+  }
+  if (source === "droid") {
+    return record.type === "session_start" || record.type === "message";
   }
   if (extractDecodedCwd(record) !== null) return true;
   return (
@@ -566,6 +630,13 @@ function extractCwd(line: string, source: AgentSessionSource): string | null | f
   if (typeof parsed !== "object" || parsed === null) return null;
 
   const record = parsed as Record<string, unknown>;
+  if (
+    record.type === "session_start" &&
+    ((typeof record.callingSessionId === "string" && record.callingSessionId.trim()) ||
+      (typeof record.callingToolUseId === "string" && record.callingToolUseId.trim()))
+  ) {
+    return null;
+  }
   if (typeof record.cwd === "string" && record.cwd.trim().length > 0) {
     return record.cwd;
   }
@@ -911,6 +982,31 @@ export const make = Effect.gen(function* () {
     );
   });
 
+  const readDroidModel = (filePath: string) =>
+    Effect.gen(function* () {
+      const settingsPath = `${filePath.slice(0, -".jsonl".length)}.settings.json`;
+      const stats = yield* statOption(settingsPath);
+      if (
+        Option.isNone(stats) ||
+        stats.value.type !== "File" ||
+        Number(stats.value.size) > 64 * 1024
+      ) {
+        return null;
+      }
+      const contents = yield* fileSystem
+        .readFileString(settingsPath)
+        .pipe(Effect.orElseSucceed(() => ""));
+      if (contents.length === 0) return null;
+      const settings = decodeDroidSessionSettings(contents);
+      return Option.isSome(settings) ? settings.value.model?.trim() || null : null;
+    });
+
+  /**
+   * Resolve the Claude config directory the CLI would use, matching the
+   * precedence the spawned CLI sees: the instance's `homePath` (exported as
+   * `CLAUDE_CONFIG_DIR`), then a `CLAUDE_CONFIG_DIR` already in the
+   * environment, then `~/.claude`.
+   */
   const resolveClaudeConfigDir = (homePath: string, environmentHome?: string): string => {
     const configured = homePath.trim();
     if (configured.length > 0) {
@@ -1039,6 +1135,81 @@ export const make = Effect.gen(function* () {
     },
   );
 
+  const discoverDroidTranscripts = Effect.fn("AgentSessionScanner.discoverDroidTranscripts")(
+    function* (homePath: string, providerInstanceId: ProviderInstanceId, operationBudget: number) {
+      const sessionsDir = path.join(homePath, "sessions");
+      let operationsRemaining = operationBudget;
+      let truncated = false;
+      const transcripts: Array<TranscriptCandidate> = [];
+      const readDirectory = (directory: string) => {
+        if (operationsRemaining <= 0) {
+          truncated = true;
+          return Effect.succeed<ReadonlyArray<string>>([]);
+        }
+        operationsRemaining -= 1;
+        return listDirectory(directory);
+      };
+      const sessionSlugs = yield* readDirectory(sessionsDir);
+      const sessionDirectories: Array<{ readonly path: string; readonly mtimeMs: number }> = [];
+      const directoryLimit = Math.floor(operationsRemaining / 3);
+      for (const [index, slug] of sessionSlugs.entries()) {
+        if (operationsRemaining <= 0) {
+          truncated = true;
+          break;
+        }
+        if (index === directoryLimit) {
+          truncated = true;
+          break;
+        }
+        const directory = path.join(sessionsDir, slug);
+        operationsRemaining -= 1;
+        const stats = yield* statOption(directory);
+        if (
+          Option.isSome(stats) &&
+          stats.value.type === "Directory" &&
+          Option.isSome(stats.value.mtime)
+        ) {
+          sessionDirectories.push({
+            path: directory,
+            mtimeMs: stats.value.mtime.value.getTime(),
+          });
+        }
+      }
+      sessionDirectories.sort(
+        (left, right) => right.mtimeMs - left.mtimeMs || left.path.localeCompare(right.path),
+      );
+      for (const { path: directory } of sessionDirectories) {
+        if (operationsRemaining <= 0) {
+          truncated = true;
+          break;
+        }
+        for (const entry of (yield* readDirectory(directory)).toSorted().toReversed()) {
+          if (!entry.endsWith(".jsonl")) continue;
+          if (operationsRemaining <= 0) {
+            truncated = true;
+            break;
+          }
+          operationsRemaining -= 1;
+          const filePath = path.join(directory, entry);
+          const stats = yield* statOption(filePath);
+          if (
+            Option.isSome(stats) &&
+            stats.value.type === "File" &&
+            Option.isSome(stats.value.mtime)
+          ) {
+            transcripts.push({
+              filePath,
+              mtimeMs: stats.value.mtime.value.getTime(),
+              providerInstanceId,
+              size: Number(stats.value.size),
+            });
+          }
+        }
+      }
+      return { transcripts, truncated };
+    },
+  );
+
   const groupTranscriptsByCwd = Effect.fn("AgentSessionScanner.groupTranscriptsByCwd")(function* (
     source: AgentSessionSource,
     transcripts: ReadonlyArray<TranscriptCandidate>,
@@ -1090,7 +1261,7 @@ export const make = Effect.gen(function* () {
     const raw: Array<RawCandidate> = [];
     let truncated = false;
 
-    for (const source of ["claudeAgent", "codex"] as const) {
+    for (const source of ["claudeAgent", "codex", "droid"] as const) {
       const instances: Array<{
         readonly instanceId: ProviderInstanceId;
         readonly config: ProviderInstanceConfig;
@@ -1130,7 +1301,7 @@ export const make = Effect.gen(function* () {
           const config = decodeClaudeSettings(instance.config ?? {});
           if (Option.isNone(config)) continue;
           homePath = resolveClaudeConfigDir(config.value.homePath, environmentHome);
-        } else {
+        } else if (source === "codex") {
           const config = decodeCodexSettings(instance.config ?? {});
           if (Option.isNone(config)) continue;
           const codexSettings =
@@ -1143,6 +1314,9 @@ export const make = Effect.gen(function* () {
             Effect.provideService(Path.Path, path),
           );
           homePath = layout.sharedHomePath;
+        } else {
+          if (Option.isNone(decodeDroidSettings(instance.config ?? {}))) continue;
+          homePath = path.join(homeDir, ".factory");
         }
 
         const homeKey = `${source}\0${yield* directoryIdentity(homePath)}`;
@@ -1164,7 +1338,9 @@ export const make = Effect.gen(function* () {
         }
         const discovered = yield* source === "claudeAgent"
           ? discoverClaudeTranscripts(home.homePath, home.providerInstanceId, operationBudget)
-          : discoverCodexTranscripts(home.homePath, home.providerInstanceId, operationBudget);
+          : source === "codex"
+            ? discoverCodexTranscripts(home.homePath, home.providerInstanceId, operationBudget)
+            : discoverDroidTranscripts(home.homePath, home.providerInstanceId, operationBudget);
         truncated ||= discovered.truncated;
         transcriptCandidates.push(...discovered.transcripts);
       }
@@ -1442,21 +1618,25 @@ export const make = Effect.gen(function* () {
           if (parsedThread === null) {
             return Option.some<AgentSessionRecentThread>({ _tag: "Skipped" });
           }
+          const thread =
+            parsedThread.source === "droid" && parsedThread.model === null
+              ? { ...parsedThread, model: yield* readDroidModel(transcript.filePath) }
+              : parsedThread;
 
           const source: AgentSessionImportSource = {
             ...identity,
-            provider: parsedThread.source,
-            providerInstanceId: parsedThread.providerInstanceId,
-            providerSessionId: parsedThread.providerSessionId,
+            provider: thread.source,
+            providerInstanceId: thread.providerInstanceId,
+            providerSessionId: thread.providerSessionId,
           };
-          const sessionKey = `${parsedThread.providerInstanceId}\0${parsedThread.providerSessionId}`;
+          const sessionKey = `${thread.providerInstanceId}\0${thread.providerSessionId}`;
           if (importedSessions.has(sessionKey)) {
             return Option.some<AgentSessionRecentThread>({ _tag: "Duplicate", source });
           }
           importedSessions.add(sessionKey);
           return Option.some<AgentSessionRecentThread>({
             _tag: "Importable",
-            thread: parsedThread,
+            thread,
             source,
           });
         }).pipe(importReadLock.withPermits(1)),

@@ -274,6 +274,14 @@ it("keeps scanning, choosing and skipping available to a paired read-only enviro
   expect(state.onDone).toHaveBeenCalledOnce();
 });
 
+it("shows the Factory Droid source label for imported projects", async () => {
+  state.candidates = [candidate("/projects/droid")];
+  state.candidates[0] = { ...state.candidates[0]!, sources: ["droid"] };
+  await mountImport();
+
+  expect(document.querySelectorAll('[role="img"][aria-label="Factory Droid"]')).toHaveLength(1);
+});
+
 it("waits for the selected grant and enables import when it arrives", async () => {
   setup();
   appAtomRegistry.set(sessionAtom(primaryId), AsyncResult.initial());

@@ -34,6 +34,7 @@ import {
   MuseOrchestratorReplayHarness,
 } from "../Adapters/MuseAdapterV2.testkit.ts";
 import { PiOrchestratorReplayHarness } from "../Adapters/PiAdapterV2.testkit.ts";
+import { DroidOrchestratorReplayHarness } from "../Adapters/DroidAdapterV2.testkit.ts";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import { provideDeterministicTestRuntime } from "./DeterministicRuntime.ts";
 import { ORCHESTRATOR_REPLAY_FIXTURES } from "./fixtures/index.ts";
@@ -121,7 +122,15 @@ const runFixtureProvider = Effect.fn("runOrchestratorReplayFixture")(function* <
       ? materializeReplayTranscriptWorkspace(replayTranscript, workspace)
       : input.driver.driver === "muse"
         ? yield* materializeMuseReplayWorkspace(replayTranscript, workspace)
-        : replayTranscript,
+        : input.driver.driver === "droid"
+          ? materializeReplayTranscriptWorkspace(
+              replayTranscript,
+              yield* FileSystem.FileSystem.pipe(
+                Effect.flatMap((fs) => fs.realPath(workspace)),
+                Effect.provide(NodeServices.layer),
+              ),
+            )
+          : replayTranscript,
   );
   const materialized = yield* materializeFixtureInput({
     scenario: input.fixtureName,
@@ -235,6 +244,11 @@ function runFixtureProviderWithRegisteredHarness(input: {
       return runFixtureProvider({
         ...input,
         harness: MuseOrchestratorReplayHarness,
+      }).pipe(Effect.mapError(normalizeTestError), Effect.scoped);
+    case "droid":
+      return runFixtureProvider({
+        ...input,
+        harness: DroidOrchestratorReplayHarness,
       }).pipe(Effect.mapError(normalizeTestError), Effect.scoped);
     default:
       return Effect.die(

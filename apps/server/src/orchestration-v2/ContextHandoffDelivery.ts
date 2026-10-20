@@ -22,7 +22,15 @@ export const deliverContextHandoffs = Effect.fn("orchestrationV2.deliverContextH
     readonly handoffs: ReadonlyArray<OrchestrationV2ContextHandoff>;
     readonly providerThread: OrchestrationV2ProviderThread;
     readonly budget: number | Effect.Effect<number, BudgetError>;
+    readonly fallbackBudget?: number | Effect.Effect<number, BudgetError>;
+    readonly sameNativeThread?: boolean;
     readonly deferInline?: boolean;
+    /**
+     * The native thread already holds this conversation and the handoff only re-sends turns that
+     * never reached it. Without room for that note, send the prompt alone: the turns stay
+     * recoverable through the thread, whereas refusing would block a conversation that fits.
+     */
+    readonly skippable?: boolean;
     readonly alreadyDeliveredItemIds: ReadonlySet<string>;
     readonly inject?: (
       history: ProviderAdapter.ProviderAdapterV2HistoricalContext,
@@ -68,15 +76,47 @@ export const deliverContextHandoffs = Effect.fn("orchestrationV2.deliverContextH
       oldContext && historyCost([], `${coverage}\n${oldContext}`) + 512 <= budget
         ? `${coverage}\n${oldContext}`
         : coverage;
-    const selected = selectHistory({
+    let selected = selectHistory({
       messages,
       coverage: fullCoverage,
       omittedItems: pending.reduce((sum, handoff) => sum + (handoff.history?.omittedItems ?? 0), 0),
       budget,
     });
     if (historyCost(selected.messages, selected.context) > budget) {
-      if (input.deferInline) return { context: "", delivered: Effect.void, unsent: Effect.void };
-      return yield* new ContextHandoffBudgetError();
+      if (
+        nativeThreadId !== undefined &&
+        input.sameNativeThread &&
+        input.fallbackBudget !== undefined
+      ) {
+        const fallbackBudget =
+          typeof input.fallbackBudget === "number"
+            ? input.fallbackBudget
+            : yield* input.fallbackBudget;
+        const fallbackCoverage =
+          oldContext && historyCost([], `${coverage}\n${oldContext}`) + 512 <= fallbackBudget
+            ? `${coverage}\n${oldContext}`
+            : coverage;
+        const pointer = selectHistory({
+          messages: [],
+          coverage: fallbackCoverage,
+          omittedItems: pending.reduce(
+            (sum, handoff) =>
+              sum + (handoff.history?.omittedItems ?? 0) + (handoff.history?.messages.length ?? 0),
+            0,
+          ),
+          budget: fallbackBudget,
+        });
+        if (historyCost(pointer.messages, pointer.context) <= fallbackBudget)
+          selected = {
+            ...pointer,
+            omittedItemIds: messages.map((message) => message.itemId),
+          };
+        else if (!input.deferInline && !input.skippable)
+          return yield* new ContextHandoffBudgetError();
+        else return { context: "", delivered: Effect.void, unsent: Effect.void };
+      } else if (input.deferInline || input.skippable)
+        return { context: "", delivered: Effect.void, unsent: Effect.void };
+      else return yield* new ContextHandoffBudgetError();
     }
     const omittedItemIds = new Set(selected.omittedItemIds);
     const persist = (status: "pending" | "injected" | "inline") =>

@@ -58,6 +58,13 @@ describe("projectedSubagentsToRuntime workflow expansion", () => {
     expect(agent?.phases).toEqual([]);
   });
 
+  it("preserves provider-reported effort without requiring it from other providers", () => {
+    const [reported] = projectedSubagentsToRuntime([subagent({ effort: "heavy" })]);
+    const [unreported] = projectedSubagentsToRuntime([subagent()]);
+    expect(reported?.effort).toBe("heavy");
+    expect(unreported?.effort).toBeNull();
+  });
+
   it("projects a coordinator plus one row per member", () => {
     const rows = projectedSubagentsToRuntime([
       subagent({

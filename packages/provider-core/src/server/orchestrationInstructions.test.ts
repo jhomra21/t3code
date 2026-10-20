@@ -3,6 +3,7 @@ import { assert, describe, it } from "@effect/vitest";
 import {
   T3_CODE_ORCHESTRATION_INSTRUCTIONS,
   t3AcpPromptWithInstructions,
+  t3CodeOrchestrationInstructions,
   t3OrchestrationPromptForFirstRun,
   t3OrchestrationSystemPrompt,
 } from "./orchestrationInstructions.ts";
@@ -18,6 +19,21 @@ describe("T3 orchestration provider instructions", () => {
       T3_CODE_ORCHESTRATION_INSTRUCTIONS,
       "Do not use `t3_thread_send` on `childThreadId`",
     );
+  });
+
+  it("lets a harness replace the subagent rule and tool-access notes with a single path", () => {
+    const custom = t3CodeOrchestrationInstructions({
+      delegateOnly: true,
+      toolAccess: "Call tools by their listed names.",
+    });
+
+    assert.include(custom, "Start every subagent with `delegate_task`");
+    assert.include(custom, "Call tools by their listed names.");
+    assert.notInclude(custom, "Prefer native subagent tools");
+    assert.notInclude(custom, "ACP fallback");
+    assert.include(custom, "### Showing visuals");
+    assert.equal(t3CodeOrchestrationInstructions(), T3_CODE_ORCHESTRATION_INSTRUCTIONS);
+    assert.include(T3_CODE_ORCHESTRATION_INSTRUCTIONS, "Prefer native subagent tools");
   });
 
   it("documents structured schedules instead of JSON strings", () => {

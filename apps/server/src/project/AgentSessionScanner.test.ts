@@ -23,6 +23,7 @@ import * as TestClock from "effect/testing/TestClock";
 import * as ServerConfig from "../config.ts";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as AgentSessionScanner from "./AgentSessionScanner.ts";
 
 const makeProjectShell = (workspaceRoot: string): OrchestrationProjectShell => ({
@@ -83,10 +84,15 @@ const runScan = (input: ScannerTestInput) =>
     return yield* scanner.scan;
   }).pipe(Effect.provide(layerScannerTest(input)));
 
-const runRecentThreadOutcomes = (input: ScannerTestInput & { readonly workspaceRoot: string }) =>
+const runRecentThreadOutcomes = (
+  input: ScannerTestInput & {
+    readonly workspaceRoot: string;
+    readonly completedSources?: ReadonlyArray<AgentSessionImportSource>;
+  },
+) =>
   Effect.gen(function* () {
     const scanner = yield* AgentSessionScanner.AgentSessionScanner;
-    return yield* scanner.recentThreads(input.workspaceRoot).pipe(
+    return yield* scanner.recentThreads(input.workspaceRoot, input.completedSources).pipe(
       Stream.runCollect,
       Effect.map((outcomes) => Array.from(outcomes)),
     );
@@ -333,6 +339,177 @@ it.layer(NodeServices.layer)("AgentSessionScanner", (it) => {
             git: null,
           },
         ]);
+      }),
+    );
+
+    it.effect("discovers Droid sessions from their recorded cwd, not the lossy slug", () =>
+      Effect.gen(function* () {
+        const path = yield* Path.Path;
+        yield* TestClock.setTime(Date.parse("2026-05-03T10:01:00.000Z"));
+        const home = yield* makeTempDir("t3code-droid-home-");
+        const workspace = yield* makeTempDir("t3code-droid-project-");
+        const sessionId = "synthetic-droid-session";
+        const contents = [
+          JSON.stringify({
+            type: "session_start",
+            id: sessionId,
+            cwd: workspace,
+            title: "Synthetic Droid session",
+          }),
+          JSON.stringify({
+            type: "message",
+            timestamp: "2026-05-03T10:00:00.000Z",
+            message: { role: "user", content: [{ type: "text", text: "Synthetic prompt" }] },
+          }),
+          JSON.stringify({
+            type: "message",
+            timestamp: "2026-05-03T10:01:00.000Z",
+            message: { role: "assistant", content: [{ type: "text", text: "Synthetic reply" }] },
+          }),
+        ].join("\n");
+        yield* writeTranscript({
+          filePath: path.join(home, ".factory", "sessions", "-lossy-slug", `${sessionId}.jsonl`),
+          contents,
+          mtimeMs: Date.parse("2026-05-03T10:01:00.000Z"),
+        });
+        yield* writeTranscript({
+          filePath: path.join(
+            home,
+            ".factory",
+            "sessions",
+            "-lossy-slug",
+            `${sessionId}.settings.json`,
+          ),
+          contents: JSON.stringify({ model: "synthetic-droid-model" }),
+          mtimeMs: Date.parse("2026-05-03T10:01:00.000Z"),
+        });
+        const t3ManagedRoot = path.join(home, ".t3", "worktrees", "launched-session");
+        yield* (yield* FileSystem.FileSystem).makeDirectory(t3ManagedRoot, { recursive: true });
+        yield* writeTranscript({
+          filePath: path.join(home, ".factory", "sessions", "-lossy-slug", "t3-managed.jsonl"),
+          contents: [
+            JSON.stringify({ type: "session_start", id: "t3-managed", cwd: t3ManagedRoot }),
+            JSON.stringify({
+              type: "message",
+              message: { role: "user", content: [{ type: "text", text: "Internal T3 prompt" }] },
+            }),
+          ].join("\n"),
+          mtimeMs: Date.parse("2026-05-03T10:00:00.000Z"),
+        });
+
+        const result = yield* runScan({
+          claudeHomePath: path.join(home, "claude"),
+          codexHomePath: path.join(home, "codex"),
+          providerInstances: {
+            [ProviderInstanceId.make("droid")]: {
+              driver: ProviderDriverKind.make("droid"),
+              config: { enabled: true },
+            },
+          },
+        }).pipe(Effect.provideService(HostProcess.HomeDirectory, home));
+
+        expect(result.candidates).toMatchObject([{ path: workspace, sources: ["droid"] }]);
+        expect(result.candidates).toHaveLength(1);
+        const outcomes = yield* runRecentThreadOutcomes({
+          claudeHomePath: path.join(home, "claude"),
+          codexHomePath: path.join(home, "codex"),
+          workspaceRoot: workspace,
+          providerInstances: {
+            [ProviderInstanceId.make("droid")]: {
+              driver: ProviderDriverKind.make("droid"),
+              config: { enabled: true },
+            },
+          },
+        }).pipe(Effect.provideService(HostProcess.HomeDirectory, home));
+        expect(outcomes).toMatchObject([
+          {
+            _tag: "Importable",
+            thread: {
+              source: "droid",
+              providerSessionId: sessionId,
+              title: "Synthetic Droid session",
+              model: "synthetic-droid-model",
+              messages: [
+                { role: "user", text: "Synthetic prompt", createdAt: "2026-05-03T10:00:00.000Z" },
+                {
+                  role: "assistant",
+                  text: "Synthetic reply",
+                  createdAt: "2026-05-03T10:01:00.000Z",
+                },
+              ],
+            },
+          },
+        ]);
+        const importable = outcomes.find((outcome) => outcome._tag === "Importable");
+        if (importable?._tag !== "Importable") throw new Error("Expected importable fixture");
+        const repeated = yield* runRecentThreadOutcomes({
+          claudeHomePath: path.join(home, "claude"),
+          codexHomePath: path.join(home, "codex"),
+          workspaceRoot: workspace,
+          completedSources: [importable.source],
+          providerInstances: {
+            [ProviderInstanceId.make("droid")]: {
+              driver: ProviderDriverKind.make("droid"),
+              config: { enabled: true },
+            },
+          },
+        }).pipe(Effect.provideService(HostProcess.HomeDirectory, home));
+        expect(repeated.map((outcome) => outcome._tag)).toEqual(["AlreadyImported"]);
+      }),
+    );
+
+    it.effect("bounds Droid session directory reads by the discovery operation cap", () =>
+      Effect.gen(function* () {
+        const path = yield* Path.Path;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const home = yield* makeTempDir("t3code-droid-budget-home-");
+        const sessionsDir = path.join(home, ".factory", "sessions");
+        const sessionSlugs = Array.from(
+          { length: 20_001 },
+          (_, index) => `slug-${index.toString().padStart(5, "0")}`,
+        );
+        let directoryReads = 0;
+        let directoryStats = 0;
+        const observedFileSystem = FileSystem.FileSystem.of({
+          ...fileSystem,
+          readDirectory: (directory, options) => {
+            if (directory === sessionsDir) {
+              directoryReads += 1;
+              return Effect.succeed(sessionSlugs);
+            }
+            if (path.dirname(directory) === sessionsDir) {
+              directoryReads += 1;
+              return Effect.succeed([]);
+            }
+            return fileSystem.readDirectory(directory, options);
+          },
+          stat: (target) => {
+            if (path.dirname(target) === sessionsDir) {
+              directoryStats += 1;
+              return fileSystem.stat(home);
+            }
+            return fileSystem.stat(target);
+          },
+        });
+        const result = yield* runScan({
+          claudeHomePath: path.join(home, "claude"),
+          codexHomePath: path.join(home, "codex"),
+          providerInstances: {
+            [ProviderInstanceId.make("droid")]: {
+              driver: ProviderDriverKind.make("droid"),
+              config: { enabled: true },
+            },
+          },
+        }).pipe(
+          Effect.provideService(HostProcess.HomeDirectory, home),
+          Effect.provideService(FileSystem.FileSystem, observedFileSystem),
+        );
+
+        expect(directoryReads).toBe(6_667);
+        expect(directoryStats).toBe(6_666);
+        expect(directoryReads + directoryStats).toBeLessThanOrEqual(20_000);
+        expect(result.candidates).toEqual([]);
+        expect(result.truncated).toBe(true);
       }),
     );
 
@@ -1486,6 +1663,146 @@ it.layer(NodeServices.layer)("AgentSessionScanner", (it) => {
   });
 
   describe("recentThreads", () => {
+    it.effect("skips Droid child sessions and malformed or empty transcripts", () =>
+      Effect.gen(function* () {
+        const path = yield* Path.Path;
+        yield* TestClock.setTime(Date.parse("2026-05-03T10:00:00.000Z"));
+        const home = yield* makeTempDir("t3code-droid-child-home-");
+        const workspace = yield* makeTempDir("t3code-droid-child-project-");
+        const managedWorktree = path.join(workspace, ".t3", "worktrees", "t3-session");
+        yield* (yield* FileSystem.FileSystem).makeDirectory(managedWorktree, { recursive: true });
+        const sessionsDir = path.join(home, ".factory", "sessions", "-synthetic");
+        const parent = JSON.stringify({
+          type: "session_start",
+          id: "parent-session",
+          cwd: workspace,
+          title: "Parent",
+        });
+        const message = (role: string, text: string) =>
+          JSON.stringify({
+            type: "message",
+            timestamp: "2026-05-03T10:00:00.000Z",
+            message: { role, content: [{ type: "text", text }] },
+          });
+        for (const [name, contents, mtimeMs] of [
+          ["parent.jsonl", [parent, message("user", "Parent prompt")].join("\n"), 3],
+          [
+            "child.jsonl",
+            [
+              JSON.stringify({
+                type: "session_start",
+                id: "child-session",
+                cwd: workspace,
+                callingToolUseId: "synthetic-tool-use",
+              }),
+              message("user", "Child prompt"),
+            ].join("\n"),
+            2,
+          ],
+          ["malformed.jsonl", "{", 1],
+          ["empty.jsonl", "", 0],
+          [
+            "t3-managed.jsonl",
+            [
+              JSON.stringify({
+                type: "session_start",
+                id: "t3-managed-session",
+                cwd: managedWorktree,
+              }),
+              message("user", "T3 session prompt"),
+            ].join("\n"),
+            4,
+          ],
+        ] as const) {
+          yield* writeTranscript({
+            filePath: path.join(sessionsDir, name),
+            contents,
+            mtimeMs: Date.parse("2026-05-03T10:00:00.000Z") - mtimeMs,
+          });
+        }
+        const outcomes = yield* runRecentThreadOutcomes({
+          claudeHomePath: path.join(home, "claude"),
+          codexHomePath: path.join(home, "codex"),
+          workspaceRoot: workspace,
+          providerInstances: {
+            [ProviderInstanceId.make("droid")]: {
+              driver: ProviderDriverKind.make("droid"),
+              config: { enabled: true },
+            },
+          },
+        }).pipe(Effect.provideService(HostProcess.HomeDirectory, home));
+        expect(outcomes.filter((outcome) => outcome._tag === "Importable")).toMatchObject([
+          { _tag: "Importable", thread: { providerSessionId: "parent-session" } },
+        ]);
+        expect(outcomes.filter((outcome) => outcome._tag === "Skipped")).toHaveLength(0);
+        const imported = outcomes.find((outcome) => outcome._tag === "Importable");
+        if (imported?._tag !== "Importable") throw new Error("Expected importable fixture");
+        const repeated = yield* runRecentThreadOutcomes({
+          claudeHomePath: path.join(home, "claude"),
+          codexHomePath: path.join(home, "codex"),
+          workspaceRoot: workspace,
+          completedSources: [imported.source],
+          providerInstances: {
+            [ProviderInstanceId.make("droid")]: {
+              driver: ProviderDriverKind.make("droid"),
+              config: { enabled: true },
+            },
+          },
+        }).pipe(Effect.provideService(HostProcess.HomeDirectory, home));
+        expect(repeated.map((outcome) => outcome._tag)).toEqual(["AlreadyImported"]);
+      }),
+    );
+    it.effect("skips Droid transcripts with a valid cwd but no user message", () =>
+      Effect.gen(function* () {
+        const path = yield* Path.Path;
+        yield* TestClock.setTime(Date.parse("2026-05-03T10:00:00.000Z"));
+        const home = yield* makeTempDir("t3code-droid-no-user-home-");
+        const workspace = yield* makeTempDir("t3code-droid-no-user-project-");
+        const sessionsDir = path.join(home, ".factory", "sessions", "-synthetic");
+        const sessionStart = (id: string) =>
+          JSON.stringify({ type: "session_start", id, cwd: workspace, title: id });
+        const message = (role: string, text: string) =>
+          JSON.stringify({
+            type: "message",
+            timestamp: "2026-05-03T10:00:00.000Z",
+            message: { role, content: [{ type: "text", text }] },
+          });
+        for (const [name, contents, mtimeMs] of [
+          [
+            "valid.jsonl",
+            [sessionStart("valid-session"), message("user", "Valid prompt")].join("\n"),
+            2,
+          ],
+          [
+            "assistant-only.jsonl",
+            [sessionStart("assistant-only-session"), message("assistant", "Unprompted reply")].join(
+              "\n",
+            ),
+            1,
+          ],
+        ] as const) {
+          yield* writeTranscript({
+            filePath: path.join(sessionsDir, name),
+            contents,
+            mtimeMs: Date.parse("2026-05-03T10:00:00.000Z") - mtimeMs,
+          });
+        }
+        const outcomes = yield* runRecentThreadOutcomes({
+          claudeHomePath: path.join(home, "claude"),
+          codexHomePath: path.join(home, "codex"),
+          workspaceRoot: workspace,
+          providerInstances: {
+            [ProviderInstanceId.make("droid")]: {
+              driver: ProviderDriverKind.make("droid"),
+              config: { enabled: true },
+            },
+          },
+        }).pipe(Effect.provideService(HostProcess.HomeDirectory, home));
+        expect(outcomes.filter((outcome) => outcome._tag === "Importable")).toMatchObject([
+          { _tag: "Importable", thread: { providerSessionId: "valid-session" } },
+        ]);
+      }),
+    );
     it.effect.each([false, true])(
       "counts terminal newlines correctly with record overflow=%s",
       (overflow) =>

@@ -12,6 +12,7 @@ import {
 import {
   ANTIGRAVITY_DEFAULT_MODEL,
   ProviderDriverKind,
+  type OrchestrationV2PendingBackgroundTask,
   type ServerProvider,
 } from "@t3tools/contracts";
 import { deriveProviderInstanceEntries, NO_PROVIDER_MODEL_SELECTION } from "../providerInstances";
@@ -54,6 +55,7 @@ import {
   ENVIRONMENT_RECONNECT_WARNING_GRACE_MS,
   getAntigravitySendBlockReason,
   resolveBackgroundDraftWorkspaceOptions,
+  resolveBackgroundWorkBanner,
   resolveComposerInteractionMode,
   restorePlanFollowUpComposer,
   resolveComposerProviderSelection,
@@ -997,6 +999,50 @@ describe("proactive panels", () => {
         turnCompleted: false,
       }),
     ).toBe(false);
+  });
+});
+
+describe("background work banner", () => {
+  const activeRoster: ReadonlyArray<OrchestrationV2PendingBackgroundTask> = [
+    { taskId: "watch-build", kind: "monitor", description: "Watch build" },
+  ];
+  const settledTasks: ReadonlyArray<OrchestrationV2PendingBackgroundTask> = [
+    { taskId: "dev-server", kind: "command" },
+  ];
+
+  it("shows only the live roster and no Stop while the run is working", () => {
+    expect(
+      resolveBackgroundWorkBanner({
+        hasActiveThread: true,
+        isWorking: true,
+        activeRoster,
+        settledTasks,
+      }),
+    ).toEqual({ tasks: activeRoster, canStop: false });
+  });
+
+  it("offers Stop with the settled tasks once the run ends", () => {
+    expect(
+      resolveBackgroundWorkBanner({
+        hasActiveThread: true,
+        isWorking: false,
+        activeRoster,
+        settledTasks,
+      }),
+    ).toEqual({ tasks: settledTasks, canStop: true });
+  });
+
+  it("shows no background work without an active thread", () => {
+    for (const isWorking of [true, false]) {
+      expect(
+        resolveBackgroundWorkBanner({
+          hasActiveThread: false,
+          isWorking,
+          activeRoster,
+          settledTasks,
+        }),
+      ).toEqual({ tasks: [], canStop: false });
+    }
   });
 });
 

@@ -511,6 +511,53 @@ describe("formatModelSelectionEffort", () => {
       ),
     ).toBeNull();
   });
+
+  const droidLunaCatalog = [
+    {
+      slug: "custom:GPT-6 Luna-12",
+      name: "GPT-6 Luna",
+      isCustom: true,
+      capabilities: {
+        optionDescriptors: [
+          {
+            id: "reasoning_effort",
+            label: "Reasoning",
+            type: "select" as const,
+            options: [
+              { id: "medium", label: "Medium" },
+              { id: "high", label: "High" },
+            ],
+          },
+        ],
+      },
+    },
+  ];
+
+  it("names the reasoning_effort option that Droid models expose", () => {
+    expect(
+      formatModelSelectionEffort(
+        {
+          instanceId,
+          model: "custom:GPT-6 Luna-12",
+          options: [{ id: "reasoning_effort", value: "medium" }],
+        },
+        droidLunaCatalog,
+      ),
+    ).toBe("Medium");
+  });
+
+  it("finds the catalog model when the selection names it by display name", () => {
+    expect(
+      formatModelSelectionEffort(
+        {
+          instanceId,
+          model: "GPT-6 Luna",
+          options: [{ id: "reasoning_effort", value: "medium" }],
+        },
+        droidLunaCatalog,
+      ),
+    ).toBe("Medium");
+  });
 });
 
 describe("threadRuntimeCanArchive", () => {

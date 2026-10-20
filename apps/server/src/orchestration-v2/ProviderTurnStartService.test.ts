@@ -3,6 +3,7 @@ import { expect, it, vi } from "vite-plus/test";
 import { it as effectIt } from "@effect/vitest";
 import {
   CheckpointScopeId,
+  ContextHandoffId,
   ContextTransferId,
   MessageId,
   NodeId,
@@ -289,6 +290,7 @@ function makeLocalCommandHarness(input: {
   readonly interruptRunBeforeOpenFailure?: boolean;
   readonly writeFailure?: unknown;
   readonly failReadsAfterRunning?: boolean;
+  readonly handoffRepro?: boolean;
 }) {
   const now = DateTime.makeUnsafe("2026-09-04T12:00:00Z");
   const threadId = ThreadId.make("thread-native-account-command");
@@ -326,7 +328,16 @@ function makeLocalCommandHarness(input: {
     providerSessionId,
     appThreadId: threadId,
     ownerNodeId: null,
-    nativeThreadRef: null,
+    nativeThreadRef:
+      input.handoffRepro === true
+        ? {
+            driver: ProviderDriverKind.make("codex"),
+            nativeId: "native-handoff-repro",
+            strength: "strong",
+          }
+        : null,
+    contextUsage:
+      input.handoffRepro === true ? { usedTokens: 230_000, maxTokens: 300_000 } : undefined,
     nativeConversationHeadRef: null,
     status: "not_loaded",
     firstRunOrdinal: 2,
@@ -359,6 +370,17 @@ function makeLocalCommandHarness(input: {
       worktreePath: input.worktreePath ?? null,
     } as OrchestrationV2ThreadProjection["thread"],
     runs: [
+      ...(input.handoffRepro
+        ? [
+            {
+              ...run,
+              id: RunId.make("run:interrupted-parent"),
+              ordinal: 1,
+              status: "interrupted" as const,
+              completedAt: now,
+            },
+          ]
+        : []),
       ...(input.previousNativeSession
         ? [
             {
@@ -451,7 +473,26 @@ function makeLocalCommandHarness(input: {
     ],
     providerSessions: [],
     providerTurns: [],
-    contextHandoffs: [],
+    contextHandoffs:
+      input.handoffRepro === true
+        ? Array.from({ length: 4 }, (_, index) => ({
+            id: ContextHandoffId.make(`handoff:manual-repro:${index}`),
+            threadId,
+            targetRunId: RunId.make("run:interrupted-parent"),
+            transferId: ContextTransferId.make(`transfer:manual-repro:${index}`),
+            fromProviderThreadIds: [],
+            toProviderThreadId: providerThreadId,
+            coveredRunOrdinals: { from: 1, to: 1 },
+            strategy: "manual_context" as const,
+            status: "ready" as const,
+            summaryMessageId: null,
+            summaryText: `Completed child result ${index}: ${"result ".repeat(200)}`,
+            history: undefined,
+            createdByProviderInstanceId: null,
+            createdAt: now,
+            updatedAt: now,
+          }))
+        : [],
     contextTransfers: [],
     turnItems: [],
     visibleTurnItems: [],
@@ -512,52 +553,99 @@ function makeLocalCommandHarness(input: {
       ),
     ensureThread: () => Effect.succeed(providerThread),
   };
+  let injectedHistoryCount = 0;
   const open = vi.fn(() =>
     input.interruptOpen === true
       ? Effect.interrupt
-      : "historyReadFailureAfterFallback" in input
-        ? Effect.succeed(resumeFallbackSession as never)
-        : "ensureThreadFailure" in input
-          ? Effect.succeed({ driver: providerThread.driver, ensureThread } as never)
-          : "openFailure" in input
-            ? Effect.sync(() => {
-                if (input.interruptRunBeforeOpenFailure === true) interruptRun();
-              }).pipe(
-                Effect.andThen(
-                  Effect.fail(
-                    new ProviderSessionManager.ProviderSessionOpenError({
-                      instanceId: newInstanceId,
-                      providerSessionId,
-                      cause: input.openFailure,
-                    }),
+      : input.handoffRepro === true
+        ? Effect.succeed({
+            driver: ProviderDriverKind.make("codex"),
+            providerSession: {
+              id: providerSessionId,
+              driver: ProviderDriverKind.make("codex"),
+              providerInstanceId: newInstanceId,
+              status: "ready",
+              cwd: "/tmp/native-account-command",
+              model: null,
+              capabilities: CodexProviderCapabilitiesV2,
+              createdAt: now,
+              updatedAt: now,
+              lastError: null,
+            },
+            resumeThread: () => Effect.succeed(providerThread),
+            injectHistory: () =>
+              Effect.sync(() => {
+                injectedHistoryCount++;
+                return true;
+              }),
+            startTurn: () => Effect.void,
+          } as never)
+        : "historyReadFailureAfterFallback" in input
+          ? Effect.succeed(resumeFallbackSession as never)
+          : "ensureThreadFailure" in input
+            ? Effect.succeed({ driver: providerThread.driver, ensureThread } as never)
+            : "openFailure" in input
+              ? Effect.sync(() => {
+                  if (input.interruptRunBeforeOpenFailure === true) interruptRun();
+                }).pipe(
+                  Effect.andThen(
+                    Effect.fail(
+                      new ProviderSessionManager.ProviderSessionOpenError({
+                        instanceId: newInstanceId,
+                        providerSessionId,
+                        cause: input.openFailure,
+                      }),
+                    ),
                   ),
-                ),
-              )
-            : input.failReadsAfterRunning === true
-              ? Effect.succeed({
-                  driver: providerThread.driver,
-                  providerSession: {
-                    id: providerSessionId,
+                )
+              : input.failReadsAfterRunning === true
+                ? Effect.succeed({
                     driver: providerThread.driver,
-                    providerInstanceId: newInstanceId,
-                    status: "ready",
-                    cwd: "/tmp/native-account-command",
-                    model: null,
-                    capabilities: CodexProviderCapabilitiesV2,
-                    createdAt: now,
-                    updatedAt: now,
-                    lastError: null,
-                  },
-                  ensureThread: () => Effect.succeed(providerThread),
-                } as never)
-              : Effect.die("A local command must not open a native session."),
+                    providerSession: {
+                      id: providerSessionId,
+                      driver: providerThread.driver,
+                      providerInstanceId: newInstanceId,
+                      status: "ready",
+                      cwd: "/tmp/native-account-command",
+                      model: null,
+                      capabilities: CodexProviderCapabilitiesV2,
+                      createdAt: now,
+                      updatedAt: now,
+                      lastError: null,
+                    },
+                    ensureThread: () => Effect.succeed(providerThread),
+                  } as never)
+                : Effect.die("A local command must not open a native session."),
   );
-  const startRootRun = vi.fn<
-    (input: RunExecutionService.RunExecutionServiceV2StartRootRunInput) => Effect.Effect<void>
-  >(() =>
-    input.failReadsAfterRunning === true
-      ? Effect.void
-      : Effect.die("A local command must not start a native turn."),
+  const startRootRun = vi.fn<RunExecutionService.RunExecutionServiceV2Shape["startRootRun"]>(
+    (startInput) => {
+      if (input.handoffRepro !== true) {
+        return input.failReadsAfterRunning === true
+          ? Effect.void
+          : Effect.die("A local command must not start a native turn.");
+      }
+      return startInput.session
+        .startTurn({
+          appThread: startInput.appThread,
+          threadId,
+          runId,
+          runOrdinal: 2,
+          providerTurnOrdinal: 1,
+          attemptId,
+          rootNodeId,
+          providerThread: startInput.providerThread,
+          message: {
+            messageId: startInput.run.userMessageId,
+            text: message.text,
+            attachments: message.attachments,
+            createdBy: message.createdBy,
+            creationSource: message.creationSource,
+          },
+          modelSelection: { instanceId: newInstanceId, model: "gpt-5.4" },
+          runtimePolicy: {} as never,
+        })
+        .pipe(Effect.catchCause(() => Effect.void));
+    },
   );
   const failReadIfRunning = Effect.suspend(() =>
     input.failReadsAfterRunning === true &&
@@ -626,7 +714,17 @@ function makeLocalCommandHarness(input: {
         Layer.mock(ContextHandoffService.ContextHandoffServiceV2)({
           prepareProviderHandoff: () => Effect.die("history read must fail first"),
         }),
-        Layer.mock(EventSink.EventSinkV2)({ writeIfRunCurrent }),
+        Layer.mock(EventSink.EventSinkV2)({
+          writeIfRunCurrent,
+          write: ({ events: incoming }) =>
+            Effect.sync(() => {
+              for (const event of incoming) {
+                expect(isDomainEvent(event)).toBe(true);
+                events.push(event);
+                projection = ProjectionStore.applyToProjection(projection, event);
+              }
+            }).pipe(Effect.as([])),
+        }),
         IdAllocator.layer,
         layerWorktreeLocation(input.worktreesDir),
         input.fileSystem === undefined
@@ -653,12 +751,14 @@ function makeLocalCommandHarness(input: {
               ),
             }),
           getTurnStartHistory: () =>
-            Effect.fail(
-              new ProjectionStore.ProjectionStoreReadError({
-                threadId,
-                cause: input.historyReadFailureAfterFallback,
-              }),
-            ),
+            input.handoffRepro === true
+              ? Effect.succeed([])
+              : Effect.fail(
+                  new ProjectionStore.ProjectionStoreReadError({
+                    threadId,
+                    cause: input.historyReadFailureAfterFallback,
+                  }),
+                ),
         }),
         Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({ open }),
         Layer.mock(ProviderAuthService.ProviderAuthService)({ tryHandlePromptCommand }),
@@ -682,6 +782,7 @@ function makeLocalCommandHarness(input: {
     startRootRun,
     tryHandlePromptCommand,
     events,
+    injectedHistoryCount: () => injectedHistoryCount,
     oldInstanceId,
     newInstanceId,
     attemptId,
@@ -695,6 +796,21 @@ function makeLocalCommandHarness(input: {
         runId,
         willRetry: true,
       });
+    }).pipe(Effect.provide(layer)),
+    startAgain: Effect.gen(function* () {
+      projection = {
+        ...projection,
+        runs: projection.runs.map((candidate) =>
+          candidate.id === runId ? { ...candidate, status: "starting" } : candidate,
+        ),
+        attempts: projection.attempts.map((candidate) =>
+          candidate.id === attemptId ? { ...candidate, status: "pending" } : candidate,
+        ),
+        nodes: projection.nodes.map((candidate) =>
+          candidate.id === rootNodeId ? { ...candidate, status: "pending" } : candidate,
+        ),
+      };
+      yield* (yield* ProviderTurnStart.ProviderTurnStartServiceV2).start({ threadId, runId });
     }).pipe(Effect.provide(layer)),
   };
 }
@@ -1274,3 +1390,25 @@ for (const previousMessages of [[], ["/compact", " /COMPACT "]]) {
       }),
   );
 }
+
+effectIt.effect("starts and settles real-shaped manual handoffs on a provider thread", () =>
+  Effect.gen(function* () {
+    const harness = makeLocalCommandHarness({ text: "Continue", handoffRepro: true });
+
+    yield* harness.start;
+    expect(harness.startRootRun).toHaveBeenCalledOnce();
+    expect(harness.injectedHistoryCount()).toBe(1);
+    expect(harness.projection().contextHandoffs.map((handoff) => handoff.delivery)).toEqual(
+      Array.from({ length: 4 }, () => expect.objectContaining({ status: "injected" })),
+    );
+
+    yield* harness.startAgain;
+    expect(harness.startRootRun).toHaveBeenCalledTimes(2);
+    expect(harness.injectedHistoryCount()).toBe(1);
+    expect(
+      harness
+        .projection()
+        .contextHandoffs.every((handoff) => handoff.delivery?.status === "injected"),
+    ).toBe(true);
+  }),
+);

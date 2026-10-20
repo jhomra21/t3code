@@ -8,6 +8,7 @@ import {
   ProviderThreadId,
   RunId,
   RuntimeRequestId,
+  ThreadId,
   TurnItemId,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
@@ -227,6 +228,25 @@ describe("V2 client presentation", () => {
         pendingBackgroundTasks: [],
       }).runtime,
     ).toBeNull();
+  });
+
+  it("presents a run-less subagent as working from its activity status", () => {
+    const shell = presentThreadShell(environmentId, {
+      ...v2ThreadShell,
+      lineage: {
+        rootThreadId: ThreadId.make("parent"),
+        parentThreadId: ThreadId.make("parent"),
+        relationshipToParent: "subagent",
+      },
+      latestRunId: null,
+      activeProviderThreadId: null,
+      activeRunId: null,
+      activityRunStatus: "running",
+      status: "running",
+      pendingBackgroundTasks: [],
+    });
+
+    expect(shell.runtime).toMatchObject({ status: "running", activeRunId: null });
   });
 
   it.each([

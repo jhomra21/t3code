@@ -50,7 +50,7 @@ const persistence = Layer.mergeAll(
 function candidate(
   modelSelection: typeof CODEX_MODEL_SELECTION,
   providerSessionId: string,
-  provider: "codex" | "claudeAgent" = "codex",
+  provider: "codex" | "claudeAgent" | "droid" = "codex",
 ) {
   const providerInstanceId = modelSelection.instanceId;
   return {
@@ -313,6 +313,30 @@ it.effect(
     }).pipe(Effect.scoped, Effect.provide(persistence)),
 );
 
+it.effect("imports Droid sessions with the native session resume cursor", () =>
+  Effect.gen(function* () {
+    const projections = yield* ProjectionStore.ProjectionStoreV2;
+    const runtimes = yield* ProviderSessionRuntime.ProviderSessionRuntimeRepository;
+    const source = candidate(
+      { instanceId: ProviderInstanceId.make("droid"), model: "default" },
+      "native-droid-session",
+      "droid",
+    );
+    const threadId = importId(source);
+    const importer = yield* makeImporter([source]);
+
+    expect(yield* importer.run).toEqual({ importedCount: 1, skippedCount: 0 });
+    const records = yield* projections.getThreadRecords(threadId, ["providerThreads"]);
+    expect(records.providerThreads[0]).toMatchObject({
+      driver: "droid",
+      nativeThreadRef: { driver: "droid", nativeId: source.source.providerSessionId },
+    });
+    expect(Option.getOrThrow(yield* runtimes.getByThreadId({ threadId }))).toMatchObject({
+      providerName: "droid",
+      resumeCursor: { sessionId: source.source.providerSessionId },
+    });
+  }).pipe(Effect.scoped, Effect.provide(persistence)),
+);
 it.effect("rechecks ownership after the import reaches the commit transaction", () =>
   Effect.gen(function* () {
     const enteringTransaction = yield* Deferred.make<void>();

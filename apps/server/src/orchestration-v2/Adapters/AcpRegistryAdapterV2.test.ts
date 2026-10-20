@@ -57,6 +57,7 @@ import {
 import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 import { BUILT_IN_PROVIDER_ADAPTER_DRIVER_KINDS_V2 } from "../builtInProviderAdapterDrivers.ts";
 import { AcpRegistryAdapterV2Driver } from "@t3tools/provider-acp-registry/server";
+import { DROID_PROVIDER, DroidAdapterV2Driver } from "@t3tools/provider-droid/server";
 import {
   ACP_REGISTRY_PROVIDER,
   makeAcpRegistryAdapterV2,
@@ -460,6 +461,10 @@ describe("AcpRegistryAdapterV2", () => {
       distribution: "auto",
       customModels: [],
     });
+  });
+  it("registers Factory Droid as a built-in adapter driver", () => {
+    assert.isTrue(BUILT_IN_PROVIDER_ADAPTER_DRIVER_KINDS_V2.has(DROID_PROVIDER));
+    assert.equal(DroidAdapterV2Driver.driverKind, DROID_PROVIDER);
   });
 
   describe("the agent's own pickers", () => {

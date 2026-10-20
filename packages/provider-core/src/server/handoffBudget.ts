@@ -114,25 +114,60 @@ export function handoffBudget(input: {
   readonly nativeContextEstimate: number;
   readonly modelContextWindow?: number | undefined;
 }): number {
+  return Math.max(
+    0,
+    Math.min(
+      input.tokenCap,
+      // Cap only imported history; attachment transport limits belong to adapters.
+      HANDOFF_BYTE_CAP,
+      remainingWindow(input, true) - handoffReservedWindow(input),
+    ),
+  );
+}
+
+export function handoffRemainingWindow(input: {
+  readonly userText: string;
+  readonly attachments: ReadonlyArray<ChatAttachment>;
+  readonly providerThread: OrchestrationV2ProviderThread;
+  readonly nativeContextEstimate: number;
+  readonly modelContextWindow?: number | undefined;
+}): number {
+  return remainingWindow(input, false);
+}
+
+function remainingWindow(
+  input: {
+    readonly userText: string;
+    readonly attachments: ReadonlyArray<ChatAttachment>;
+    readonly providerThread: OrchestrationV2ProviderThread;
+    readonly nativeContextEstimate: number;
+    readonly modelContextWindow?: number | undefined;
+  },
+  honorAutoCompactThreshold: boolean,
+): number {
+  const usage = input.providerThread.contextUsage;
+  const window = Math.min(
+    input.modelContextWindow ?? usage?.maxTokens ?? 128_000,
+    usage?.maxTokens ?? Infinity,
+    ...(honorAutoCompactThreshold ? [usage?.autoCompactThreshold ?? Infinity] : []),
+  );
+  const native = usage?.usedTokens ?? input.nativeContextEstimate;
+  const current =
+    Buffer.byteLength(JSON.stringify(input.userText)) + attachmentTokenAllowance(input.attachments);
+  return Math.max(0, window - native - current);
+}
+
+function handoffReservedWindow(input: {
+  readonly providerThread: OrchestrationV2ProviderThread;
+  readonly modelContextWindow?: number | undefined;
+}) {
   const usage = input.providerThread.contextUsage;
   const window = Math.min(
     input.modelContextWindow ?? usage?.maxTokens ?? 128_000,
     usage?.maxTokens ?? Infinity,
     usage?.autoCompactThreshold ?? Infinity,
   );
-  const native = usage?.usedTokens ?? input.nativeContextEstimate;
-  const current =
-    Buffer.byteLength(JSON.stringify(input.userText)) + attachmentTokenAllowance(input.attachments);
-  return Math.max(
-    0,
-    Math.min(
-      input.tokenCap,
-      // Cap only imported history. Attachment transport limits belong to adapters;
-      // they may send binary/base64 data separately from the history request.
-      HANDOFF_BYTE_CAP,
-      window - native - current - Math.max(16_000, Math.ceil(window / 4)),
-    ),
-  );
+  return Math.max(16_000, Math.ceil(window / 4));
 }
 
 export function historicalMessage(
