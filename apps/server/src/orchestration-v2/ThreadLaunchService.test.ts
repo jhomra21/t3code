@@ -66,6 +66,7 @@ import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as ThreadManagement from "./ThreadManagementService.ts";
 import * as ThreadTitleRegeneration from "./ThreadTitleRegenerationService.ts";
 import * as ProviderReplayHarness from "./testkit/ProviderReplayHarness.ts";
+import * as RemoteDelegation from "../peer/RemoteDelegation.ts";
 import type * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 
 const projectId = ProjectId.make("project:launch-test");
@@ -182,6 +183,7 @@ function makeHarness(options: HarnessOptions = {}) {
       bootstrap: () => Effect.die("unused"),
       update: () => Effect.die("unused"),
       delete: () => Effect.die("unused"),
+      listPage: () => Effect.die("unused"),
       getById: (id) =>
         Effect.succeed(
           id === projectId
@@ -339,6 +341,7 @@ it.effect.each(
           NodeCrypto.layer,
           Scheduler.layer,
           Layer.mock(SecretRequests.SecretRequests)({}),
+          Layer.mock(RemoteDelegation.RemoteDelegation)({}),
         ),
       ),
     );
@@ -2448,6 +2451,40 @@ it.effect("replays an accepted launch after the project disables the instance", 
   }).pipe(Effect.provide(harness.layer));
 });
 
+it.effect("an agent's launch never starts work above the modes it asks for", () => {
+  const harness = makeHarness();
+  return Effect.gen(function* () {
+    const launches = yield* ThreadLaunch.ThreadLaunchService;
+    const threads = yield* ThreadManagement.ThreadManagementService;
+    // The first launch, at full access, creates the thread without a message.
+    const created = yield* launches.launch(
+      launchInput({ command: "command:launch:narrowed-retry", thread: "thread:narrowed" }),
+    );
+    // The same key comes back from a narrower agent, now carrying a message,
+    // as a retry or a concurrent launch that lost the create would.
+    const failed = yield* launches
+      .launch({
+        ...launchInput({
+          command: "command:launch:narrowed-retry",
+          thread: "thread:narrowed",
+          message: "Run this",
+        }),
+        runtimeMode: "approval-required",
+        interactionMode: "plan",
+        createdBy: "agent",
+        creationSource: "mcp",
+      })
+      .pipe(Effect.flip);
+    if (failed._tag !== "ThreadLaunchError") {
+      assert.fail(`expected ThreadLaunchError, got ${failed._tag}`);
+    }
+    assert.equal(failed.operation, "dispatch-message");
+    const projection = yield* threads.getThreadProjection(created.threadId);
+    assert.equal(projection.runs.length, 0);
+    assert.equal(projection.messages.length, 0);
+  }).pipe(Effect.provide(harness.layer));
+});
+
 it.effect("rejects a server-allocated launch replay with a mismatching thread id", () => {
   const harness = makeHarness();
   return Effect.gen(function* () {
@@ -3483,6 +3520,7 @@ it.effect.each(
         Layer.provide(Layer.mock(GitVcsDriver.GitVcsDriver)({ resolveCommit })),
         Layer.provide(Layer.mock(ScheduledTasks.ScheduledTaskService)({})),
         Layer.provide(Layer.mock(SecretRequests.SecretRequests)({})),
+        Layer.provide(Layer.mock(RemoteDelegation.RemoteDelegation)({})),
       );
       yield* Effect.gen(function* () {
         const service = yield* OrchestratorMcpService.OrchestratorMcpService;
@@ -3549,8 +3587,10 @@ it.effect.each(
           return;
         }
         const delegated = yield* service.delegateTask(scope, input);
+        const childThreadId = delegated.childThreadId;
+        if (childThreadId === null) return assert.fail("expected a local delegated child");
         yield* Deferred.await(setupEntered);
-        const child = yield* threads.getThreadProjection(delegated.childThreadId);
+        const child = yield* threads.getThreadProjection(childThreadId);
         assert.equal(child.thread.lineage.parentThreadId, parentThreadId);
         assert.equal(child.thread.worktreePath, "/repo-worktrees/feature");
         assert.equal(child.runs[0]?.status, cancelAsync ? "starting" : "preparing");
@@ -3569,24 +3609,22 @@ it.effect.each(
         assert.equal(parent.thread.worktreePath, parentWorktree);
         assert.equal(parent.thread.branch, "parent-feature");
         if (cancelSetup) {
-          const afterSequence = yield* threads.getThreadEventSequence(delegated.childThreadId);
+          const afterSequence = yield* threads.getThreadEventSequence(childThreadId);
           yield* service.cancelTask(scope, { taskId: delegated.taskId });
           yield* Deferred.await(terminalClosed);
           if (!cancelAsync) {
-            yield* threads
-              .streamStoredEventsFrom({ threadId: delegated.childThreadId, afterSequence })
-              .pipe(
-                Stream.filter(
-                  (stored) =>
-                    stored.event.type === "thread.metadata-updated" &&
-                    stored.event.payload.worktreePath === null,
-                ),
-                Stream.runHead,
-              );
+            yield* threads.streamStoredEventsFrom({ threadId: childThreadId, afterSequence }).pipe(
+              Stream.filter(
+                (stored) =>
+                  stored.event.type === "thread.metadata-updated" &&
+                  stored.event.payload.worktreePath === null,
+              ),
+              Stream.runHead,
+            );
           }
           assert.equal(harness.closeTerminal.mock.calls.length, 1);
           assert.equal(harness.removeWorktree.mock.calls.length, cancelAsync ? 0 : 1);
-          const cancelled = yield* threads.getThreadProjection(delegated.childThreadId);
+          const cancelled = yield* threads.getThreadProjection(childThreadId);
           assert.equal(cancelled.runs[0]?.status, "interrupted");
           if (cancelAsync) {
             assert.equal(cancelled.thread.worktreePath, "/repo-worktrees/feature");
@@ -3599,7 +3637,7 @@ it.effect.each(
         }
         yield* Deferred.succeed(allowSetup, undefined);
         yield* threads
-          .streamStoredEventsFrom({ threadId: delegated.childThreadId, eventType: "run.updated" })
+          .streamStoredEventsFrom({ threadId: childThreadId, eventType: "run.updated" })
           .pipe(
             Stream.filter(
               (stored) =>
@@ -3608,7 +3646,7 @@ it.effect.each(
             ),
             Stream.runHead,
           );
-        const prepared = yield* threads.getThreadProjection(delegated.childThreadId);
+        const prepared = yield* threads.getThreadProjection(childThreadId);
         if (failSetup) {
           assert.isEmpty(prepared.checkpointScopes);
         } else {

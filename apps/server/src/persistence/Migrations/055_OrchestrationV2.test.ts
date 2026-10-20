@@ -15,7 +15,7 @@ layer("055_OrchestrationV2", (it) => {
     Effect.sync(() => {
       assert.deepStrictEqual(
         migrationEntries.map(([id]) => id),
-        Array.from({ length: 66 }, (_, index) => index + 1),
+        Array.from({ length: 68 }, (_, index) => index + 1),
       );
     }),
   );
@@ -37,9 +37,11 @@ layer("055_OrchestrationV2", (it) => {
         [61, "PullRequestReviewGuides"],
         [62, "ThreadFailureLookupIndex"],
         [63, "DropUnusedV1Projections"],
-        [64, "CanonicalizeThreadPullRequestLinks"],
-        [65, "CodexUsageNativeTurnIndex"],
-        [66, "RepairClientSettlementTimestamps"],
+        [64, "PeerLinks"],
+        [65, "PeerLinkFence"],
+        [66, "CanonicalizeThreadPullRequestLinks"],
+        [67, "CodexUsageNativeTurnIndex"],
+        [68, "RepairClientSettlementTimestamps"],
       ]);
       assert.deepStrictEqual(yield* runMigrations(), []);
 
@@ -69,9 +71,11 @@ layer("055_OrchestrationV2", (it) => {
         { migration_id: 61, name: "PullRequestReviewGuides" },
         { migration_id: 62, name: "ThreadFailureLookupIndex" },
         { migration_id: 63, name: "DropUnusedV1Projections" },
-        { migration_id: 64, name: "CanonicalizeThreadPullRequestLinks" },
-        { migration_id: 65, name: "CodexUsageNativeTurnIndex" },
-        { migration_id: 66, name: "RepairClientSettlementTimestamps" },
+        { migration_id: 64, name: "PeerLinks" },
+        { migration_id: 65, name: "PeerLinkFence" },
+        { migration_id: 66, name: "CanonicalizeThreadPullRequestLinks" },
+        { migration_id: 67, name: "CodexUsageNativeTurnIndex" },
+        { migration_id: 68, name: "RepairClientSettlementTimestamps" },
       ]);
 
       const tables = yield* sql<{ readonly name: string }>`
@@ -150,7 +154,7 @@ layer("055_OrchestrationV2", (it) => {
 it.effect("indexes batched Codex native turns without discarding duplicate candidates", () =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
-    yield* runMigrations({ toMigrationInclusive: 64 });
+    yield* runMigrations({ toMigrationInclusive: 66 });
     for (const [id, driver, nativeId] of [
       ["match", "codex", "requested"],
       ["duplicate", "codex", "requested"],

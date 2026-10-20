@@ -7,6 +7,7 @@ import type { RpcSession } from "../rpc/session.ts";
 import { describe, expect, it } from "@effect/vitest";
 import { vi } from "vite-plus/test";
 import {
+  AuthAccessWriteScope,
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
   AuthPreviewOperateScope,
@@ -323,6 +324,33 @@ it.effect.each(["commit", "push", "commit_push", "create_pr", "commit_push_pr"] 
         yield* command.authorize(registry, env, withThread);
       }),
     ),
+);
+
+it.effect("requires access management to link or forget environments", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const registry = yield* setup;
+      registry.set(sessions(env), AsyncResult.success(grant(true)));
+      for (const method of [WS_METHODS.peerLinksLink, WS_METHODS.peerLinksUnlink]) {
+        const peerLinks = createCommandPermissions(runtime, method);
+        expect(registry.get(peerLinks.permissionAtom(env))).toBe(false);
+        expect(
+          (yield* peerLinks.authorize(registry, env).pipe(Effect.flip)).requiredPermission,
+        ).toBe(AuthAccessWriteScope);
+      }
+      registry.set(
+        sessions(env),
+        AsyncResult.success({
+          ...grant(false),
+          scopes: [AuthAccessWriteScope],
+          permissions: [AuthAccessWriteScope],
+        }),
+      );
+      const link = createCommandPermissions(runtime, WS_METHODS.peerLinksLink);
+      expect(registry.get(link.permissionAtom(env))).toBe(true);
+      yield* link.authorize(registry, env);
+    }),
+  ),
 );
 
 it.effect("honors exact empty permissions and preserves legacy parent grants", () =>

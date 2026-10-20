@@ -1,4 +1,5 @@
 import { resolveThreadWorkingStartedAt } from "@t3tools/client-runtime/state/models";
+import { threadKey } from "@t3tools/client-runtime/state/entities";
 import { backgroundWorkHoldsCompletion } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import { threadPullRequestSearchTerms } from "@t3tools/shared/threadPullRequests";
 import * as React from "react";
@@ -538,14 +539,28 @@ export function resolveSidebarRowThreadId(
   return thread?.id ?? threadId;
 }
 
+/**
+ * `delegatedUnderParent` holds the tasks linked environments run for a thread
+ * the sidebar lists, by thread key; they show under that thread, as subagents do.
+ */
 export function filterSidebarV2VisibleThreads<
   T extends ScopedSidebarThread &
-    Pick<SidebarThreadSummary, "lineage" | "providerInstanceId" | "runtime">,
->(threads: readonly T[], scopedProjectKeys: ReadonlySet<string> | null): T[] {
+    Pick<
+      SidebarThreadSummary,
+      "environmentId" | "id" | "lineage" | "providerInstanceId" | "runtime"
+    >,
+>(
+  threads: readonly T[],
+  scopedProjectKeys: ReadonlySet<string> | null,
+  delegatedUnderParent: ReadonlySet<string> = new Set(),
+): T[] {
   return threads.filter(
     (thread) =>
       thread.archivedAt === null &&
       isThreadListed(thread) &&
+      !delegatedUnderParent.has(
+        threadKey({ environmentId: thread.environmentId, threadId: thread.id }),
+      ) &&
       (scopedProjectKeys === null ||
         scopedProjectKeys.has(`${thread.environmentId}:${thread.projectId}`)),
   );
@@ -1334,15 +1349,19 @@ export function sortLogicalProjectsForSidebar<
 export function sortSidebarV2ProjectGroups<
   TProject extends LogicalSidebarProject,
   TThread extends ScopedSidebarThread &
-    Pick<SidebarThreadSummary, "lineage" | "providerInstanceId" | "runtime">,
+    Pick<
+      SidebarThreadSummary,
+      "environmentId" | "id" | "lineage" | "providerInstanceId" | "runtime"
+    >,
 >(
   projects: readonly TProject[],
   threads: readonly TThread[],
   sortOrder: SidebarProjectSortOrder,
+  delegatedUnderParent: ReadonlySet<string>,
 ): TProject[] {
   return sortLogicalProjectsForSidebar(
     projects,
-    filterSidebarV2VisibleThreads(threads, null),
+    filterSidebarV2VisibleThreads(threads, null, delegatedUnderParent),
     sortOrder,
   );
 }
