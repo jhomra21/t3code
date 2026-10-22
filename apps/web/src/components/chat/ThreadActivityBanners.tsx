@@ -94,6 +94,7 @@ export function goalBannerItem(input: {
 export function backgroundWorkBannerItem(input: {
   readonly threadId: ThreadId;
   readonly tasks: ReadonlyArray<OrchestrationV2PendingBackgroundTask>;
+  readonly canStop: boolean;
   readonly stopDisabled: boolean;
   readonly stopping: boolean;
   readonly onStop: () => Promise<void>;
@@ -145,7 +146,7 @@ export function backgroundWorkBannerItem(input: {
               </Fragment>
             );
           }),
-    actions: (
+    actions: input.canStop ? (
       <Button
         size="xs"
         variant="ghost"
@@ -154,7 +155,7 @@ export function backgroundWorkBannerItem(input: {
       >
         {input.stopping ? "Stopping..." : "Stop"}
       </Button>
-    ),
+    ) : undefined,
   };
 }
 

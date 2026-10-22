@@ -39,6 +39,7 @@ import {
   handoffBudget,
   attachmentTokenAllowance,
   contextUsageForHandoff,
+  handoffRemainingWindow,
   historicalMessage,
   latestNativeContextUsage,
 } from "@t3tools/provider-core/server/handoffBudget";
@@ -1186,7 +1187,22 @@ export const layer: Layer.Layer<
           const delivery = yield* deliverContextHandoffs({
             handoffs: [...effectiveHandoffs, ...retryHandoff],
             deferInline: compact,
+            skippable: effectiveHandoffs.length === 0,
+            sameNativeThread,
             providerThread: runningProviderThread,
+            fallbackBudget: Effect.gen(function* () {
+              return handoffRemainingWindow({
+                modelContextWindow,
+                // Match the actual prompt allowance, without the reserve for later work.
+                userText: restartNote === "" ? userText : `${restartNote}\n\n${userText}`,
+                attachments: message.attachments,
+                providerThread: budgetProviderThread,
+                nativeContextEstimate:
+                  budgetProviderThread.contextUsage?.usedTokens === undefined
+                    ? yield* nativeContextEstimate
+                    : 0,
+              });
+            }),
             budget: Effect.gen(function* () {
               return handoffBudget({
                 tokenCap,

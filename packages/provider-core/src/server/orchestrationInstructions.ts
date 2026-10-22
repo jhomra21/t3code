@@ -44,6 +44,31 @@ export const T3_CODE_ORCHESTRATION_INSTRUCTIONS = `
 ${T3_CODE_ORCHESTRATION_SECTIONS.join("\n\n")}
 `;
 
+const DELEGATE_ONLY_SUBAGENT_BULLET = `- A delegated task/subagent is child work owned by the current thread. Start every subagent with \`delegate_task\`, including same-provider work, and never with the harness's native subagent tool: T3 cannot stop, track, or recover native children. Use \`orchestrator_capabilities\` to discover the current provider/model IDs from the same live catalog as the composer, including configured custom models. Retain each returned \`taskId\`, and use \`task_status\` or \`task_cancel\` to manage it. The returned \`childThreadId\` is backing storage for the subagent, not the target for starting another delegated review round. If a delegated child fails or disconnects, read it with \`task_status\` and \`t3_thread_read\`, then start a new \`delegate_task\` from its saved work. Use a native subagent tool only when the user asks for it by name.`;
+
+const GENERIC_TOOL_ACCESS = `Tool names may include a harness-normalized MCP prefix, such as \`mcp__t3_code__delegate_task\`; the semantics are the same. Some harnesses attach optional MCP servers lazily: if an initial tool-catalog scan does not show T3 tools, do not conclude that cross-provider delegation is unavailable. Make one bounded direct attempt using the known T3 tool name on the next tool step. In Codex code mode, for example, call \`tools.mcp__t3_code__orchestrator_capabilities({})\` before reporting that the capability is absent. Keep polling/wait loops bounded, do not duplicate active work, and use stable \`clientRequestId\` values when retrying tools that accept them.
+
+ACP fallback: some ACP agents accept the injected MCP server but fail to expose its tools. When the T3 tools are absent and \`T3_ACP_MCP_NODE\` is present, call the same tools through the terminal: \`ELECTRON_RUN_AS_NODE=1 "$T3_ACP_MCP_NODE" \${T3_ACP_MCP_ENTRYPOINT:+"$T3_ACP_MCP_ENTRYPOINT"} acp-mcp-call orchestrator_capabilities '{}'\` (\`T3_ACP_MCP_ENTRYPOINT\` is unset when T3 runs as a standalone executable). Delegate with \`acp-mcp-call delegate_task '{"task":"...","target":{"providerInstanceId":"...","model":"..."},"mode":"async","clientRequestId":"..."}'\`. This is the supported T3 transport fallback, not an ordinary shell-based substitute for delegation.`;
+
+export interface T3OrchestrationInstructionOptions {
+  /** For harnesses whose native subagents T3 cannot track: \`delegate_task\` is the only subagent path. */
+  readonly delegateOnly?: boolean;
+  /** Replaces the generic tool-name and ACP fallback notes for harnesses that expose T3 tools differently. */
+  readonly toolAccess?: string;
+}
+
+export function t3CodeOrchestrationInstructions(
+  options: T3OrchestrationInstructionOptions = {},
+): string {
+  if (!options.delegateOnly && options.toolAccess === undefined) {
+    return T3_CODE_ORCHESTRATION_INSTRUCTIONS;
+  }
+  return T3_CODE_ORCHESTRATION_INSTRUCTIONS.replace(
+    /^- A delegated task\/subagent is child work.*$/m,
+    (bullet) => (options.delegateOnly ? DELEGATE_ONLY_SUBAGENT_BULLET : bullet),
+  ).replace(GENERIC_TOOL_ACCESS, () => options.toolAccess ?? GENERIC_TOOL_ACCESS);
+}
+
 export const T3_CODE_BROWSER_TOOL_INSTRUCTIONS = `
 
 ## T3 Code collaborative browser

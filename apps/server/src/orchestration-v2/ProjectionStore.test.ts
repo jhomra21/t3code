@@ -56,6 +56,84 @@ const driver = ProviderDriverKind.make("codex");
 const providerInstanceId = modelSelection.instanceId;
 const encodeUnknownJsonString = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 
+const runlessSubagentShellUsesRootTurnStatus = Effect.gen(function* () {
+  const store = yield* ProjectionStore.ProjectionStoreV2;
+  const now = yield* DateTime.now;
+  const threadId = ThreadId.make("thread:runless-subagent-shell");
+  const rootNodeId = NodeId.make("node:runless-subagent-shell");
+  yield* store.apply({
+    id: EventId.make("event:runless-subagent-shell:thread"),
+    type: "thread.created",
+    threadId,
+    occurredAt: now,
+    payload: {
+      createdBy: "agent",
+      creationSource: "provider",
+      id: threadId,
+      projectId: ProjectId.make("project:runless-subagent-shell"),
+      title: "Run-less Droid subagent",
+      providerInstanceId,
+      modelSelection,
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      branch: null,
+      worktreePath: null,
+      activeProviderThreadId: null,
+      lineage: {
+        parentThreadId: ThreadId.make("thread:runless-subagent-parent"),
+        relationshipToParent: "subagent",
+        rootThreadId: ThreadId.make("thread:runless-subagent-parent"),
+      },
+      forkedFrom: null,
+      createdAt: now,
+      updatedAt: now,
+      archivedAt: null,
+      settledOverride: null,
+      settledAt: null,
+      lastVisitedAt: null,
+      deletedAt: null,
+    },
+  });
+  yield* store.apply({
+    id: EventId.make("event:runless-subagent-shell:root"),
+    type: "node.updated",
+    threadId,
+    nodeId: rootNodeId,
+    driver,
+    occurredAt: now,
+    payload: {
+      id: rootNodeId,
+      threadId,
+      runId: null,
+      parentNodeId: null,
+      rootNodeId,
+      kind: "root_turn",
+      status: "running",
+      countsForRun: true,
+      providerThreadId: null,
+      providerTurnId: null,
+      nativeItemRef: null,
+      runtimeRequestId: null,
+      checkpointScopeId: null,
+      startedAt: now,
+      completedAt: null,
+    },
+  });
+
+  const projection = yield* store.getThreadProjection(threadId);
+  const memoryShell = ProjectionStore.threadShellFromProjection(projection);
+  const sqlShell = (yield* store.getShellSnapshot()).threads.find((shell) => shell.id === threadId);
+  for (const shell of [memoryShell, sqlShell]) {
+    assert.equal(shell?.status, "running");
+    assert.equal(shell?.activityRunStatus, "running");
+    assert.isNull(shell?.activeRunId);
+  }
+});
+
+it.effect("memory shells use run-less subagent root activity", () =>
+  runlessSubagentShellUsesRootTurnStatus.pipe(Effect.provide(ProjectionStore.layerMemory)),
+);
+
 const traceSqlStatements = () => {
   const statements: Array<string> = [];
   const tracer = Tracer.make({
@@ -1131,6 +1209,10 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
     }),
   );
 
+  it.effect(
+    "SQL shells use run-less subagent root activity",
+    () => runlessSubagentShellUsesRootTurnStatus,
+  );
   it.effect(
     "SQL recovery selects unfinished runless native subagents",
     () => runlessNativeSubagentNeedsRecovery,

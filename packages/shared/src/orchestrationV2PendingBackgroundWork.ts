@@ -121,6 +121,18 @@ type PendingBackgroundWorkProviderThread = Pick<
   "id" | "pendingBackgroundTasks"
 > & { readonly providerInstanceId?: OrchestrationV2ProviderThread["providerInstanceId"] };
 
+/** The active provider's background roster, without deriving foreground turn items. */
+export function pendingBackgroundRosterForActiveThread(input: {
+  readonly providerThreads: ReadonlyArray<PendingBackgroundWorkProviderThread>;
+  readonly activeProviderThreadId: string | null | undefined;
+}): ReadonlyArray<PendingBackgroundWorkTask> {
+  if (input.activeProviderThreadId == null) return [];
+  return (
+    input.providerThreads.find((thread) => thread.id === input.activeProviderThreadId)
+      ?.pendingBackgroundTasks ?? []
+  );
+}
+
 type PendingBackgroundWorkTurnItem = {
   readonly id: OrchestrationV2TurnItem["id"] | string;
   readonly type: OrchestrationV2TurnItem["type"];

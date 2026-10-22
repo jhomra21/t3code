@@ -8,6 +8,22 @@ import { formatModelSlugName, resolveSelectableModel } from "@t3tools/shared/mod
 import { fileBasename } from "@t3tools/shared/path";
 import { isTerminalSubagentStatus } from "./subagentRuntime.ts";
 
+/** Droid subagents run in their own threads; other providers stay nested. */
+export function isThreadListed(thread: {
+  readonly lineage: { readonly relationshipToParent: string | null };
+  readonly providerInstanceId: string;
+  readonly runtime: { readonly status: string } | null;
+}): boolean {
+  if (thread.lineage.relationshipToParent !== "subagent") return true;
+  return (
+    thread.providerInstanceId.includes("droid") &&
+    (thread.runtime?.status === "starting" ||
+      thread.runtime?.status === "running" ||
+      thread.runtime?.status === "waiting")
+  );
+}
+
+/** Summarizes one adjacent group, without changing its member identities or order. */
 export function subagentGroupSummary(
   members: ReadonlyArray<{ readonly status: OrchestrationV2TurnItemStatus }>,
 ) {

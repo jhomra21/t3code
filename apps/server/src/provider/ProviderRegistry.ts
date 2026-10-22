@@ -179,6 +179,12 @@ const shouldRetainMissingProviderModels = (provider: ServerProvider): boolean =>
     );
   }
 
+  if (provider.driver === ProviderDriverKind.make("droid")) {
+    // Droid reports "ready" only after model discovery succeeds, so its list is complete
+    // then; a failed discovery is "warning" with no models and must keep the previous list.
+    return !(provider.installed && provider.status === "ready");
+  }
+
   const isAntigravity = provider.driver === ProviderDriverKind.make("antigravity");
   const isCodex = provider.driver === ProviderDriverKind.make("codex");
   if (!isAntigravity && !isCodex && provider.driver !== ProviderDriverKind.make("opencode")) {

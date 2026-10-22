@@ -31,6 +31,8 @@ import {
   type MessageId,
   type ModelSelection,
   type OrchestrationMessageContext,
+  type OrchestrationV2PendingBackgroundTask,
+  type OrchestrationV2ProjectedTurnItem,
   type PreviewAnnotationPayload,
   type ProviderInteractionMode,
   ProviderDriverKind,
@@ -322,6 +324,20 @@ export function resolveWorktreeSetupProgress(input: {
       input.runStatus === "preparing" ||
       (snapshot?.phase === "running" && !worktreeSetupAgentStarted(snapshot)),
   };
+}
+
+// The settled-work list is only derived after a run ends, so a working run reads the provider's
+// live roster instead. The composer already offers Stop while working, so the banner holds its own.
+export function resolveBackgroundWorkBanner(input: {
+  hasActiveThread: boolean;
+  isWorking: boolean;
+  activeRoster: ReadonlyArray<OrchestrationV2PendingBackgroundTask>;
+  settledTasks: ReadonlyArray<OrchestrationV2PendingBackgroundTask>;
+}): { tasks: ReadonlyArray<OrchestrationV2PendingBackgroundTask>; canStop: boolean } {
+  if (!input.hasActiveThread) return { tasks: [], canStop: false };
+  return input.isWorking
+    ? { tasks: input.activeRoster, canStop: false }
+    : { tasks: input.settledTasks, canStop: true };
 }
 
 export function resolveDraftHeroState(input: {

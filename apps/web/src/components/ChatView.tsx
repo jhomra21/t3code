@@ -2466,6 +2466,7 @@ export default function ChatView(props: ChatViewProps) {
     runtimeMode,
     isWorking,
     pendingBackgroundTasks,
+    activeProviderThread,
     activePendingApproval,
     activePendingUserInput,
     localCheckoutBranchMismatch,
