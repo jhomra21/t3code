@@ -468,6 +468,7 @@ function useSidebarThreads(input: {
   }
   return {
     routeRowThreadKey,
+    delegatedUnderParent,
     ...partition,
     threads,
     workingShelfEnabled,
@@ -513,8 +514,8 @@ function useSidebarThreads(input: {
 function partitionSidebarThreads(input: SidebarThreadPartitionInput) {
   const {
     threads,
-    scopedProjectKeys,
     delegatedUnderParent,
+    scopedProjectKeys,
     serverConfigs,
     optimisticDrop,
     workingShelfEnabled,
@@ -1039,6 +1040,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     threads,
     workingShelfEnabled,
     pinnedThreads,
+    delegatedUnderParent,
     draggableThreadKeys,
     activeReorderableThreadKeys,
     activeThreads,
@@ -1095,8 +1097,9 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     if (
       pendingKey !== null &&
       scopedProjectKeys !== null &&
-      filterSidebarV2VisibleThreads([thread], scopedProjectKeys).length === 0 &&
-      filterSidebarV2VisibleThreads([thread], null).length === 1
+      filterSidebarV2VisibleThreads([thread], scopedProjectKeys, delegatedUnderParent).length ===
+        0 &&
+      filterSidebarV2VisibleThreads([thread], null, delegatedUnderParent).length === 1
     ) {
       // The row renders under the widened scope; scroll on that pass.
       setProjectScopeKey(null);

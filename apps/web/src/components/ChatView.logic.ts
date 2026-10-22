@@ -32,7 +32,6 @@ import {
   type ModelSelection,
   type OrchestrationMessageContext,
   type OrchestrationV2PendingBackgroundTask,
-  type OrchestrationV2ProjectedTurnItem,
   type PreviewAnnotationPayload,
   type ProviderInteractionMode,
   ProviderDriverKind,

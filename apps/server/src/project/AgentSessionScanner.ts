@@ -982,24 +982,25 @@ export const make = Effect.gen(function* () {
     );
   });
 
-  const readDroidModel = (filePath: string) =>
-    Effect.gen(function* () {
-      const settingsPath = `${filePath.slice(0, -".jsonl".length)}.settings.json`;
-      const stats = yield* statOption(settingsPath);
-      if (
-        Option.isNone(stats) ||
-        stats.value.type !== "File" ||
-        Number(stats.value.size) > 64 * 1024
-      ) {
-        return null;
-      }
-      const contents = yield* fileSystem
-        .readFileString(settingsPath)
-        .pipe(Effect.orElseSucceed(() => ""));
-      if (contents.length === 0) return null;
-      const settings = decodeDroidSessionSettings(contents);
-      return Option.isSome(settings) ? settings.value.model?.trim() || null : null;
-    });
+  const readDroidModel = Effect.fn("AgentSessionScanner.readDroidModel")(function* (
+    filePath: string,
+  ) {
+    const settingsPath = `${filePath.slice(0, -".jsonl".length)}.settings.json`;
+    const stats = yield* statOption(settingsPath);
+    if (
+      Option.isNone(stats) ||
+      stats.value.type !== "File" ||
+      Number(stats.value.size) > 64 * 1024
+    ) {
+      return null;
+    }
+    const contents = yield* fileSystem
+      .readFileString(settingsPath)
+      .pipe(Effect.orElseSucceed(() => ""));
+    if (contents.length === 0) return null;
+    const settings = decodeDroidSessionSettings(contents);
+    return Option.isSome(settings) ? settings.value.model?.trim() || null : null;
+  });
 
   /**
    * Resolve the Claude config directory the CLI would use, matching the
