@@ -54,6 +54,7 @@ import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 
 const DEFAULT_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
+const DELEGATED_IDLE_TIMEOUT_MS = 5 * 60 * 1000;
 const DEFAULT_MAX_IDLE_PIN_MS = 4 * 60 * 60 * 1000;
 const RELEASE_SCOPE_CLOSE_TIMEOUT_MS = 30 * 1000;
 
@@ -189,6 +190,8 @@ export class ProviderSessionManagerV2 extends Context.Service<
 
 interface LiveSessionEntry {
   readonly attachedThreadIds: ReadonlySet<ThreadId>;
+  readonly idleTimeoutMsByThread: ReadonlyMap<ThreadId, number>;
+  readonly idleTimeoutMs: number;
   readonly loadedProviderThreadKeyByThread: ReadonlyMap<ThreadId, string>;
   /**
    * Revocation on detach/release is scoped to these ids so tearing down a
@@ -400,6 +403,22 @@ export const layerWithOptions = (
       }) => `${input.providerSessionId}\u0000${input.threadId}`;
       const idleTimeoutMs = Math.max(1, options.idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS);
       const maxIdlePinMs = Math.max(0, options.maxIdlePinMs ?? DEFAULT_MAX_IDLE_PIN_MS);
+      const resolveThreadIdleTimeout = Effect.fn("ProviderSessionManager.resolveThreadIdleTimeout")(
+        function* (threadId: ThreadId) {
+          if (options.idleTimeoutMs !== undefined) return idleTimeoutMs;
+          const thread = yield* projectionStore.getThread(threadId);
+          // Peer-delegated children have a remote parent instead of local lineage.
+          return thread.lineage.relationshipToParent === "subagent" ||
+            thread.delegatedFrom !== undefined
+            ? DELEGATED_IDLE_TIMEOUT_MS
+            : idleTimeoutMs;
+        },
+        Effect.orElseSucceed(() => idleTimeoutMs),
+      );
+      // Shared runtimes must preserve the user window while any user thread is attached.
+      // Recompute only on attachment changes; provider events read the cached maximum.
+      const attachedIdleTimeout = (timeouts: ReadonlyMap<ThreadId, number>) =>
+        timeouts.size === 0 ? idleTimeoutMs : Math.max(...timeouts.values());
       interface PreparedMcpCredential {
         readonly mcpCredentialId: string | undefined;
         readonly issued: boolean;
@@ -1158,7 +1177,7 @@ export const layerWithOptions = (
               // Re-check on this fiber after another idle window. Do not call
               // scheduleIdleReleaseInternal: that cancels entry.idleFiber, which
               // is this fiber, and can self-deadlock on Fiber.interrupt.
-              yield* Effect.sleep(Duration.millis(idleTimeoutMs));
+              yield* Effect.sleep(Duration.millis(entry.idleTimeoutMs));
               return yield* releaseIfStillIdle(input);
             }
             yield* Effect.logWarning("orchestration-v2.driver-session.idle-release-pin-expired", {
@@ -1218,7 +1237,7 @@ export const layerWithOptions = (
 
         yield* cancelIdleFiber(entry.idleFiber);
         const generation = entry.idleGeneration + 1;
-        const idleFiber = yield* Effect.sleep(Duration.millis(idleTimeoutMs)).pipe(
+        const idleFiber = yield* Effect.sleep(Duration.millis(entry.idleTimeoutMs)).pipe(
           Effect.andThen(releaseIfStillIdle({ providerSessionId, generation })),
           Effect.forkIn(layerScope),
         );
@@ -1273,17 +1292,26 @@ export const layerWithOptions = (
       }) =>
         withActivityError(
           input.providerSessionId,
-          Ref.modify(sessions, (current) => {
-            const entry = current.get(sessionKey(input.providerSessionId));
-            if (entry === undefined || entry.attachedThreadIds.has(input.threadId)) {
-              return [undefined, current] as const;
-            }
-            const updated = new Map(current);
-            updated.set(sessionKey(input.providerSessionId), {
-              ...entry,
-              attachedThreadIds: new Set([...entry.attachedThreadIds, input.threadId]),
+          Effect.gen(function* () {
+            const existing = (yield* Ref.get(sessions)).get(sessionKey(input.providerSessionId));
+            if (existing === undefined || existing.attachedThreadIds.has(input.threadId)) return;
+            const threadIdleTimeoutMs = yield* resolveThreadIdleTimeout(input.threadId);
+            return yield* Ref.modify(sessions, (current) => {
+              const entry = current.get(sessionKey(input.providerSessionId));
+              if (entry === undefined || entry.attachedThreadIds.has(input.threadId)) {
+                return [undefined, current] as const;
+              }
+              const updated = new Map(current);
+              const idleTimeoutMsByThread = new Map(entry.idleTimeoutMsByThread);
+              idleTimeoutMsByThread.set(input.threadId, threadIdleTimeoutMs);
+              updated.set(sessionKey(input.providerSessionId), {
+                ...entry,
+                attachedThreadIds: new Set([...entry.attachedThreadIds, input.threadId]),
+                idleTimeoutMsByThread,
+                idleTimeoutMs: attachedIdleTimeout(idleTimeoutMsByThread),
+              });
+              return [entry.runtime, updated] as const;
             });
-            return [entry.runtime, updated] as const;
           }),
         );
 
@@ -1304,12 +1332,16 @@ export const layerWithOptions = (
           }
           const attachedThreadIds = new Set(entry.attachedThreadIds);
           attachedThreadIds.delete(input.threadId);
+          const idleTimeoutMsByThread = new Map(entry.idleTimeoutMsByThread);
+          idleTimeoutMsByThread.delete(input.threadId);
           const loadedProviderThreadKeyByThread = new Map(entry.loadedProviderThreadKeyByThread);
           loadedProviderThreadKeyByThread.delete(input.threadId);
           const updated = new Map(current);
           updated.set(key, {
             ...entry,
             attachedThreadIds,
+            idleTimeoutMsByThread,
+            idleTimeoutMs: attachedIdleTimeout(idleTimeoutMsByThread),
             loadedProviderThreadKeyByThread,
           });
           return updated;
@@ -2138,6 +2170,7 @@ export const layerWithOptions = (
                 return existing.exposedRuntime;
               }
 
+              const threadIdleTimeoutMs = yield* resolveThreadIdleTimeout(input.threadId);
               const adapter = yield* registry.get(input.modelSelection.instanceId).pipe(
                 Effect.mapError(
                   (cause) =>
@@ -2222,6 +2255,8 @@ export const layerWithOptions = (
               const now = yield* Clock.currentTimeMillis;
               const entry: LiveSessionEntry = {
                 attachedThreadIds: new Set([input.threadId]),
+                idleTimeoutMsByThread: new Map([[input.threadId, threadIdleTimeoutMs]]),
+                idleTimeoutMs: threadIdleTimeoutMs,
                 loadedProviderThreadKeyByThread: new Map(),
                 mcpCredentialIdByThread:
                   mcpCredentialId === undefined
@@ -2408,6 +2443,8 @@ export const layerWithOptions = (
               }
               const attachedThreadIds = new Set(entry.attachedThreadIds);
               attachedThreadIds.delete(input.threadId);
+              const idleTimeoutMsByThread = new Map(entry.idleTimeoutMsByThread);
+              idleTimeoutMsByThread.delete(input.threadId);
               const loadedProviderThreadKeyByThread = new Map(
                 entry.loadedProviderThreadKeyByThread,
               );
@@ -2425,6 +2462,8 @@ export const layerWithOptions = (
               const updatedEntry = {
                 ...entry,
                 attachedThreadIds,
+                idleTimeoutMsByThread,
+                idleTimeoutMs: attachedIdleTimeout(idleTimeoutMsByThread),
                 loadedProviderThreadKeyByThread,
                 mcpCredentialIdByThread,
                 idleThreadUnloads,

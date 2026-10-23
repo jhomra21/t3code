@@ -225,6 +225,8 @@ function makeThreadCreatedEvent(input: {
   readonly threadId: ThreadId;
   readonly now: DateTime.Utc;
   readonly projectId?: ProjectId;
+  readonly parentRelationship?: "fork" | "subagent";
+  readonly remoteDelegation?: boolean;
 }) {
   return Effect.gen(function* () {
     const projectId =
@@ -250,11 +252,20 @@ function makeThreadCreatedEvent(input: {
       worktreePath: null,
       activeProviderThreadId: providerThreadId,
       lineage: {
-        parentThreadId: null,
-        relationshipToParent: null,
+        parentThreadId: input.parentRelationship === undefined ? null : ThreadId.make("parent"),
+        relationshipToParent: input.parentRelationship ?? null,
         rootThreadId: input.threadId,
       },
       forkedFrom: null,
+      ...(input.remoteDelegation
+        ? {
+            delegatedFrom: {
+              environmentId: EnvironmentId.make("remote-parent"),
+              threadId: ThreadId.make("remote-parent-thread"),
+              title: "Remote parent",
+            },
+          }
+        : {}),
       createdAt: input.now,
       updatedAt: input.now,
       archivedAt: null,
@@ -458,7 +469,7 @@ const makeProviderAdapter = Effect.fnUntraced(function* (
 
 function layerTest(input: {
   readonly state: Ref.Ref<TestProviderRuntimeState>;
-  readonly idleTimeoutMs: number;
+  readonly idleTimeoutMs?: number;
   readonly maxIdlePinMs?: number;
   readonly failEventStream?: boolean;
   readonly capabilities?: OrchestrationV2ProviderCapabilities;
@@ -548,7 +559,7 @@ function layerTest(input: {
     layerConfiguredMcpRegistry,
     McpProviderSessions.layer,
     ProviderSessionManager.layerWithOptions({
-      idleTimeoutMs: input.idleTimeoutMs,
+      ...(input.idleTimeoutMs === undefined ? {} : { idleTimeoutMs: input.idleTimeoutMs }),
       ...(input.maxIdlePinMs === undefined ? {} : { maxIdlePinMs: input.maxIdlePinMs }),
     }).pipe(
       Layer.provide(
@@ -2326,6 +2337,150 @@ it.effect("ProviderSessionManagerV2 keeps a provider update that lands while rel
 
     yield* effect.pipe(
       Effect.provide(layerTest({ state, idleTimeoutMs: 60_000, beforeUnchangedWrite })),
+    );
+  }),
+);
+
+it.effect.each([
+  { parentRelationship: undefined, remoteDelegation: false },
+  { parentRelationship: "fork", remoteDelegation: false },
+  { parentRelationship: "subagent", remoteDelegation: false },
+  { parentRelationship: undefined, remoteDelegation: true },
+] as const)(
+  "ProviderSessionManagerV2 uses the default idle window (relationship: $parentRelationship, remote: $remoteDelegation)",
+  ({ parentRelationship, remoteDelegation }) =>
+    Effect.gen(function* () {
+      const state = yield* Ref.make(emptyState);
+      yield* Effect.gen(function* () {
+        const eventSink = yield* EventSink.EventSinkV2;
+        const idAllocator = yield* IdAllocator.IdAllocatorV2;
+        const manager = yield* ProviderSessionManager.ProviderSessionManagerV2;
+        const projectionStore = yield* ProjectionStore.ProjectionStoreV2;
+        const now = yield* DateTime.now;
+        const threadId = ThreadId.make("idle-window");
+        const providerSessionId = yield* idAllocator.allocate.providerSession({
+          providerInstanceId: modelSelection.instanceId,
+          threadId,
+        });
+        yield* eventSink.write({
+          events: [
+            yield* makeThreadCreatedEvent({
+              idAllocator,
+              threadId,
+              now,
+              remoteDelegation,
+              ...(parentRelationship === undefined ? {} : { parentRelationship }),
+            }),
+          ],
+        });
+        yield* manager.open({ threadId, providerSessionId, modelSelection, runtimePolicy });
+        yield* TestClock.adjust("5 minutes");
+        const delegated = parentRelationship === "subagent" || remoteDelegation;
+        assert.equal(yield* manager.isLive(providerSessionId), !delegated);
+        if (!delegated) yield* TestClock.adjust("25 minutes");
+        assert.isFalse(yield* manager.isLive(providerSessionId));
+        assert.equal((yield* Ref.get(state)).closeCount, 1);
+
+        const projection = yield* projectionStore.getThreadProjection(threadId);
+        const releasedSession = projection.providerSessions.at(-1);
+        assert.equal(releasedSession?.status, "stopped");
+        const runtime = yield* manager.open({
+          threadId,
+          providerSessionId,
+          modelSelection,
+          runtimePolicy,
+          resumeFromSession: releasedSession!,
+        });
+        yield* runtime.resumeThread({
+          threadId,
+          providerThread: makeProviderThread({ idAllocator, threadId, providerSessionId, now }),
+          modelSelection,
+          runtimePolicy,
+        });
+        assert.equal((yield* Ref.get(state)).openCount, 2);
+        assert.equal((yield* Ref.get(state)).resumeCount, 1);
+      }).pipe(Effect.provide(layerTest({ state })));
+    }),
+);
+
+it.effect.each([true, false])(
+  "ProviderSessionManagerV2 preserves the user idle window in a mixed session (child first: %s)",
+  (childFirst) =>
+    Effect.gen(function* () {
+      const state = yield* Ref.make(emptyState);
+      yield* Effect.gen(function* () {
+        const eventSink = yield* EventSink.EventSinkV2;
+        const idAllocator = yield* IdAllocator.IdAllocatorV2;
+        const manager = yield* ProviderSessionManager.ProviderSessionManagerV2;
+        const now = yield* DateTime.now;
+        const childId = ThreadId.make("mixed-child");
+        const userId = ThreadId.make("mixed-user");
+        const providerSessionId = idAllocator.derive.providerSession({
+          providerInstanceId: modelSelection.instanceId,
+        });
+        yield* eventSink.write({
+          events: [
+            yield* makeThreadCreatedEvent({
+              idAllocator,
+              threadId: childId,
+              now,
+              parentRelationship: "subagent",
+            }),
+            yield* makeThreadCreatedEvent({ idAllocator, threadId: userId, now }),
+          ],
+        });
+        for (const threadId of childFirst ? [childId, userId] : [userId, childId]) {
+          yield* manager.open({ threadId, providerSessionId, modelSelection, runtimePolicy });
+        }
+        yield* TestClock.adjust("5 minutes");
+        assert.isTrue(yield* manager.isLive(providerSessionId));
+        yield* manager.detach({ providerSessionId, threadId: userId });
+        yield* TestClock.adjust("5 minutes");
+        assert.isFalse(yield* manager.isLive(providerSessionId));
+        assert.equal((yield* Ref.get(state)).closeCount, 1);
+      }).pipe(Effect.provide(layerTest({ state })));
+    }),
+);
+
+it.effect("ProviderSessionManagerV2 pins delegated idle sessions for pending background work", () =>
+  Effect.gen(function* () {
+    const state = yield* Ref.make(emptyState);
+    const checks = yield* Ref.make(0);
+    yield* Effect.gen(function* () {
+      const eventSink = yield* EventSink.EventSinkV2;
+      const idAllocator = yield* IdAllocator.IdAllocatorV2;
+      const manager = yield* ProviderSessionManager.ProviderSessionManagerV2;
+      const threadId = ThreadId.make("delegated-idle-pin");
+      const now = yield* DateTime.now;
+      const providerSessionId = yield* idAllocator.allocate.providerSession({
+        providerInstanceId: modelSelection.instanceId,
+        threadId,
+      });
+      yield* eventSink.write({
+        events: [
+          yield* makeThreadCreatedEvent({
+            idAllocator,
+            threadId,
+            now,
+            parentRelationship: "subagent",
+          }),
+        ],
+      });
+      yield* manager.open({ threadId, providerSessionId, modelSelection, runtimePolicy });
+      yield* TestClock.adjust("5 minutes");
+      assert.equal(yield* Ref.get(checks), 1);
+      assert.isTrue(yield* manager.isLive(providerSessionId));
+      assert.equal((yield* Ref.get(state)).closeCount, 0);
+      yield* TestClock.adjust("4 hours");
+      assert.isFalse(yield* manager.isLive(providerSessionId));
+      assert.equal((yield* Ref.get(state)).closeCount, 1);
+    }).pipe(
+      Effect.provide(
+        layerTest({
+          state,
+          hasPendingBackgroundWork: Ref.update(checks, (count) => count + 1).pipe(Effect.as(true)),
+        }),
+      ),
     );
   }),
 );
