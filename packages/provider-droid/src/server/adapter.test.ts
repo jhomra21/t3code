@@ -2684,6 +2684,51 @@ describe("Droid adapter", () => {
     ),
   );
 
+  it.effect("normalizes Droid MCP tool names for turn items", () =>
+    provide(
+      Effect.gen(function* () {
+        const fake = yield* makeFakeDroid();
+        const { runtime, input } = yield* open(fake);
+        const toolItemReady =
+          yield* Deferred.make<
+            Extract<ProviderAdapter.ProviderAdapterV2Event, { type: "turn_item.updated" }>
+          >();
+        yield* runtime.events.pipe(
+          Stream.runForEach((event) =>
+            event.type === "turn_item.updated" &&
+            event.turnItem.type === "dynamic_tool" &&
+            event.turnItem.nativeItemRef?.nativeId === "mcp-render"
+              ? Deferred.succeed(toolItemReady, event)
+              : Effect.void,
+          ),
+          Effect.forkChild,
+        );
+        yield* runtime.startTurn(input);
+        yield* fake.takeRequest("droid.add_user_message");
+        yield* fake.emitNotification({
+          type: "create_message",
+          message: {
+            id: "mcp-message",
+            role: "assistant",
+            content: [
+              {
+                type: "tool_use",
+                id: "mcp-render",
+                name: "t3-code___html_render",
+                input: {},
+              },
+            ],
+          },
+        });
+        const event = yield* Deferred.await(toolItemReady);
+        if (event.type !== "turn_item.updated" || event.turnItem.type !== "dynamic_tool")
+          return assert.fail("Expected a dynamic tool turn item");
+        assert.equal(event.turnItem.toolName, "t3-code.html_render");
+        assert.equal(event.turnItem.title, "t3-code.html_render");
+      }),
+    ),
+  );
+
   it.effect.each([
     ["foreground", "Task completed.", false, "heavy", "high"],
     ["background", "Task launched in background.\nTask ID: child", true, "light", "low"],

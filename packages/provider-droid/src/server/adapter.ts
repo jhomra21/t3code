@@ -842,6 +842,8 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
           changes?: ReadonlyArray<{ operation: string; path: string }>,
         ) {
           const updatedAt = yield* DateTime.now;
+          // Released clients recognize the Codex `server.tool` form, not Droid's native separator.
+          const toolName = tool.name.replace("___", ".");
           const key =
             child === undefined ? tool.id : `${child.task.nativeTaskRef?.nativeId}:${tool.id}`;
           const nodeId = ids.derive.nodeFromProviderItem({
@@ -854,7 +856,7 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
             runId: child === undefined ? context.input.runId : null,
             nodeId,
             status,
-            title: tool.name,
+            title: toolName,
             providerThreadId: child === undefined ? context.input.providerThread.id : null,
             providerTurnId: child === undefined ? context.turn.id : null,
             completedAt: status === "running" ? null : updatedAt,
@@ -899,7 +901,7 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
             yield* emitItem({
               ...base,
               type: "dynamic_tool",
-              toolName: tool.name,
+              toolName,
               input: tool.input,
               ...(boundedOutput === undefined ? {} : { output: boundedOutput }),
             });
