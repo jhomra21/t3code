@@ -1,3 +1,4 @@
+import * as DocumentText from "../provider/DocumentText.ts";
 import { NodeHttpServer } from "@effect/platform-node";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -59,6 +60,7 @@ import * as SourceControlRepositoryService from "../sourceControl/SourceControlR
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as PeerForwarding from "./PeerForwarding.ts";
 import * as PeerLinks from "./PeerLinks.ts";
+import * as PeerMcpClient from "./PeerMcpClient.ts";
 import { descriptorOf, layerLinkingEnvironment, linkTo, servePeer } from "./PeerLinks.testkit.ts";
 import * as RemoteDelegation from "./RemoteDelegation.ts";
 
@@ -458,6 +460,7 @@ const boxToolkitLayer = (thread: BoxThread) => {
     McpHttpServer.layerProjectRegistration,
   ).pipe(
     Layer.provide(NodeCrypto.layer),
+    Layer.provide(Layer.mock(DocumentText.DocumentText)({})),
     Layer.provide(layerBoxThreads),
     Layer.provide(layerBoxLaunches),
     Layer.provide(Layer.mock(RemoteDelegation.RemoteDelegation)({})),
@@ -477,7 +480,7 @@ const boxToolkitLayer = (thread: BoxThread) => {
     Layer.provide(Layer.mock(ScheduledTaskService.ScheduledTaskService)({})),
     Layer.provide(
       Layer.mock(ProjectService.ProjectService)({
-        getById: () => Effect.succeed(Option.none()),
+        getById: () => Effect.succeedNone,
         // More than a page, so finding the project with this repository pages.
         listPage: ({ cursor, limit }) =>
           Effect.succeed({
@@ -529,6 +532,12 @@ const makeLaptop = (
 ) =>
   Effect.gen(function* () {
     const linking = kept ?? (yield* layerLinkingEnvironment(laptop).pipe(Layer.build));
+    const peerFailed = yield* Deferred.make<void>();
+    const peerClient = Context.get(linking, PeerMcpClient.PeerMcpClient);
+    const observedLinking = Context.add(linking, PeerMcpClient.PeerMcpClient, {
+      call: (input) =>
+        peerClient.call(input).pipe(Effect.tapError(() => Deferred.succeed(peerFailed, undefined))),
+    });
     const layerDatabase = Layer.succeedContext(database);
     const layerOrchestrator = Layer.mergeAll(
       layerDatabase,
@@ -559,9 +568,10 @@ const makeLaptop = (
             Layer.mock(ProjectService.ProjectService)({
               // A cold enrichment cache: the project itself reports no identity yet.
               getById: () =>
-                Effect.succeed(
-                  Option.some({ workspaceRoot: "/home/me/app", repositoryIdentity: null } as never),
-                ),
+                Effect.succeedSome({
+                  workspaceRoot: "/home/me/app",
+                  repositoryIdentity: null,
+                } as never),
             }),
           ),
           Layer.provide(
@@ -576,8 +586,9 @@ const makeLaptop = (
           ),
         ),
       ),
-      Layer.provide(Layer.succeedContext(linking)),
+      Layer.provide(Layer.succeedContext(observedLinking)),
       Layer.provide(NodeCrypto.layer),
+      Layer.provide(Layer.mock(DocumentText.DocumentText)({})),
       Layer.provideMerge(layerThreads),
       Layer.provide(Layer.mock(ProviderRegistry.ProviderRegistry)({})),
       Layer.provide(Layer.mock(ProviderAdapterRegistry.ProviderAdapterRegistryV2)({})),
@@ -591,6 +602,7 @@ const makeLaptop = (
     const here = yield* Layer.build(layerHere);
     const server = Context.get(here, McpServer.McpServer);
     return {
+      peerFailed,
       links: Context.get(linking, PeerLinks.PeerLinks),
       orchestrator: Context.get(here, Orchestrator.OrchestratorV2),
       remote: Context.get(here, RemoteDelegation.RemoteDelegation),
@@ -1568,11 +1580,7 @@ it.effect("a parent stopped while the box is unreachable still stops its task th
       // The box sleeps as soon as the task is there, so its follower backs off.
       const delegated = yield* delegateToBox(a);
       yield* Ref.set(b.descriptor, descriptorOf("environment-elsewhere", "Elsewhere"));
-      for (let attempt = 0; attempt < 50; attempt += 1) {
-        const [link] = yield* a.links.list;
-        if (link?.lastError !== null && link?.lastError !== undefined) break;
-        yield* Effect.sleep(Duration.millis(20)).pipe(TestClock.withLive);
-      }
+      yield* Deferred.await(a.peerFailed);
       // The parent is stopped meanwhile.
       yield* a.threads.stopDelegatedTasks({
         threadId: parentThreadId,
@@ -1582,11 +1590,8 @@ it.effect("a parent stopped while the box is unreachable still stops its task th
 
       // Once the box is back, the follower's next attempt stops the task there.
       yield* Ref.set(b.descriptor, box);
-      for (let attempt = 0; attempt < 12; attempt += 1) {
-        if (yield* Deferred.isDone(thread.interruptedOnce)) break;
-        yield* TestClock.adjust(Duration.minutes(5));
-        yield* Effect.sleep(Duration.millis(50)).pipe(TestClock.withLive);
-      }
+      yield* TestClock.adjust(Duration.minutes(5));
+      yield* Deferred.await(thread.interruptedOnce);
       expect(yield* Ref.get(thread.interrupted)).toBe(1);
     }),
   ).pipe(Effect.provide(NodeHttpServer.layerTest)),
@@ -1623,13 +1628,21 @@ it.effect("a task cancelled while the box is unreachable is stopped there after 
       yield* after.remote.start();
       yield* Deferred.await(thread.interruptedOnce);
       // Once the stop is recorded, nothing is owed there any more.
-      for (let attempt = 0; attempt < 50; attempt += 1) {
-        const task = (yield* after.orchestrator.getThreadProjection(parentThreadId)).subagents.find(
-          (candidate) => candidate.id === delegated.taskId,
+      yield* after.orchestrator
+        .streamStoredEventsFrom({
+          threadId: parentThreadId,
+          afterSequence: 0,
+          eventType: "subagent.updated",
+        })
+        .pipe(
+          Stream.filter(
+            (stored) =>
+              stored.event.type === "subagent.updated" &&
+              stored.event.payload.id === delegated.taskId &&
+              stored.event.payload.remoteChild?.stoppedThere === true,
+          ),
+          Stream.runHead,
         );
-        if (task?.remoteChild?.stoppedThere === true) break;
-        yield* Effect.sleep(Duration.millis(20)).pipe(TestClock.withLive);
-      }
       expect(yield* after.projections.getOpenRemoteDelegatedTasks).toEqual([]);
       expect(yield* Ref.get(thread.stops)).toEqual(["thread.stop", "delegated-tasks"]);
       // The result here is still the cancel's.

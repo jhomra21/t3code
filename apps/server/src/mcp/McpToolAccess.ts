@@ -34,10 +34,7 @@ import {
   unavailable,
 } from "./threadAccess.ts";
 
-/**
- * Their private constructors only stop the type checker; this also stops
- * `Reflect.construct` and friends at runtime.
- */
+/** Private constructors only enforce types; the token also blocks runtime construction. */
 const builtHere: unique symbol = Symbol("t3/mcp/McpToolAccess/builtHere");
 
 const refuseOutsideConstruction = (token: symbol) => {
@@ -73,11 +70,7 @@ let handlersLayer: <Tools extends Record<string, Tool.Any>, EX, RX>(
   layer: Layer.Layer<Tool.HandlersFor<Tools>, EX, RX>,
 ) => HandlersLayer<Tools, EX, RX>;
 
-/**
- * Effect's own registration functions accept any handler, so the
- * `t3code/no-raw-mcp-registration` lint rule keeps Effect's `McpServer` inside
- * McpHttpServer.
- */
+/** t3code/no-raw-mcp-registration confines Effect's unchecked registration API to McpHttpServer. */
 export class Declaration<out Handler> {
   readonly #handle: Handler;
   readonly #remote: RemoteCheck<never> | undefined;
@@ -138,7 +131,7 @@ export const actsAsCaller = <P, A, E, R>(handle: (params: P) => Effect.Effect<A,
   declare(
     (params: P) =>
       requireThreadCaller.pipe(
-        Effect.flatMap(() => writingCaller),
+        Effect.andThen(writingCaller),
         Effect.flatMap(() => handle(params)),
       ),
     undefined,
@@ -270,13 +263,32 @@ export const startsThreads = <P, A, E, R>(
   );
 };
 
+/** One tool with two access rules, picked per call, such as create versus update. */
+export const either = <P, A, E, R, A2, E2, R2>(
+  useFirst: (params: P) => boolean,
+  first: Declaration<(params: P) => Effect.Effect<A, E, R>>,
+  second: Declaration<(params: P) => Effect.Effect<A2, E2, R2>>,
+) =>
+  declare(
+    (params: P): Effect.Effect<A | A2, E | E2, R | R2> =>
+      useFirst(params) ? checkedHandler(first)(params) : checkedHandler(second)(params),
+    (params: P) => {
+      const check = useFirst(params) ? remoteCheckOf(first) : remoteCheckOf(second);
+      return check === undefined
+        ? Effect.fail(
+            new OrchestratorMcpFailure({
+              code: "invalid_request",
+              message: "This action must run in the caller's environment.",
+            }),
+          )
+        : (check as RemoteCheck<P>)(params);
+    },
+  );
+
 const fullAccessRequired =
   "Changing projects or environment settings needs a live full-access/default calling thread or a full-access client.";
 
-/**
- * `check` re-checks the caller wherever the handler waits before writing, such
- * as for a lock, since the caller's modes can change meanwhile.
- */
+/** Recheck after waits before writing; caller modes may have changed. */
 export const writesEnvironment = <P, A, E, R>(
   handle: (
     params: P,

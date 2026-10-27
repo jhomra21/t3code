@@ -21,6 +21,7 @@ import {
   SourceControlCloneRepositoryResult,
 } from "@t3tools/contracts";
 import * as FileSystem from "effect/FileSystem";
+import * as DocumentText from "../../../provider/DocumentText.ts";
 import * as ServerConfig from "../../../config.ts";
 import * as ServerSettings from "../../../serverSettings.ts";
 import * as ThreadLaunchService from "../../../orchestration-v2/ThreadLaunchService.ts";
@@ -47,8 +48,7 @@ const shared = {
 };
 const ProjectListTool = Tool.make("t3_project_list", {
   ...shared,
-  description:
-    "List registered projects in this environment, or in a linked one with environmentId. Pages use the current project snapshot and may shift between calls.",
+  description: "List projects. Pages can shift.",
   parameters: Schema.Struct({
     environmentId: OrchestratorMcpEnvironmentTarget,
     cursor: Schema.optional(NonNegativeInt),
@@ -75,7 +75,7 @@ const ProjectReadTool = Tool.make("t3_project_read", {
 const ProjectCreateTool = Tool.make("t3_project_create", {
   ...shared,
   description:
-    "Register a project directory through the existing project service. Set createWorkspaceRootIfMissing to create a directory. Omit workspaceRoot to start a new project from just its title: the app makes a Git repository for it in its own projects folder, with a README, an icon, and a first commit (commitError says why a commit failed; the project exists either way). Each call creates a new request; an existing registered workspace is rejected. Clone separately with t3_project_clone when needed. Pass environmentId to create it in a linked environment; workspaceRoot and defaultModelSelection then name that environment's paths and providers.",
+    "Register a project folder. `createWorkspaceRootIfMissing` creates it; a registered folder is rejected. No `workspaceRoot`: makes a git repo from `title` with README, icon, first commit (`commitError` on failure; project still exists). Clone first with `t3_project_clone` if needed.",
   parameters: Schema.Struct({
     environmentId: OrchestratorMcpEnvironmentTarget,
     ...ProjectCreatePayload.fields,
@@ -123,14 +123,14 @@ const ProjectCloneTool = Tool.make("t3_project_clone", {
 const ThreadLaunchTool = Tool.make("t3_thread_launch", {
   ...shared,
   description:
-    'Create an ordinary TOP-LEVEL thread with an explicit workspace binding before its agent starts. Use this when the user requests independent work, a new thread, or a PR stack in its own worktree; use delegate_task for child subagents. Set workspaceStrategy to {type:"worktree",baseRef:"parent-branch",branch:"new-branch",startFromOrigin:false} for a new worktree based on local commits, or {type:"existing_worktree",worktreePath:"/absolute/path",branch:"existing-branch"} to use an existing checkout. To fetch and start from the base branch\'s remote, set startFromOrigin:true. Omitted workspaceStrategy means the project root, NOT the caller\'s worktree. Omit projectId/modelSelection/modes to inherit those settings from the calling thread; a caller outside a T3 thread must pass projectId and gets the project\'s default model. Set scratch:true instead of projectId for a thread without a project: it runs in a fresh folder of its own, outside any repository. Put the task in message. Do not ask the agent to create its own worktree via shell: that does not update the thread binding. Pass clientRequestId to retry safely: the same key returns the thread the first call created instead of launching another. Retain threadId and use t3_thread_read/t3_thread_wait to follow preparation. To link a thread in this environment for the user, write `[title](t3-thread://v1/<threadId>)` with the threadId exactly as returned, not URL-encoded; T3 Code shows the thread\'s current title. Name a thread in a linked environment by title instead: its link would open here. Without a key, after errors or lost responses, inspect t3_thread_list before retrying. Attachments must be pending uploads. The new thread may not run with broader runtime or interaction modes than the caller: the calling T3 thread\'s own modes, or the permission mode an outside agent was approved with. Pass environmentId to launch in a linked environment; projectId and modelSelection then name that environment\'s project and providers (t3_project_list and orchestrator_capabilities with the same environmentId list them), and attachments are not supported.',
+    "Create one new top-level thread, bound to its workspace before the agent starts. Task in `message`. Omit `projectId`, model and modes to inherit yours (outside a thread, pass `projectId` or `scratch`); modes cannot exceed yours. `environmentId`: linked environment (project/model ids belong there; no attachments). `clientRequestId`: retry safely with the same key. No retry key: after an error or lost reply, check `t3_thread_list` before retrying. Follow it with `t3_thread_read` or `t3_thread_wait`. Mention it with its `link`.",
   parameters: Schema.Struct({
     environmentId: OrchestratorMcpEnvironmentTarget,
     projectId: Schema.optional(ProjectId),
     scratch: Schema.optional(
       Schema.Boolean.annotate({
         description:
-          "Launch without a project, in its own folder under the environment's Scratch project. Not with projectId or workspaceStrategy.",
+          "No project: a new Scratch folder. Not with `projectId` or `workspaceStrategy`.",
       }),
     ),
     title: TrimmedNonEmptyString,
@@ -140,13 +140,12 @@ const ThreadLaunchTool = Tool.make("t3_thread_launch", {
     workspaceStrategy: Schema.optional(
       OrchestrationV2ThreadLaunchWorkspaceStrategy.annotate({
         description:
-          "Choose where this thread runs before starting its agent: worktree creates and binds a new checkout from baseRef; existing_worktree binds worktreePath, which must be one of the project's git worktrees; root uses the project checkout. Omitted means root, not the caller's worktree. For a PR stack use the parent branch as baseRef and startFromOrigin:false. Uncommitted changes are not copied.",
+          "'worktree': new checkout from `baseRef`. 'existing_worktree': bind `worktreePath`, a project worktree. 'root': project checkout, the default, not your worktree. Stack: parent branch as `baseRef`, `startFromOrigin: false`. Uncommitted edits are not copied.",
       }),
     ),
     message: Schema.optional(
       Schema.String.check(Schema.isMaxLength(120000)).annotate({
-        description:
-          "First task prompt, delivered after workspace preparation. Omit message and attachments to create an idle thread.",
+        description: "First prompt. Omit it and `attachments` for idle.",
       }),
     ),
     attachments: Schema.optional(Schema.Array(McpAttachmentInput).check(Schema.isMaxLength(8))),
@@ -156,6 +155,7 @@ const ThreadLaunchTool = Tool.make("t3_thread_launch", {
   }),
   success: Schema.Struct({
     threadId: ThreadId,
+    link: Schema.optional(Schema.String),
     projectId: ProjectId,
     modelSelection: ModelSelection,
     runId: Schema.NullOr(RunId),
@@ -169,6 +169,7 @@ const ThreadLaunchTool = Tool.make("t3_thread_launch", {
     FileSystem.FileSystem,
     ServerConfig.ServerConfig,
     ServerSettings.ServerSettingsService,
+    DocumentText.DocumentText,
   ],
 })
   .annotate(Tool.Destructive, true)

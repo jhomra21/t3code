@@ -217,7 +217,7 @@ const make = Effect.gen(function* () {
             });
       }
       const success = Schema.fromJsonString(input.success);
-      return yield* Schema.decodeUnknownEffect(success)(text).pipe(
+      return yield* Schema.decodeEffect(success)(text).pipe(
         Effect.mapError(
           () =>
             new OrchestratorMcpFailure({

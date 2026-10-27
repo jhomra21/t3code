@@ -207,22 +207,20 @@ class DroidFollowerError extends Schema.TaggedError<DroidFollowerError>()("Droid
   cause: Schema.Defect(),
 }) {}
 
-export const makeDroidSubagentFollower = (input: {
-  readonly directory: string;
-  readonly sessionId: string;
-  readonly previousActivityOffset?: number;
-  readonly onWork: (work: DroidSubagentWork) => Effect.Effect<void>;
-  readonly readAppend?: typeof readDroidSessionAppend;
-  readonly watchDirectory?: (
-    directory: string,
-    listener: (event: string, name: string | Buffer | null) => void,
-  ) => NodeFS.FSWatcher;
-}) =>
-  Effect.gen(function* () {
+export const makeDroidSubagentFollower = Effect.fn("DroidTranscript.makeFollower")(
+  function* (input: {
+    readonly directory: string;
+    readonly sessionId: string;
+    readonly previousActivityOffset?: number;
+    readonly onWork: (work: DroidSubagentWork) => Effect.Effect<void>;
+    readonly readAppend?: typeof readDroidSessionAppend;
+    readonly watchDirectory?: (
+      directory: string,
+      listener: (event: string, name: string | Buffer | null) => void,
+    ) => NodeFS.FSWatcher;
+  }) {
     if (!isSessionId(input.sessionId))
-      return yield* Effect.fail(
-        new DroidFollowerError({ cause: new Error("Invalid Droid child session id") }),
-      );
+      return yield* new DroidFollowerError({ cause: new Error("Invalid Droid child session id") });
     const expectedFile = NodePath.join(input.directory, `${input.sessionId}.jsonl`);
     const watchDirectory = input.watchDirectory ?? (yield* DroidSessionWatch);
     const readAppend = input.readAppend ?? (yield* DroidSessionRead);
@@ -370,10 +368,12 @@ export const makeDroidSubagentFollower = (input: {
         ).pipe(Effect.ensuring(release(watcher))),
       close: release(watcher),
     };
-  });
+  },
+);
 
-export const followDroidSubagent = (input: Parameters<typeof makeDroidSubagentFollower>[0]) =>
-  Effect.gen(function* () {
-    const follower = yield* makeDroidSubagentFollower(input);
-    yield* follower.run(() => Effect.void);
-  });
+export const followDroidSubagent = Effect.fn("DroidTranscript.follow")(function* (
+  input: Parameters<typeof makeDroidSubagentFollower>[0],
+) {
+  const follower = yield* makeDroidSubagentFollower(input);
+  yield* follower.run(() => Effect.void);
+});

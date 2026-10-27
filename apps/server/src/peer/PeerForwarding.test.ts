@@ -1,3 +1,4 @@
+import * as DocumentText from "../provider/DocumentText.ts";
 import { NodeHttpServer } from "@effect/platform-node";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -14,7 +15,6 @@ import {
 import { expect, it } from "@effect/vitest";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
-import * as Option from "effect/Option";
 import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
 import { McpSchema, McpServer } from "effect/ai";
@@ -157,7 +157,7 @@ const boxLaunches = (seen: Ref.Ref<Seen>) =>
 const boxProjects = (seen: Ref.Ref<Seen>) =>
   Layer.merge(
     Layer.mock(ProjectService.ProjectService)({
-      getById: () => Effect.succeed(Option.none()),
+      getById: () => Effect.succeedNone,
       create: (input) =>
         Ref.update(seen, (current) => ({
           ...current,
@@ -200,7 +200,7 @@ const serveBox = (seen: Ref.Ref<Seen>, linkSession: Ref.Ref<string>) =>
       McpHttpServer.layerProjectRegistration,
       McpHttpServer.layerThreadToolkit,
     ).pipe(
-      Layer.provide(NodeCrypto.layer),
+      Layer.provide(Layer.merge(NodeCrypto.layer, Layer.mock(DocumentText.DocumentText)({}))),
       Layer.provide(boxThreads(seen, linkSession)),
       Layer.provide(Layer.mock(ThreadSearch.ThreadSearch)({})),
       Layer.provide(boxLaunches(seen)),
@@ -266,6 +266,7 @@ const makeLaptop = Effect.gen(function* () {
     Layer.provide(PeerForwarding.layer),
     Layer.provide(Layer.succeedContext(linking)),
     Layer.provide(NodeCrypto.layer),
+    Layer.provide(Layer.mock(DocumentText.DocumentText)({})),
     Layer.provideMerge(
       Layer.mock(ThreadManagement.ThreadManagementService)({
         getThreadShell: (threadId) =>
@@ -294,8 +295,9 @@ const makeLaptop = Effect.gen(function* () {
     Layer.provide(Layer.mock(ScheduledTaskService.ScheduledTaskService)({})),
     Layer.provide(Layer.mock(ProjectService.ProjectService)({})),
     Layer.provide(Layer.mock(SecretRequests.SecretRequests)({})),
-    Layer.provide(ServerSettings.layerTest()),
-    Layer.provide(Layer.mock(RemoteDelegation.RemoteDelegation)({})),
+    Layer.provide(
+      Layer.merge(ServerSettings.layerTest(), Layer.mock(RemoteDelegation.RemoteDelegation)({})),
+    ),
     Layer.fresh,
   );
   const here = yield* Layer.build(layerHere);
@@ -573,7 +575,7 @@ it.effect("runs any tool that takes a linked environment there", () =>
       yield* linkTo(a.links, b, "auto");
       yield* Ref.set(linkSession, (yield* b.linkedSessions)[0]!.sessionId);
 
-      const there = yield* a.call("thread:laptop-full", "t3_thread_configuration", {
+      const there = yield* a.call("thread:laptop-full", "t3_thread_configure", {
         environmentId: box.environmentId,
         threadId: boxThread,
       });
@@ -587,7 +589,7 @@ it.effect("runs any tool that takes a linked environment there", () =>
       expect((yield* Ref.get(seen)).stops).toEqual([`thread.archive ${boxThread}`]);
 
       // This environment's own id keeps the call here.
-      const own = yield* a.call("thread:laptop-full", "t3_thread_configuration", {
+      const own = yield* a.call("thread:laptop-full", "t3_thread_configure", {
         environmentId: laptop.environmentId,
       });
       expect(own.structuredContent).toMatchObject({

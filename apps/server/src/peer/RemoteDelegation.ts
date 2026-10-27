@@ -347,13 +347,7 @@ const make = Effect.gen(function* () {
     },
   );
 
-  /**
-   * Completes `task` here with its thread there's final state. Each attempt
-   * is its own command, so one that failed never blocks the next. A report
-   * refused because the task already has its result (from a cancel, a Stop
-   * or an earlier report) is done. `stoppedThere` records that nothing is
-   * left to stop there, also on a task that already has its result.
-   */
+  /** Each completion attempt gets its own command id; retries cannot be blocked by an earlier failed receipt. */
   const complete = Effect.fn("RemoteDelegation.complete")(function* (
     parentThreadId: ThreadId,
     taskId: NodeId,
@@ -404,13 +398,7 @@ const make = Effect.gen(function* () {
     issuedAt: 0,
   });
 
-  /**
-   * Stops the task's thread there as its Stop button does: its running turn,
-   * its queued messages, its pull request watches and the tasks it delegated.
-   * The thread there is the task's own, so whatever runs on it is stopped.
-   * `key` names the stop: the follower sends one, each cancel its own, and
-   * each is recorded there once however often it is sent.
-   */
+  /** The stop key makes retries idempotent while allowing later Stops to stop follow-up work. */
   const stopThere = (
     scope: ThreadScope,
     remote: OrchestrationV2RemoteTaskChild,
@@ -500,27 +488,20 @@ const make = Effect.gen(function* () {
   /** A task's thread there that ended without a reply. */
   const noReply = "(The thread in the linked environment ended without a reply.)";
 
-  /**
-   * Waits on the task's thread there until its run ends, then completes the
-   * task here, and stops it there if it ended here first. A revoked, expired
-   * or forgotten link, or a thread or run gone there, fails the task and
-   * leaves nothing to stop; anything else (the other machine asleep, a
-   * dropped route) is retried, backing off. Completing is retried the same way.
-   */
+  /** Gone links and threads end the task; transient failures retry with backoff, including completion writes. */
   const follow = (parentThreadId: ThreadId, taskId: NodeId): Effect.Effect<void> =>
     followOnce(parentThreadId, taskId).pipe(
       // `false` means it is still running there: follow again straight away.
       Effect.repeat({ while: (done) => !done }),
       Effect.catchTags({
-        OrchestratorMcpFailure: (error) =>
-          Effect.gen(function* () {
-            const reason = yield* finalReason(parentThreadId, taskId, error);
-            if (reason === undefined) return yield* error;
-            // Gone there, or no link to reach it by: nothing left to stop there.
-            const { task } = yield* readTask(parentThreadId, taskId);
-            const stopCount = task?.remoteChild?.stopCount;
-            yield* complete(parentThreadId, taskId, "failed", reason, "stopped", stopCount);
-          }),
+        OrchestratorMcpFailure: Effect.fn("RemoteDelegation.followFailure")(function* (error) {
+          const reason = yield* finalReason(parentThreadId, taskId, error);
+          if (reason === undefined) return yield* error;
+          // Gone there, or no link to reach it by: nothing left to stop there.
+          const { task } = yield* readTask(parentThreadId, taskId);
+          const stopCount = task?.remoteChild?.stopCount;
+          yield* complete(parentThreadId, taskId, "failed", reason, "stopped", stopCount);
+        }),
       }),
       Effect.retry(backoff),
       Effect.ignoreCause({ log: true }),

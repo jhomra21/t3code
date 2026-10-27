@@ -53,6 +53,8 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
 
   [WS_METHODS.peerLinksLink]: AuthAccessWriteScope,
   [WS_METHODS.peerLinksUnlink]: AuthAccessWriteScope,
+  // A guest link hands thread access to someone outside, like a pairing link.
+  [WS_METHODS.guestShareCreate]: AuthAccessWriteScope,
 } as const;
 export type ClientGuardedRpcTag = keyof typeof CLIENT_GUARDED_RPC_SCOPES;
 

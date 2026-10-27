@@ -99,7 +99,7 @@ const readSkillsFromRoot = Effect.fn("readDroidSkillsFromRoot")(function* (
     const directoryInfo = yield* fileSystem.stat(skillDirectory).pipe(
       Effect.catchTags({
         PlatformError: (error) =>
-          error.reason._tag === "NotFound" ? Effect.succeed(undefined) : Effect.fail(error),
+          error.reason._tag === "NotFound" ? Effect.sync(() => undefined) : Effect.fail(error),
       }),
     );
     if (directoryInfo?.type !== "Directory") continue;
@@ -107,7 +107,7 @@ const readSkillsFromRoot = Effect.fn("readDroidSkillsFromRoot")(function* (
     const info = yield* fileSystem.stat(skillPath).pipe(
       Effect.catchTags({
         PlatformError: (error) =>
-          error.reason._tag === "NotFound" ? Effect.succeed(undefined) : Effect.fail(error),
+          error.reason._tag === "NotFound" ? Effect.sync(() => undefined) : Effect.fail(error),
       }),
     );
     if (info?.type !== "File" || info.size > 1_000_000n) continue;
@@ -216,7 +216,7 @@ export const discoverDroidSkills = Effect.fn("discoverDroidSkills")(function* (
   const pluginsContents = yield* fileSystem.readFileString(pluginsFile).pipe(
     Effect.catchTags({
       PlatformError: (error) =>
-        error.reason._tag === "NotFound" ? Effect.succeed(undefined) : Effect.fail(error),
+        error.reason._tag === "NotFound" ? Effect.sync(() => undefined) : Effect.fail(error),
     }),
   );
   const personalSkills = yield* discoverDroidUserSkills(home, pluginsContents);

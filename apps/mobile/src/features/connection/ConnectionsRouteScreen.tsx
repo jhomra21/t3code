@@ -10,8 +10,8 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { AndroidScreenHeader } from "../../components/ui/AndroidScreenHeader";
 import { useRemoteConnections } from "../../state/use-remote-environment-registry";
 import { LocalEnvironmentList } from "./LocalEnvironmentList";
-import { GitHubRoutingSettings } from "./GitHubRoutingSettings";
 import { LinkedEnvironmentsSection } from "./LinkedEnvironmentsSection";
+import { PullRequestRoutingSettings } from "./PullRequestRoutingSettings";
 
 export function ConnectionsRouteScreen() {
   const {
@@ -79,7 +79,7 @@ export function ConnectionsRouteScreen() {
               environmentLabel={environment.environmentLabel}
             />
           ))}
-        <GitHubRoutingSettings />
+        <PullRequestRoutingSettings />
       </ScrollView>
     </View>
   );
