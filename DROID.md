@@ -2,11 +2,15 @@
 
 This fork adds Factory Droid as a native T3 Code provider. T3 talks to Droid over Droid's own `stream-jsonrpc` protocol instead of ACP. That gives you Droid subagents in the lineage panel, approvals from subagents, `/compact` with a context meter, steering without restarting a turn, `$` skills, rollback through Droid's own rewind, and session import from the welcome wizard. The [Factory Droid provider guide](docs/user/providers-droid.md) covers provider setup and behavior.
 
-Build from the `droid` branch. It merges every branch listed under [Branches in this build](#branches-in-this-build) on top of upstream `main`.
+The `droid` branch is the rolling, tested fork build: it combines a pinned upstream T3 Code nightly with the Droid provider and selected fork fixes. It is not a recipe to merge every historical branch. The current source baseline is commit `962e2b08f232eb742a1e75014b55afb797387ea4`, based on upstream nightly `v0.1.4-nightly.20261028.3824` at `eb751fa0730d6a51d56547cb7fcaf4822a7e0e3b`. The documentation update here does not change that installed runtime baseline. To reproduce it independently of the rolling branch, check out the source commit:
+
+```sh
+git switch --detach 962e2b08f232eb742a1e75014b55afb797387ea4
+```
 
 ## Prerequisites
 
-- Node 24 and `vp`, as described in the [development runbook](docs/operations/development.md).
+- Node `26.12.1` and `vp`, as pinned in the root `package.json` and described in the [development runbook](docs/operations/development.md).
 - The Droid CLI, version 0.241.1 or newer. Run `droid` once in a terminal to sign in.
 
 ## Get the code
@@ -19,18 +23,28 @@ cd t3code
 git switch droid
 ```
 
-Run `git pull` on `droid` to pick up later fixes.
+Update a checkout of the published `droid` branch with a fast-forward only:
 
-To keep your own fork, fork `https://github.com/jhomra21/t3code` on GitHub and clone it instead. To bring in newer upstream T3 Code changes yourself:
+```sh
+git pull --ff-only
+```
+
+If your checkout has diverged, inspect and preserve your work before updating it. Do not reset or
+stash it blindly.
+
+To keep your own fork, fork `https://github.com/jhomra21/t3code` on GitHub and clone it instead.
+To update the fork from a chosen upstream nightly, fetch its tags and merge the exact tag commit
+into `droid`, then resolve conflicts, validate, and review the resulting build before publishing:
 
 ```sh
 git remote add upstream https://github.com/pingdotgg/t3code
-git fetch upstream
+git fetch upstream --tags
 git switch droid
-git merge upstream/main
+git merge eb751fa0730d6a51d56547cb7fcaf4822a7e0e3b
 ```
 
-Resolve any conflicts and run the checks for the files involved before you build.
+The commit above is the upstream base for the current baseline; choose and verify a newer tagged
+nightly before using this procedure for a later update. Do not merge unpinned `upstream/main`.
 
 ## Run from source
 
@@ -48,7 +62,17 @@ Development state lives in `~/.t3/dev/userdata` for the main checkout and in `.t
 node scripts/build-desktop-artifact.ts --platform mac --target dmg --arch arm64 --output-dir <dir>
 ```
 
-A local build is not signed with a Developer ID, so macOS asks you to approve it the first time you open it. To sign it yourself, see [Desktop artifacts](docs/operations/development.md#desktop-artifacts).
+A local macOS build may be ad-hoc signed or unsigned, and is not Developer ID signed or notarized.
+Check the app signature before installing:
+
+```sh
+codesign --verify --deep --strict "/path/to/T3 Code.app"
+```
+
+An ad-hoc or unsigned artifact may fail strict verification; a macOS approval prompt does not
+replace a valid signature. Development signing can help with local testing, but is not Developer
+ID signing or notarization. See [Desktop artifacts](docs/operations/development.md#desktop-artifacts)
+for build options.
 
 If the build stops with `Expected @voidzero-dev/vite-plus-core@<version>`, your global `vp` is newer than the one this checkout pins. Put the checkout's own `vp` first on your `PATH` for the build:
 
@@ -109,21 +133,15 @@ Use T3's `delegate_task` tool to start child work that T3 tracks and can stop. S
 }
 ```
 
-Each child picks its own model and effort, so a Claude parent can hand implementation to a GPT child and review to a Claude child.
+Choose the child model and supported effort from `orchestrator_capabilities` using the available
+provider/model catalog. The parent passes them in `target`; a child does not choose its own model
+or effort. For linked environments, enable **Settings → Labs → Linked environments** on both
+machines, link them under **Settings → Connections**, and pass the destination `environmentId` as
+`target.environmentId`. See the [remote access guide](docs/user/remote-access.md).
 
-## Branches in this build
-
-Each branch solves one problem and has its own pull request on this fork. The session import and sidebar branches build on the provider branch.
-
-| Branch                                             | What it does                                                                                       |
-| -------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
-| `feat/provider-droid-next`                         | Adds the native Droid provider with skills, rewind, context reporting, and live child transcripts. |
-| `feat/droid-session-import`                        | Imports Factory Droid sessions from the welcome wizard.                                            |
-| `fix/handoff-delivery-degrades-instead-of-failing` | Stops an oversized handoff from blocking a prompt when the thread still has room.                  |
-| `fix/resumed-subagent-thread`                      | Keeps a resumed subagent's thread live after a server restart.                                     |
-| `fix/pending-background-work-banner`               | Shows pending background work in the chat banner while the agent works.                            |
-| `feat/sidebar-working-subagents`                   | Lists working subagents in the sidebar with their effort.                                          |
-| `fix/child-effort-label`                           | Shows the right model and effort labels for native subagents.                                      |
+The current build combines upstream peer/delegation support with the fork's native Droid provider
+and selected fixes, including Windows SDK compatibility, handoff delivery, and agent-session
+scanning. Older feature-branch names are historical references, not a build recipe.
 
 ## Limits
 
