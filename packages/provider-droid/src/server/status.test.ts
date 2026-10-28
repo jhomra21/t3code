@@ -18,7 +18,7 @@ import {
 
 vi.mock("node:os", { spy: true });
 
-const settings = Schema.decodeSync(DroidSettings)({});
+const settings = Schema.decodeSync(DroidSettings)({ enabled: false });
 const missingBinarySettings = Schema.decodeSync(DroidSettings)({
   enabled: true,
   binaryPath: "/definitely-missing/droid",

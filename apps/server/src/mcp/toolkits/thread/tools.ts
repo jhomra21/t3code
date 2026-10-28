@@ -218,7 +218,7 @@ const ThreadSearchTool = Tool.make("t3_thread_search", {
 const ScheduledTaskRunTool = Tool.make("run_scheduled_task_now", {
   ...commandTool,
   description:
-    "Run a scheduled task now through the existing scheduler. Requires a full-access/default caller. Returns the thread this run dispatched to, or null if dispatch failed. Each call is a new manual run; completion means dispatch/bookkeeping completed, not that the provider turn finished.",
+    "Run one scheduled task now. Needs a full-access or default caller. Returns its thread, or null if not started. Success means started, not finished.",
   parameters: Schema.Struct({
     environmentId: OrchestratorMcpEnvironmentTarget,
     taskId: ScheduledTaskId,
@@ -226,6 +226,7 @@ const ScheduledTaskRunTool = Tool.make("run_scheduled_task_now", {
   success: Schema.Struct({
     taskId: ScheduledTaskId,
     threadId: ScheduledTask.fields.threadId,
+    link: Schema.optional(Schema.String),
     lastRunStatus: ScheduledTask.fields.lastRunStatus,
     runCount: NonNegativeInt,
     nextRunAt: ScheduledTask.fields.nextRunAt,

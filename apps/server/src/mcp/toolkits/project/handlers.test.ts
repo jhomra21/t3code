@@ -10,7 +10,9 @@ import {
 } from "@t3tools/contracts";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Layer from "effect/Layer";
@@ -183,7 +185,7 @@ it.effect(
       expect(belowCeiling.result).toMatchObject({
         projectId: belowCeiling.projectId,
         modelSelection: belowCeiling.modelSelection,
-        link: `[Fix](t3-thread://v1/${belowCeiling.launched[0]?.threadId})`,
+        link: `<t3-thread://v2/environment/${belowCeiling.launched[0]?.threadId}>`,
       });
       expect(belowCeiling.launched[0]?.runtimeMode).toBe("approval-required");
       expect(belowCeiling.launched[0]?.initialMessage?.senderThreadId).toBeUndefined();
@@ -253,10 +255,39 @@ it.effect("a launch retried with the same clientRequestId replays the first one"
     // The same key sends the same command and thread ids, which the launch
     // service replays instead of starting a second thread.
     expect(ids[0]).toEqual(ids[1]);
-    expect(ids[0]?.[0]).toContain("client%3Asession-1");
+    expect(ids[0]?.[0]).toMatch(/^mcp:launch:[0-9a-f]{64}$/);
     expect(ids[2]).not.toEqual(ids[0]);
     // Without a key every launch is new.
     expect(ids[3]).not.toEqual(ids[4]);
+  }),
+);
+
+it.effect("a launch key of any length or content gives a short id and never a defect", () =>
+  Effect.gen(function* () {
+    const launched: Array<ThreadLaunch.ThreadLaunchInput> = [];
+    const { projectId, dependencies } = clientLaunchHarness({
+      runtimeModeCeiling: "auto",
+      launched,
+    });
+    const toolkit = yield* ProjectToolkit.pipe(
+      Effect.provide(
+        McpToolAccess.HandlersLayer.layer(ProjectHandlers.layer).pipe(Layer.provide(dependencies)),
+      ),
+    );
+    const launch = (clientRequestId: string) =>
+      toolkit
+        .handle("t3_thread_launch", { title: "Fix", projectId, clientRequestId })
+        .pipe(Stream.unwrap, Stream.runCollect, Effect.provide(dependencies));
+
+    // Percent-encoding would grow this six times; scratch folders are named from the id.
+    yield* launch("\u00e9".repeat(256));
+    expect(launched.map((input) => input.commandId)).toEqual([
+      expect.stringMatching(/^mcp:launch:[0-9a-f]{64}$/),
+    ]);
+
+    const loneSurrogate = yield* launch("key-\ud800").pipe(Effect.exit);
+    expect(Exit.isFailure(loneSurrogate) && Cause.hasDies(loneSurrogate.cause)).toBe(false);
+    expect(launched).toHaveLength(1);
   }),
 );
 

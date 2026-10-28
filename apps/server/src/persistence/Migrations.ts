@@ -66,15 +66,15 @@ import Migration0060 from "./Migrations/060_ThreadSnapshotWindowIndexes.ts";
 import Migration0061 from "./Migrations/061_PullRequestReviewGuides.ts";
 import Migration0062 from "./Migrations/062_ThreadFailureLookupIndex.ts";
 import Migration0063 from "./Migrations/063_DropUnusedV1Projections.ts";
-import Migration0064 from "./Migrations/064_PeerLinks.ts";
-import Migration0065 from "./Migrations/065_PeerLinkFence.ts";
-// Upstream ships these as 064-066. Peer links keep 64-65 because installed peer builds already recorded them.
-import Migration0066 from "./Migrations/064_CanonicalizeThreadPullRequestLinks.ts";
-import Migration0067 from "./Migrations/065_CodexUsageNativeTurnIndex.ts";
-import Migration0068 from "./Migrations/066_RepairClientSettlementTimestamps.ts";
-import Migration0069 from "./Migrations/067_WebhookDedupe.ts";
-import Migration0070 from "./Migrations/068_ShellStopRequestIndex.ts";
-import Migration0071 from "./Migrations/069_ThreadMessageSearch.ts";
+import Migration0064 from "./Migrations/064_CanonicalizeThreadPullRequestLinks.ts";
+import Migration0065 from "./Migrations/065_CodexUsageNativeTurnIndex.ts";
+import Migration0066 from "./Migrations/066_RepairClientSettlementTimestamps.ts";
+import Migration0067 from "./Migrations/067_WebhookDedupe.ts";
+import Migration0068 from "./Migrations/068_ShellStopRequestIndex.ts";
+import Migration0069 from "./Migrations/069_ThreadMessageSearch.ts";
+import Migration0070 from "./Migrations/070_PeerLinks.ts";
+import Migration0071 from "./Migrations/071_PeerLinkFence.ts";
+import Migration0072 from "./Migrations/072_WaitingLinkRequestIndex.ts";
 
 export const migrationEntries = [
   [1, "OrchestrationEvents", Migration0001],
@@ -141,14 +141,15 @@ export const migrationEntries = [
   [61, "PullRequestReviewGuides", Migration0061],
   [62, "ThreadFailureLookupIndex", Migration0062],
   [63, "DropUnusedV1Projections", Migration0063],
-  [64, "PeerLinks", Migration0064],
-  [65, "PeerLinkFence", Migration0065],
-  [66, "CanonicalizeThreadPullRequestLinks", Migration0066],
-  [67, "CodexUsageNativeTurnIndex", Migration0067],
-  [68, "RepairClientSettlementTimestamps", Migration0068],
-  [69, "WebhookDedupe", Migration0069],
-  [70, "ShellStopRequestIndex", Migration0070],
-  [71, "ThreadMessageSearch", Migration0071],
+  [64, "CanonicalizeThreadPullRequestLinks", Migration0064],
+  [65, "CodexUsageNativeTurnIndex", Migration0065],
+  [66, "RepairClientSettlementTimestamps", Migration0066],
+  [67, "WebhookDedupe", Migration0067],
+  [68, "ShellStopRequestIndex", Migration0068],
+  [69, "ThreadMessageSearch", Migration0069],
+  [70, "PeerLinks", Migration0070],
+  [71, "PeerLinkFence", Migration0071],
+  [72, "WaitingLinkRequestIndex", Migration0072],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);
@@ -199,6 +200,79 @@ const assertV2MigrationsCanRun = Effect.fn("assertV2MigrationsCanRun")(function*
 
 const run = Migrator.make({});
 
+// Published fork builds used peer ids 64/65 and shifted upstream's 64–69 to 66–71.
+const reconcilePeerMigrationHistory = Effect.fn("reconcilePeerMigrationHistory")(function* (
+  throughId?: number,
+) {
+  const sql = yield* SqlClient.SqlClient;
+  if (throughId !== undefined && throughId < 64) return [];
+  return yield* sql.withTransaction(
+    Effect.gen(function* () {
+      const tables =
+        yield* sql`SELECT name FROM sqlite_master WHERE name = 'effect_sql_migrations' AND type = 'table'`;
+      if (tables.length === 0) return [];
+      const history = yield* sql<{ readonly migration_id: number; readonly name: string }>`
+      SELECT migration_id, name FROM effect_sql_migrations ORDER BY migration_id
+    `;
+      if (!history.some((row) => row.migration_id === 64 && row.name === "PeerLinks")) return [];
+      const forkNames = [
+        "PeerLinks",
+        "PeerLinkFence",
+        "CanonicalizeThreadPullRequestLinks",
+        "CodexUsageNativeTurnIndex",
+        "RepairClientSettlementTimestamps",
+        "WebhookDedupe",
+        "ShellStopRequestIndex",
+        "ThreadMessageSearch",
+      ];
+      const suffix = history.filter((row) => row.migration_id >= 64);
+      const names = new Map(history.map((row) => [row.migration_id, row.name]));
+      const columns = yield* sql<{
+        readonly name: string;
+      }>`PRAGMA table_info(peer_environment_links)`;
+      const valid =
+        (throughId === undefined || throughId >= 71) &&
+        suffix.length <= forkNames.length &&
+        suffix.every(
+          (row, index) => row.migration_id === 64 + index && row.name === forkNames[index],
+        ) &&
+        migrationEntries.every(([id, name]) => id < 55 || id >= 64 || names.get(id) === name) &&
+        columns.some((column) => column.name === "secret_name") &&
+        columns.some((column) => column.name === "fenced") === suffix.length >= 2;
+      if (!valid)
+        return yield* new Migrator.MigrationError({
+          kind: "BadState",
+          message:
+            "Cannot reconcile peer fork history: unexpected migrations, peer schema, or cutoff below 71.",
+        });
+      const recordedNames = new Set(suffix.map((row) => row.name));
+      // Vacate all colliding ids before moving rows; UPDATE preserves their original timestamps.
+      yield* sql`UPDATE effect_sql_migrations SET migration_id = migration_id + 1000 WHERE migration_id >= 64`;
+      const executed: Array<readonly [number, string]> = [];
+      for (const [id, name, migration] of migrationEntries) {
+        if (id < 64 || id > 71) continue;
+        if (recordedNames.has(name)) {
+          yield* sql`UPDATE effect_sql_migrations SET migration_id = ${id} WHERE migration_id >= 1064 AND name = ${name}`;
+        } else {
+          yield* migration.pipe(
+            Effect.mapError(
+              (cause: unknown) =>
+                new Migrator.MigrationError({
+                  kind: "Failed",
+                  message: `Migration ${id}_${name} failed during peer history reconciliation.`,
+                  cause,
+                }),
+            ),
+          );
+          yield* sql`INSERT INTO effect_sql_migrations (migration_id, name) VALUES (${id}, ${name})`;
+          executed.push([id, name]);
+        }
+      }
+      return executed;
+    }),
+  );
+});
+
 export interface RunMigrationsOptions {
   readonly toMigrationInclusive?: number | undefined;
 }
@@ -209,11 +283,15 @@ export const runMigrations = Effect.fn("runMigrations")(function* ({
   const includesV2 =
     toMigrationInclusive === undefined || toMigrationInclusive >= FIRST_V2_MIGRATION_ID;
   const previewMigrations = includesV2 ? yield* reconcileV2PreviewMigration() : [];
+  const peerMigrations = includesV2
+    ? yield* reconcilePeerMigrationHistory(toMigrationInclusive)
+    : [];
   if (includesV2) {
     yield* assertV2MigrationsCanRun(toMigrationInclusive);
   }
   const executedMigrations = [
     ...previewMigrations,
+    ...peerMigrations,
     ...(yield* run({ loader: makeMigrationLoader(toMigrationInclusive) })),
   ];
   const migrations = executedMigrations.map(([id, name]) => `${id}_${name}`);

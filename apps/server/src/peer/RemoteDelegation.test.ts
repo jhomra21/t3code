@@ -22,14 +22,14 @@ import { expect, it } from "@effect/vitest";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
-import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
+import * as Schedule from "effect/Schedule";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
-import * as TestClock from "effect/testing/TestClock";
 import type * as SqlClient from "effect/sql/SqlClient";
 import { McpSchema, McpServer } from "effect/ai";
 
@@ -60,9 +60,9 @@ import * as SourceControlRepositoryService from "../sourceControl/SourceControlR
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as PeerForwarding from "./PeerForwarding.ts";
 import * as PeerLinks from "./PeerLinks.ts";
-import * as PeerMcpClient from "./PeerMcpClient.ts";
 import { descriptorOf, layerLinkingEnvironment, linkTo, servePeer } from "./PeerLinks.testkit.ts";
 import * as RemoteDelegation from "./RemoteDelegation.ts";
+import * as PeerLinkRequests from "./PeerLinkRequests.ts";
 
 // The laptop's agent delegates a task to the box through a link. The box is
 // its real /mcp behind real OAuth, with one thread the test finishes; the
@@ -125,6 +125,8 @@ interface BoxThread {
   readonly releaseStop: Deferred.Deferred<void>;
   /** Messages sent to the thread there after its launch, each starting a later run. */
   readonly sent: Ref.Ref<ReadonlyArray<string>>;
+  /** Runs as the launch there is answered, before the laptop hears back. */
+  readonly afterLaunch: Ref.Ref<Effect.Effect<void>>;
 }
 
 const makeBoxThread = Effect.gen(function* () {
@@ -158,6 +160,7 @@ const makeBoxThread = Effect.gen(function* () {
     stopStarted: yield* Deferred.make<void>(),
     releaseStop: yield* Deferred.make<void>(),
     sent: yield* Ref.make<ReadonlyArray<string>>([]),
+    afterLaunch: yield* Ref.make<Effect.Effect<void>>(Effect.void),
   } satisfies BoxThread;
 });
 
@@ -429,6 +432,7 @@ const boxToolkitLayer = (thread: BoxThread) => {
                 interactionMode: input.interactionMode,
               }),
             ),
+            Effect.andThen(Effect.flatten(Ref.get(thread.afterLaunch))),
             Effect.as({
               threadId: input.threadId,
               projection: {
@@ -459,12 +463,14 @@ const boxToolkitLayer = (thread: BoxThread) => {
     McpHttpServer.layerOrchestratorToolkit,
     McpHttpServer.layerProjectRegistration,
   ).pipe(
+    Layer.provide(DocumentText.layer.pipe(Layer.provideMerge(NodeServices.layer))),
     Layer.provide(NodeCrypto.layer),
-    Layer.provide(Layer.mock(DocumentText.DocumentText)({})),
     Layer.provide(layerBoxThreads),
     Layer.provide(layerBoxLaunches),
     Layer.provide(Layer.mock(RemoteDelegation.RemoteDelegation)({})),
     Layer.provide(Layer.mock(PeerForwarding.PeerForwarding)({})),
+    Layer.provide(Layer.mock(PeerLinkRequests.PeerLinkRequests)({})),
+    Layer.provide(Layer.mock(PeerLinks.PeerLinks)({})),
     Layer.provide(
       Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({ namedProjectsRoot: "/p" }),
     ),
@@ -532,12 +538,6 @@ const makeLaptop = (
 ) =>
   Effect.gen(function* () {
     const linking = kept ?? (yield* layerLinkingEnvironment(laptop).pipe(Layer.build));
-    const peerFailed = yield* Deferred.make<void>();
-    const peerClient = Context.get(linking, PeerMcpClient.PeerMcpClient);
-    const observedLinking = Context.add(linking, PeerMcpClient.PeerMcpClient, {
-      call: (input) =>
-        peerClient.call(input).pipe(Effect.tapError(() => Deferred.succeed(peerFailed, undefined))),
-    });
     const layerDatabase = Layer.succeedContext(database);
     const layerOrchestrator = Layer.mergeAll(
       layerDatabase,
@@ -586,9 +586,9 @@ const makeLaptop = (
           ),
         ),
       ),
-      Layer.provide(Layer.succeedContext(observedLinking)),
+      Layer.provide(Layer.succeedContext(linking)),
+      Layer.provide(Layer.mock(PeerLinkRequests.PeerLinkRequests)({})),
       Layer.provide(NodeCrypto.layer),
-      Layer.provide(Layer.mock(DocumentText.DocumentText)({})),
       Layer.provideMerge(layerThreads),
       Layer.provide(Layer.mock(ProviderRegistry.ProviderRegistry)({})),
       Layer.provide(Layer.mock(ProviderAdapterRegistry.ProviderAdapterRegistryV2)({})),
@@ -602,8 +602,8 @@ const makeLaptop = (
     const here = yield* Layer.build(layerHere);
     const server = Context.get(here, McpServer.McpServer);
     return {
-      peerFailed,
       links: Context.get(linking, PeerLinks.PeerLinks),
+      settings: Context.get(linking, ServerSettings.ServerSettingsService),
       orchestrator: Context.get(here, Orchestrator.OrchestratorV2),
       remote: Context.get(here, RemoteDelegation.RemoteDelegation),
       threads: Context.get(here, ThreadManagement.ThreadManagementService),
@@ -759,6 +759,7 @@ const delegateToBox = (laptopEnv: Effect.Success<ReturnType<typeof makeLaptop>>)
           status: string;
           childThreadId: null;
           remoteChild: { environmentId: string; threadId: ThreadId; label: string };
+          link?: string;
         };
       }),
     );
@@ -807,6 +808,10 @@ it.effect("a task delegated to the box wakes the laptop's parent when it ends th
       });
       // The box launched it in the project with the same repository.
       expect(yield* Ref.get(thread.launched)).toBe(delegated.remoteChild.threadId);
+      // Its link opens the thread there, so the parent can mention it like any other.
+      expect(delegated.link).toBe(
+        `<t3-thread://v2/${box.environmentId}/${delegated.remoteChild.threadId}>`,
+      );
       // ...naming the parent here, so the thread there links back to it.
       expect(yield* Ref.get(thread.delegatedFrom)).toEqual({
         environmentId: laptop.environmentId,
@@ -842,6 +847,52 @@ it.effect("a task delegated to the box wakes the laptop's parent when it ends th
       });
     }),
   ).pipe(Effect.provide(NodeHttpServer.layerTest)),
+);
+
+it.effect(
+  "with the beta off here, a task already running there still ends, and no new one starts",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const thread = yield* makeBoxThread;
+        const b = yield* serveBox(thread);
+        const offers = yield* SubscriptionRef.make<
+          ReadonlyArray<ProviderContinuationRequests.ProviderContinuationRequest>
+        >([]);
+        const database = yield* SqlitePersistence.layerMemory.pipe(Layer.build);
+        const a = yield* makeLaptop(database, offers);
+        yield* linkTo(a.links, b, "full-access");
+        yield* seedParent(a);
+        const delegated = yield* delegateToBox(a);
+
+        yield* a.settings.updateSettings({ linkedEnvironmentsEnabled: false });
+        const refused = yield* a.call("delegate_task", {
+          task: "Run the linter on the box.",
+          target: {
+            environmentId: box.environmentId,
+            providerInstanceId: instanceId,
+            model: "gpt-5.4",
+          },
+          mode: "async",
+          clientRequestId: "lint-on-box",
+        });
+        expect(refused.isError).toBe(true);
+        expect(JSON.stringify(refused.content)).toContain(
+          PeerForwarding.linkedEnvironmentsOff.message,
+        );
+        expect((yield* a.orchestrator.getThreadProjection(parentThreadId)).subagents).toHaveLength(
+          1,
+        );
+
+        yield* Ref.set(thread.reply, "All 412 tests pass on the box.");
+        yield* Ref.set(thread.status, "completed");
+        yield* Deferred.succeed(thread.finished, undefined);
+        expect(yield* taskResult(a, delegated.taskId)).toMatchObject({
+          status: "completed",
+          result: "All 412 tests pass on the box.",
+        });
+      }),
+    ).pipe(Effect.provide(NodeHttpServer.layerTest)),
 );
 
 it.effect("a task named only by environment inherits the parent's model, within the link", () =>
@@ -1394,11 +1445,22 @@ it.effect("stopping the parent stops its task there", () =>
   ).pipe(Effect.provide(NodeHttpServer.layerTest)),
 );
 
+/** A follower retry schedule the test steps: each failed attempt is offered, then waits for `retry`. */
+const steppedRetries = Effect.gen(function* () {
+  const failed = yield* Queue.unbounded<void>();
+  const retry = yield* Queue.unbounded<void>();
+  const schedule = Schedule.forever.pipe(
+    Schedule.tap(() => Queue.offer(failed, undefined).pipe(Effect.andThen(Queue.take(retry)))),
+  );
+  return { failed, retry, schedule };
+});
+
 /** Waits until the task here records that the `stopCount`th Stop after its result reached there. */
 const stoppedThere = (
   laptopEnv: Effect.Success<ReturnType<typeof makeLaptop>>,
   taskId: NodeId,
-  stopCount = 1,
+  // `null` for a cancel's stop, which carries no count.
+  stopCount: number | null = 1,
 ) =>
   laptopEnv.orchestrator
     .streamStoredEventsFrom({
@@ -1412,7 +1474,7 @@ const stoppedThere = (
           stored.event.type === "subagent.updated" &&
           stored.event.payload.id === taskId &&
           stored.event.payload.remoteChild?.stoppedThere === true &&
-          stored.event.payload.remoteChild.stopCount === stopCount,
+          stored.event.payload.remoteChild.stopCount === (stopCount ?? undefined),
       ),
       Stream.runHead,
       Effect.map((stored) =>
@@ -1574,13 +1636,19 @@ it.effect("a parent stopped while the box is unreachable still stops its task th
         ReadonlyArray<ProviderContinuationRequests.ProviderContinuationRequest>
       >([]);
       const database = yield* SqlitePersistence.layerMemory.pipe(Layer.build);
-      const a = yield* makeLaptop(database, offers);
+      const retries = yield* steppedRetries;
+      const a = yield* makeLaptop(database, offers).pipe(
+        Effect.provideService(RemoteDelegation.FollowRetrySchedule, retries.schedule),
+      );
       yield* linkTo(a.links, b, "full-access");
       yield* seedParent(a);
-      // The box sleeps as soon as the task is there, so its follower backs off.
+      // The box sleeps as soon as the task is there, so its follower's first attempt fails.
+      yield* Ref.set(
+        thread.afterLaunch,
+        Ref.set(b.descriptor, descriptorOf("environment-elsewhere", "Elsewhere")),
+      );
       const delegated = yield* delegateToBox(a);
-      yield* Ref.set(b.descriptor, descriptorOf("environment-elsewhere", "Elsewhere"));
-      yield* Deferred.await(a.peerFailed);
+      yield* Queue.take(retries.failed);
       // The parent is stopped meanwhile.
       yield* a.threads.stopDelegatedTasks({
         threadId: parentThreadId,
@@ -1590,7 +1658,7 @@ it.effect("a parent stopped while the box is unreachable still stops its task th
 
       // Once the box is back, the follower's next attempt stops the task there.
       yield* Ref.set(b.descriptor, box);
-      yield* TestClock.adjust(Duration.minutes(5));
+      yield* Queue.offer(retries.retry, undefined);
       yield* Deferred.await(thread.interruptedOnce);
       expect(yield* Ref.get(thread.interrupted)).toBe(1);
     }),
@@ -1628,21 +1696,7 @@ it.effect("a task cancelled while the box is unreachable is stopped there after 
       yield* after.remote.start();
       yield* Deferred.await(thread.interruptedOnce);
       // Once the stop is recorded, nothing is owed there any more.
-      yield* after.orchestrator
-        .streamStoredEventsFrom({
-          threadId: parentThreadId,
-          afterSequence: 0,
-          eventType: "subagent.updated",
-        })
-        .pipe(
-          Stream.filter(
-            (stored) =>
-              stored.event.type === "subagent.updated" &&
-              stored.event.payload.id === delegated.taskId &&
-              stored.event.payload.remoteChild?.stoppedThere === true,
-          ),
-          Stream.runHead,
-        );
+      yield* stoppedThere(after, delegated.taskId, null);
       expect(yield* after.projections.getOpenRemoteDelegatedTasks).toEqual([]);
       expect(yield* Ref.get(thread.stops)).toEqual(["thread.stop", "delegated-tasks"]);
       // The result here is still the cancel's.

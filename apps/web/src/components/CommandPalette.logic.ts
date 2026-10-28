@@ -392,6 +392,7 @@ export type BuildThreadActionItemsThread = Pick<
   | "id"
   | "lineage"
   | "modelSelection"
+  | "providerInstanceId"
   | "projectId"
   | "runtime"
   | "title"

@@ -11,7 +11,7 @@ layer("069_ThreadMessageSearch", (it) => {
   it.effect("backfills what users wrote and agents answered, then follows deletes", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
-      yield* runMigrations({ toMigrationInclusive: 70 });
+      yield* runMigrations({ toMigrationInclusive: 68 });
       const insert = (
         id: string,
         role: string,

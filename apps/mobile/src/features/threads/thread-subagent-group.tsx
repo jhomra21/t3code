@@ -1,5 +1,5 @@
 import { useAtomValue } from "@effect/atom-react";
-import { StackActions, useIsFocused, useNavigation } from "@react-navigation/native";
+import { StackActions, useNavigation } from "@react-navigation/native";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { summarizeSubagentStatuses } from "@t3tools/client-runtime/state/subagent-display";
 import { isActiveSubagentStatus } from "@t3tools/client-runtime/state/subagentRuntime";
@@ -7,9 +7,9 @@ import type {
   EnvironmentId,
   OrchestrationV2Subagent,
   OrchestrationV2TurnItem,
+  ServerProvider,
 } from "@t3tools/contracts";
-import { useEffect, useState } from "react";
-import { AppState, Pressable, View, type ColorValue } from "react-native";
+import { Pressable, View, type ColorValue } from "react-native";
 
 import { AppText as Text } from "../../components/ui/AppText";
 import { SymbolView } from "../../components/ui/AppSymbol";
@@ -22,6 +22,7 @@ import { subagentCardElapsed } from "./subagent-card-presentation";
 import { useEnvironments } from "../../state/environments";
 import { useServerConfigs } from "../../state/entities";
 import { SubagentRow } from "./SubagentRow";
+import { useVisibleSecondClock } from "./use-visible-second-clock";
 import { subagentThreadTarget } from "./threadAgentsPresentation";
 import { WorkLogBlock } from "./work-log-layout";
 
@@ -31,21 +32,8 @@ type SubagentItem = Extract<OrchestrationV2TurnItem, { type: "subagent" }>;
 type AgentTiming = Pick<OrchestrationV2Subagent, "status" | "startedAt" | "completedAt">;
 
 function SubagentElapsed({ agents }: { readonly agents: ReadonlyArray<AgentTiming> }) {
-  const focused = useIsFocused();
   const live = agents.some((agent) => isActiveSubagentStatus(agent.status));
-  const [nowMs, setNowMs] = useState(() => Date.now());
-  const [appActive, setAppActive] = useState(() => AppState.currentState === "active");
-  useEffect(() => {
-    const subscription = AppState.addEventListener("change", (state) =>
-      setAppActive(state === "active"),
-    );
-    return () => subscription.remove();
-  }, []);
-  useEffect(() => {
-    if (!live || !focused || !appActive) return;
-    const intervalId = setInterval(() => setNowMs(Date.now()), 1_000);
-    return () => clearInterval(intervalId);
-  }, [appActive, focused, live]);
+  const nowMs = useVisibleSecondClock(live);
   const elapsed = subagentCardElapsed(agents, nowMs);
   return elapsed ? (
     <Text className="shrink-0 text-xs tabular-nums text-foreground-muted">{elapsed}</Text>
@@ -54,14 +42,22 @@ function SubagentElapsed({ agents }: { readonly agents: ReadonlyArray<AgentTimin
 
 function SubagentAvatar(props: {
   readonly item: SubagentItem;
-  readonly iconUrl?: string | null | undefined;
+  readonly provider: ServerProvider | undefined;
 }) {
+  // A remote task's own driver is only a "remote" label.
+  const driver =
+    props.provider?.driver ??
+    (props.item.remoteChild === undefined ? props.item.driver : undefined);
   return (
     <View
       accessible={false}
       className="h-7 w-7 shrink-0 items-center justify-center rounded-full border border-border bg-card"
     >
-      <ProviderIcon provider={props.item.driver} iconUrl={props.iconUrl} size={15} />
+      {driver === undefined ? (
+        <SymbolView name="sparkles" size={13} tintColorClassName="accent-icon-muted" />
+      ) : (
+        <ProviderIcon provider={driver} iconUrl={props.provider?.iconUrl} size={15} />
+      )}
     </View>
   );
 }
@@ -104,11 +100,11 @@ export function ThreadSubagentGroup(props: {
   const expanded = props.expandedRows[props.anchorKey] ?? false;
   const serverConfigs = useServerConfigs();
   // A task in a linked environment runs a provider instance of that environment.
-  const iconUrl = (item: SubagentItem) =>
+  const providerOf = (item: SubagentItem) =>
     (item.remoteChild === undefined
       ? config
       : serverConfigs.get(item.remoteChild.environmentId)
-    )?.providers.find((provider) => provider.instanceId === item.providerInstanceId)?.iconUrl;
+    )?.providers.find((provider) => provider.instanceId === item.providerInstanceId);
   return (
     <WorkLogBlock>
       {grouped ? (
@@ -122,7 +118,7 @@ export function ThreadSubagentGroup(props: {
           <View className="flex-row items-center">
             {agents.slice(0, 3).map((agent, index) => (
               <View key={agent.item.id} style={{ marginLeft: index === 0 ? 0 : -7 }}>
-                <SubagentAvatar item={agent.item} iconUrl={iconUrl(agent.item)} />
+                <SubagentAvatar item={agent.item} provider={providerOf(agent.item)} />
               </View>
             ))}
             {agents.length > 3 ? (

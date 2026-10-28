@@ -5,7 +5,9 @@ import {
   OrchestratorMcpFailure,
   ProjectId,
 } from "@t3tools/contracts";
+import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
+import * as Hex from "effect/encoding/Hex";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as ThreadLaunch from "../../../orchestration-v2/ThreadLaunchService.ts";
@@ -17,9 +19,9 @@ import * as Repositories from "../../../sourceControl/SourceControlRepositorySer
 import * as GitVcsDriver from "../../../vcs/GitVcsDriver.ts";
 import * as ServerSettings from "../../../serverSettings.ts";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
+import { formatThreadLink } from "@t3tools/shared/threadLinks";
 import { resolveRuntimeMode } from "../../delegatedTaskModes.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
-import { formatThreadLink } from "@t3tools/shared/threadLinks";
 import * as McpToolAccess from "../../McpToolAccess.ts";
 import { newCommandId, readCaller, resolveProjectId, unavailable } from "../../threadAccess.ts";
 import { ProjectToolkit } from "./tools.ts";
@@ -55,6 +57,18 @@ const assertProjectWorktree = Effect.fn("mcp.assertProjectWorktree")(function* (
     });
 });
 
+/** A fixed-length id, so a long key fits in the scratch folder name derived from it. */
+const launchCommandId = Effect.fn("mcp.launchCommandId")(function* (
+  namespace: string,
+  key: string,
+) {
+  const crypto = yield* Crypto.Crypto;
+  // @effect-diagnostics-next-line preferSchemaOverJson:off - a JSON pair keeps the caller apart from the key.
+  const bytes = new TextEncoder().encode(JSON.stringify([namespace, key]));
+  const digest = yield* crypto.digest("SHA-256", bytes).pipe(Effect.mapError(unavailable));
+  return CommandId.make(`mcp:launch:${Hex.encode(digest)}`);
+});
+
 const access = Effect.gen(function* () {
   yield* readCaller();
   return yield* Project.ProjectService;
@@ -73,9 +87,7 @@ export const layer = McpToolAccess.toLayer(ProjectToolkit, {
         const commandId =
           input.clientRequestId === undefined
             ? yield* newCommandId()
-            : CommandId.make(
-                `mcp:launch:${encodeURIComponent(scope.requestNamespace)}:${encodeURIComponent(input.clientRequestId)}`,
-              );
+            : yield* launchCommandId(scope.requestNamespace, input.clientRequestId);
         const threadId = ThreadId.make(commandId);
         const messageId = MessageId.make(commandId);
         const attachments = input.attachments ?? [];
@@ -228,7 +240,7 @@ export const layer = McpToolAccess.toLayer(ProjectToolkit, {
         const run = result.projection.runs.find((run) => run.userMessageId === messageId);
         return {
           threadId: thread.id,
-          link: formatThreadLink(thread.id, thread.title),
+          link: formatThreadLink({ environmentId: scope.environmentId, threadId: thread.id }),
           projectId: thread.projectId,
           modelSelection: thread.modelSelection,
           runId: run?.id ?? null,
@@ -264,8 +276,7 @@ export const layer = McpToolAccess.toLayer(ProjectToolkit, {
       Effect.gen(function* () {
         const projects = yield* Project.ProjectService;
         if (workspaceRoot === undefined) {
-          // Project creation records no model default (only an update does), so
-          // reject what this mode would otherwise drop silently.
+          // Only updates record model defaults; reject defaults that creation would silently drop.
           if (
             input.scripts !== undefined ||
             input.createWorkspaceRootIfMissing !== undefined ||

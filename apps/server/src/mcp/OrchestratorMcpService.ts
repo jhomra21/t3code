@@ -1,5 +1,6 @@
 import {
   CommandId,
+  type EnvironmentId,
   type RunId,
   isProviderAvailable,
   MessageId,
@@ -286,9 +287,9 @@ const FULL_CATALOG_DRIVERS: ReadonlySet<string> = new Set(["codex", "claudeAgent
 const LISTED_MODEL_LIMIT = 8;
 
 /**
- * Picks the models orchestrator_capabilities shows for one provider. Hidden
- * models never appear. With search terms, lists matches; otherwise lists pinned
- * models (custom, favorite, the caller's own) plus the provider's non-legacy
+ * Picks the models orchestrator_capabilities shows for one provider. Hidden models never
+ * appear. Search words naming the provider are dropped; other words list matches. With no
+ * words left, lists pinned models (custom, favorite, the caller's own) plus non-legacy
  * models, or only the first few in the user's model order for large catalogs.
  */
 function listCapabilityModels(input: {
@@ -303,10 +304,13 @@ function listCapabilityModels(input: {
   const visible = input.provider.models
     .filter((model) => model.isCustom || !input.preferences?.hiddenModels.includes(model.slug))
     .toSorted((a, b) => (rank.get(a.slug) ?? rank.size) - (rank.get(b.slug) ?? rank.size));
-  if (input.searchTerms.length > 0) {
+  const { instanceId, driver, displayName } = input.provider;
+  const providerText = `${instanceId} ${driver} ${displayName ?? ""}`.toLowerCase();
+  const modelTerms = input.searchTerms.filter((term) => !providerText.includes(term));
+  if (modelTerms.length > 0) {
     const matches = visible.filter((model) => {
       const text = `${model.slug} ${model.name} ${model.subProvider ?? ""}`.toLowerCase();
-      return input.searchTerms.every((term) => text.includes(term));
+      return modelTerms.every((term) => text.includes(term));
     });
     const listed = matches.slice(0, LISTED_MODEL_LIMIT);
     return { listed, omitted: matches.length - listed.length };
@@ -748,13 +752,15 @@ function threadPullRequests(
 }
 
 function listItemFromShell(
+  environmentId: EnvironmentId,
   shell: OrchestrationV2ThreadShell,
   nowMs: number,
 ): OrchestratorMcpThreadListItem {
   return {
     threadId: shell.id,
+    projectId: shell.projectId,
     title: shell.title,
-    link: formatThreadLink(shell.id, shell.title),
+    link: formatThreadLink({ environmentId, threadId: shell.id }),
     createdBy: shell.createdBy,
     creationSource: shell.creationSource,
     status: shell.activityRunStatus ?? shell.status,
@@ -776,6 +782,7 @@ function listItemFromShell(
 }
 
 function threadDetail(
+  environmentId: EnvironmentId,
   projection: Pick<OrchestrationV2ThreadProjection, "thread" | "runs" | "runtimeRequests">,
   itemCount: number,
   shell: OrchestrationV2ThreadShell,
@@ -787,7 +794,7 @@ function threadDetail(
     threadId: projection.thread.id,
     projectId: projection.thread.projectId,
     title: projection.thread.title,
-    link: formatThreadLink(projection.thread.id, projection.thread.title),
+    link: formatThreadLink({ environmentId, threadId: projection.thread.id }),
     createdBy: projection.thread.createdBy,
     creationSource: projection.thread.creationSource,
     status: active?.status ?? latest?.status ?? "idle",
@@ -901,6 +908,10 @@ function turnItemText(item: OrchestrationV2TurnItem): string | null {
       return `Created thread ${item.targetThreadId} with ${item.targetProviderInstanceId} (${item.targetModel}).`;
     case "secret_request":
       return `Asked the user for ${item.label}: ${item.secretStatus}.`;
+    case "link_request":
+      return item.linkStatus === "linked"
+        ? `Linked ${item.linkedLabel ?? item.label ?? item.url ?? "an environment"} (${item.linkedAccess}).`
+        : `Asked the user to link ${item.label ?? item.url ?? "an environment"}: ${item.linkStatus}.`;
     case "subagent":
       return item.result ?? item.progress ?? item.prompt;
     case "dynamic_tool":
@@ -1325,7 +1336,7 @@ const make = Effect.gen(function* () {
       requestedModel ??
       (instanceId === inheritedSelection.instanceId
         ? inheritedSelection.model
-        : provider?.models[0]?.slug);
+        : provider.models[0]?.slug);
     if (model === undefined) {
       return yield* failure(
         "model_unavailable",
@@ -1334,7 +1345,6 @@ const make = Effect.gen(function* () {
     }
     if (
       requestedModel !== undefined &&
-      provider !== undefined &&
       provider.models.length > 0 &&
       !provider.models.some((candidate) => candidate.slug === requestedModel)
     ) {
@@ -1515,7 +1525,10 @@ const make = Effect.gen(function* () {
     const result = {
       taskId: task.id,
       childThreadId: task.childThreadId,
-      link: formatThreadLink(task.childThreadId, childControls.thread.title),
+      link: formatThreadLink({
+        environmentId: scope.environmentId,
+        threadId: task.childThreadId,
+      }),
       childRunId: childRun?.id ?? null,
       childNodeId: task.id,
       status,
@@ -1671,7 +1684,9 @@ const make = Effect.gen(function* () {
     return {
       taskId: task.id,
       childThreadId: null,
-      ...(task.remoteChild === undefined ? {} : { remoteChild: task.remoteChild }),
+      ...(task.remoteChild === undefined
+        ? {}
+        : { remoteChild: task.remoteChild, link: formatThreadLink(task.remoteChild) }),
       childRunId: null,
       childNodeId: task.id,
       status,
@@ -2736,7 +2751,7 @@ const make = Effect.gen(function* () {
                 );
               return {
                 threadId,
-                link: formatThreadLink(threadId, projection.thread.title),
+                link: formatThreadLink({ environmentId: scope.environmentId, threadId }),
                 runId: run?.id ?? null,
                 status: run?.status ?? "idle",
                 title: projection.thread.title,
@@ -2753,10 +2768,12 @@ const make = Effect.gen(function* () {
     ),
     listThreads: Effect.fn("OrchestratorMcpService.listThreads")(function* (scope, input) {
       const { parent } = yield* loadCaller(scope);
-      const projectId = yield* resolveProjectTarget(parent, input.projectId);
+      const projectId = input.allProjects
+        ? null
+        : yield* resolveProjectTarget(parent, input.projectId);
       const projectThreads = yield* threadManagement
         .listProjectThreads({
-          projectId,
+          projectId: projectId ?? undefined,
           includeSubagents: input.includeSubagents !== false,
         })
         .pipe(
@@ -2789,7 +2806,7 @@ const make = Effect.gen(function* () {
       return {
         projectId,
         currentThreadId: parent?.thread.id ?? null,
-        threads: page.map((shell) => listItemFromShell(shell, nowMs)),
+        threads: page.map((shell) => listItemFromShell(scope.environmentId, shell, nowMs)),
         nextCursor,
         total: filtered.length,
       } satisfies OrchestratorMcpThreadListResult;
@@ -2869,7 +2886,13 @@ const make = Effect.gen(function* () {
         }
       }
       return {
-        thread: threadDetail(target, timeline.totalItems, shell, yield* Clock.currentTimeMillis),
+        thread: threadDetail(
+          scope.environmentId,
+          target,
+          timeline.totalItems,
+          shell,
+          yield* Clock.currentTimeMillis,
+        ),
         recentRuns: target.runs
           .toSorted((left, right) => right.ordinal - left.ordinal)
           .slice(0, input.runLimit ?? DEFAULT_THREAD_RUN_LIMIT)
@@ -2928,7 +2951,7 @@ const make = Effect.gen(function* () {
         );
       return {
         threadId: input.threadId,
-        link: formatThreadLink(input.threadId, target.thread.title),
+        link: formatThreadLink({ environmentId: scope.environmentId, threadId: input.threadId }),
         messageId,
         runId: result.run.id,
         ...(result.run.delegatedTaskId === undefined ? {} : { taskId: result.run.delegatedTaskId }),
@@ -2976,12 +2999,12 @@ const make = Effect.gen(function* () {
         runId: result.run?.id ?? null,
         status,
         timedOut: result.timedOut,
+        ...(wakesCaller ? { next: ORCHESTRATOR_MCP_RUNNING_TASK_NEXT } : {}),
         ...(result.resultRun === undefined
           ? {}
           : {
               resultRun: { runId: result.resultRun.id, status: runOutcome(result.resultRun) },
             }),
-        ...(wakesCaller ? { next: ORCHESTRATOR_MCP_RUNNING_TASK_NEXT } : {}),
       } satisfies OrchestratorMcpThreadWaitResult;
     }),
     interruptThread: Effect.fn("OrchestratorMcpService.interruptThread")(function* (scope, input) {
@@ -3019,9 +3042,15 @@ const make = Effect.gen(function* () {
           .stopDelegatedTasks({ threadId: input.threadId, commandId, reason: input.reason })
           .pipe(Effect.catch(stopFailed));
         // The run this stop interrupted, from its own events, so a retry
-        // reports the same run even if another has started since.
+        // reports the same run even if another has started since. Stop also
+        // holds queued runs and marks runs it could not interrupt, with no
+        // provider turn; neither is the run it interrupted.
         const interrupted = stopped.storedEvents.find(
-          (stored) => stored.event.type === "run.updated",
+          ({ event }) =>
+            (event.type === "run.updated" && event.payload.status === "interrupted") ||
+            (event.type === "turn-item.updated" &&
+              event.payload.type === "run_interrupt_request" &&
+              event.payload.providerTurnId !== null),
         )?.event.runId;
         return {
           threadId: input.threadId,

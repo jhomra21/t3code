@@ -302,9 +302,7 @@ const ListThreadPullRequestsTool = Tool.make("list_thread_pull_requests", {
     "List PRs linked to a thread, with last known state and stack order (bottom to top). Call only when you need that list. Never as an end-of-work check.",
   parameters: Schema.Struct({
     environmentId: OrchestratorMcpEnvironmentTarget,
-    threadId: Schema.optional(
-      ThreadId.annotate({ description: "Thread to list. Omit for this thread." }),
-    ),
+    threadId: Schema.optional(ThreadId.annotate({ description: "Thread. Default: this thread." })),
   }),
   success: ListThreadPullRequestsResult,
   failure: PullRequestToolError,
@@ -395,7 +393,7 @@ const WritePullRequestGuidesTool = Tool.make("write_pull_request_guides", {
 
 const ReadPullRequestGuideTool = Tool.make("read_pull_request_guide", {
   description:
-    "Read a pull request's stored review guide and its run: run.Running while one is being written, run.Failed with the reason when the last one failed, guide null when none was written. stale is true after a push the guide has not caught up with. Never starts a run.",
+    "Read a PR's stored review guide and run state. `guide` is null when none exists. Never starts a run.",
   parameters: Schema.Struct({
     environmentId: OrchestratorMcpEnvironmentTarget,
     ...GuideTarget.fields,

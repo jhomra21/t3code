@@ -973,7 +973,10 @@ const make = Effect.gen(function* () {
               creationSource: input.creationSource,
             })
             .pipe(
-              // Replays can land on broader modes: check agent messages under the dispatch lock, not user drafts.
+              // An agent's launch can land on a thread that a replay, or a concurrent
+              // launch with the same key, created with broader modes. The orchestrator
+              // refuses the message under the thread's lock; the user's own clients
+              // launch into their own drafts, whatever modes those hold.
               input.createdBy === "agent"
                 ? Effect.provideService(DispatchModeLimit, {
                     runtimeMode: input.runtimeMode,
@@ -982,6 +985,7 @@ const make = Effect.gen(function* () {
                 : (effect) => effect,
               Effect.mapError(mapError(input, "dispatch-message", threadId)),
             );
+          // A concurrent retry can read no receipt and still replay the dispatch.
           messageWasAlreadyAccepted ||= dispatched.replayed === true;
           const runCreated = dispatched.storedEvents.find(
             (stored) => stored.event.type === "run.created",

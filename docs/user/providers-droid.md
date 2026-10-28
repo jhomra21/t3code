@@ -7,7 +7,8 @@ environment. It uses Factory Droid's account, model catalog, and native session.
 
 Install Factory Droid on the environment's machine and sign in there using
 Factory Droid. In T3 Code, open **Settings → Providers**, select that
-environment, enable **Factory Droid**, and refresh provider status. T3 Code
+environment, and refresh provider status. Factory Droid is enabled by default;
+if you previously disabled it, enable it there. T3 Code
 checks the `droid` executable and version, verifies sign-in, and loads the
 available models.
 If `droid` is not on the server's `PATH`, set **Binary path** to its executable.

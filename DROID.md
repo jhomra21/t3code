@@ -58,7 +58,7 @@ PATH="$PWD/node_modules/.bin:$PATH" node scripts/build-desktop-artifact.ts --pla
 
 ## Enable Factory Droid
 
-Open **Settings → Providers**, select the environment that runs Droid, and enable **Factory Droid**. The Droid CLI must be installed and signed in on that environment's machine.
+Factory Droid is enabled by default unless you previously disabled it. To re-enable it, open **Settings → Providers**, select the environment that runs Droid, and enable **Factory Droid**. The Droid CLI must be installed and signed in on that environment's machine.
 
 ## Custom models and VibeProxy
 
