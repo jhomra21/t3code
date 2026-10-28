@@ -1,16 +1,4 @@
 /**
- * AgentSessionScanner - discovery of projects a user already works on.
- *
- * Claude Code, Codex, and Factory Droid keep per-session transcripts on disk, and each
- * transcript records the directory the session ran in. Reading those `cwd`
- * values gives us the set of directories worth offering as projects during
- * onboarding, without asking the user to browse the filesystem.
- *
- * The scan is read-only and best-effort: an unreadable home, a malformed
- * transcript, or a directory that has since been deleted is skipped rather
- * than failing the scan. Project creation stays with the client, which
- * dispatches `project.create` for whichever candidates the user picks.
- *
  * @module project/AgentSessionScanner
  */
 import * as NodeOS from "node:os";
