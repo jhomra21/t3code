@@ -58,6 +58,11 @@ const layerScannerTest = (input: ScannerTestInput) =>
       Layer.mergeAll(
         ServerSettings.layerTest({
           providerInstances: {
+            [ProviderInstanceId.make("droid")]: {
+              driver: ProviderDriverKind.make("droid"),
+              enabled: false,
+              config: {},
+            },
             [ProviderInstanceId.make("claudeAgent")]: {
               driver: ProviderDriverKind.make("claudeAgent"),
               config: { homePath: input.claudeHomePath },
