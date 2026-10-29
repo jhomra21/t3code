@@ -2,10 +2,10 @@
 
 This fork adds Factory Droid as a native T3 Code provider. T3 talks to Droid over Droid's own `stream-jsonrpc` protocol instead of ACP. That gives you Droid subagents in the lineage panel, approvals from subagents, `/compact` with a context meter, steering without restarting a turn, `$` skills, rollback through Droid's own rewind, and session import from the welcome wizard. The [Factory Droid provider guide](docs/user/providers-droid.md) covers provider setup and behavior.
 
-The `droid` branch is the rolling, tested fork build: it combines a pinned upstream T3 Code nightly with the Droid provider and selected fork fixes. It is not a recipe to merge every historical branch. The current source baseline is commit `962e2b08f232eb742a1e75014b55afb797387ea4`, based on upstream nightly `v0.1.4-nightly.20261028.3824` at `eb751fa0730d6a51d56547cb7fcaf4822a7e0e3b`. The documentation update here does not change that installed runtime baseline. To reproduce it independently of the rolling branch, check out the source commit:
+The `droid` branch is the rolling, tested fork build: it combines a pinned upstream T3 Code nightly with the Droid provider and selected fork fixes. It is not a recipe to merge every historical branch. The current source baseline is commit `70683231a392f7b255af13172d1efef82f012982`, based on upstream nightly `v0.1.5-nightly.20261029.3877` at `6d450a4284852af137b2f3407fddd89eb76e7644`. The documentation update here does not change that runtime baseline. To reproduce it independently of the rolling branch, check out the source commit:
 
 ```sh
-git switch --detach 962e2b08f232eb742a1e75014b55afb797387ea4
+git switch --detach 70683231a392f7b255af13172d1efef82f012982
 ```
 
 ## Prerequisites
@@ -40,7 +40,7 @@ into `droid`, then resolve conflicts, validate, and review the resulting build b
 git remote add upstream https://github.com/pingdotgg/t3code
 git fetch upstream --tags
 git switch droid
-git merge eb751fa0730d6a51d56547cb7fcaf4822a7e0e3b
+git merge 6d450a4284852af137b2f3407fddd89eb76e7644
 ```
 
 The commit above is the upstream base for the current baseline; choose and verify a newer tagged
