@@ -80,6 +80,10 @@ If the build stops with `Expected @voidzero-dev/vite-plus-core@<version>`, your 
 PATH="$PWD/node_modules/.bin:$PATH" node scripts/build-desktop-artifact.ts --platform mac --target dmg --arch arm64 --output-dir <dir>
 ```
 
+## T3 Connect in a self-built app
+
+A packaged build only shows T3 Connect sign-in if the T3 Connect public settings are present at build time. Put `T3CODE_CLERK_PUBLISHABLE_KEY`, `T3CODE_CLERK_JWT_TEMPLATE`, `T3CODE_CLERK_CLI_OAUTH_CLIENT_ID` and `T3CODE_RELAY_URL` in the gitignored `.env` at the repository root, or export them in the shell, before you build. The values come from the T3 Connect deployment you use. A fresh clone or worktree has no `.env`. A build without these settings starts normally, but T3 Connect stays in a `session-pending` state.
+
 ## Enable Factory Droid
 
 Factory Droid is enabled by default unless you previously disabled it. To re-enable it, open **Settings → Providers**, select the environment that runs Droid, and enable **Factory Droid**. The Droid CLI must be installed and signed in on that environment's machine.
