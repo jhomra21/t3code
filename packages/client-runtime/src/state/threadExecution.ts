@@ -151,6 +151,7 @@ export const REASONING_EFFORT_OPTION_IDS: ReadonlyArray<string> = [
   "reasoning",
   "variant",
   "reasoning_effort",
+  "thinking_level",
 ];
 /**
  * Finds the catalog model a selection names. Native subagents report the
