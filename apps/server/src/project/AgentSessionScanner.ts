@@ -1,6 +1,3 @@
-/**
- * @module project/AgentSessionScanner
- */
 import * as NodeOS from "node:os";
 
 import {
@@ -161,12 +158,6 @@ export type AgentSessionRecentThread =
 export class AgentSessionScanner extends Context.Service<
   AgentSessionScanner,
   {
-    /**
-     * Discover every directory the configured agent homes have run
-     * a session in. Candidates are returned newest-first; the client decides
-     * which ones to import and how far back to look. Fails with the contract
-     * error directly — there is no server-local context worth wrapping.
-     */
     readonly scan: Effect.Effect<AgentSessionScanResult, AgentSessionScanError>;
     readonly recentThreads: (
       workspaceRoot: string,
@@ -690,10 +681,6 @@ export const make = Effect.gen(function* () {
   const projectStore = yield* ProjectStore.ProjectStoreV2;
   const baseDir = path.resolve(serverConfig.baseDir);
   const worktreesDir = path.resolve(serverConfig.worktreesDir);
-  const realBaseDir = yield* fileSystem.realPath(baseDir).pipe(Effect.orElseSucceed(() => baseDir));
-  const realWorktreesDir = yield* fileSystem
-    .realPath(worktreesDir)
-    .pipe(Effect.orElseSucceed(() => worktreesDir));
   const foldWorktreeCase = (yield* HostProcess.Platform) === "win32";
   const hostEnvironment = yield* HostProcess.Environment;
   const homeDir = yield* HostProcess.HomeDirectory;
@@ -715,14 +702,10 @@ export const make = Effect.gen(function* () {
         normalizeForWorktreeMatch(ancestor, foldWorktreeCase),
       ),
     ) ||
-    [baseDir, realBaseDir].some((root) =>
-      normalizeForWorktreeMatch(candidatePath, foldWorktreeCase).startsWith(
-        normalizeForWorktreeMatch(root, foldWorktreeCase),
-      ),
+    normalizeForWorktreeMatch(candidatePath, foldWorktreeCase).startsWith(
+      normalizeForWorktreeMatch(baseDir, foldWorktreeCase),
     ) ||
-    [worktreesDir, realWorktreesDir].some((root) =>
-      isT3ManagedWorktree(candidatePath, root, foldWorktreeCase),
-    );
+    isT3ManagedWorktree(candidatePath, worktreesDir, foldWorktreeCase);
 
   const listDirectory = (directory: string) =>
     fileSystem.readDirectory(directory).pipe(Effect.orElseSucceed((): ReadonlyArray<string> => []));
@@ -989,12 +972,6 @@ export const make = Effect.gen(function* () {
     return Option.isSome(settings) ? settings.value.model?.trim() || null : null;
   });
 
-  /**
-   * Resolve the Claude config directory the CLI would use, matching the
-   * precedence the spawned CLI sees: the instance's `homePath` (exported as
-   * `CLAUDE_CONFIG_DIR`), then a `CLAUDE_CONFIG_DIR` already in the
-   * environment, then `~/.claude`.
-   */
   const resolveClaudeConfigDir = (homePath: string, environmentHome?: string): string => {
     const configured = homePath.trim();
     if (configured.length > 0) {
