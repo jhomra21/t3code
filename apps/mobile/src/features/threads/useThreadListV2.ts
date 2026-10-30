@@ -13,7 +13,7 @@ import {
 } from "./threadListV2";
 import { computeThreadMoveAvailability } from "./threadOrder";
 import { useAtomValue } from "@effect/atom-react";
-import { threadListEnvironmentsAtom } from "../../state/server";
+import { threadListEnvironmentsAtom } from "../../state/presentation";
 
 /**
  * Screens' select handlers read the content-only key set; a fresh one per list rebuild gave

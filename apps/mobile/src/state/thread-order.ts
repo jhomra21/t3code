@@ -1,4 +1,4 @@
-import { threadListEnvironmentsAtom } from "./server";
+import { threadListEnvironmentsAtom } from "./presentation";
 import { useAtomValue } from "@effect/atom-react";
 import { deadlineStore, minuteTick } from "@t3tools/client-runtime/clock";
 import { Atom } from "effect/reactivity";
