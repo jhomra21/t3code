@@ -26,7 +26,12 @@ vi.mock("./threads", async () => {
 });
 vi.mock("./server", async () => {
   const { Atom } = await import("effect/reactivity");
-  return { environmentServerConfigsAtom: Atom.make(new Map()).pipe(Atom.keepAlive) };
+  return {
+    environmentServerConfigsAtom: Atom.make(new Map()).pipe(Atom.keepAlive),
+    threadListEnvironmentsAtom: Atom.make({ providersByEnvironmentId: new Map() }).pipe(
+      Atom.keepAlive,
+    ),
+  };
 });
 vi.mock("./use-thread-outbox", async () => {
   const { Atom } = await import("effect/reactivity");

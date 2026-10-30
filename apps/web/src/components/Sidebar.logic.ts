@@ -543,9 +543,13 @@ export async function archiveSelectedThreadEntries<
 }
 
 export function isSidebarSubagentThread(
-  thread: Pick<SidebarThreadSummary, "lineage" | "providerInstanceId" | "runtime">,
+  thread: Pick<
+    SidebarThreadSummary,
+    "environmentId" | "lineage" | "providerInstanceId" | "runtime"
+  >,
+  providersByEnvironment?: Parameters<typeof isThreadListed>[1],
 ): boolean {
-  return !isThreadListed(thread);
+  return !isThreadListed(thread, providersByEnvironment);
 }
 
 // Hidden subagents use their nearest listed ancestor's row. A broken chain (missing parent, cycle,
@@ -557,12 +561,13 @@ export function resolveSidebarRowThreadId(
     SidebarThreadSummary,
     "id" | "environmentId" | "lineage" | "providerInstanceId" | "runtime"
   >[],
+  providersByEnvironment?: Parameters<typeof isThreadListed>[1],
 ): ThreadId {
   const findThread = (id: ThreadId) =>
     threads.find((thread) => thread.id === id && thread.environmentId === environmentId);
   const visited = new Set<ThreadId>();
   let thread = findThread(threadId);
-  while (thread !== undefined && isSidebarSubagentThread(thread)) {
+  while (thread !== undefined && isSidebarSubagentThread(thread, providersByEnvironment)) {
     if (thread.lineage.parentThreadId === null || visited.has(thread.id)) return threadId;
     visited.add(thread.id);
     thread = findThread(thread.lineage.parentThreadId);
@@ -585,11 +590,12 @@ export function filterSidebarV2VisibleThreads<
   threads: readonly T[],
   scopedProjectKeys: ReadonlySet<string> | null,
   delegatedUnderParent: ReadonlySet<string> = new Set(),
+  providersByEnvironment?: Parameters<typeof isThreadListed>[1],
 ): T[] {
   return threads.filter(
     (thread) =>
       thread.archivedAt === null &&
-      isThreadListed(thread) &&
+      isThreadListed(thread, providersByEnvironment) &&
       !delegatedUnderParent.has(
         threadKey({ environmentId: thread.environmentId, threadId: thread.id }),
       ) &&
@@ -1340,10 +1346,11 @@ export function sortSidebarV2ProjectGroups<
   threads: readonly TThread[],
   sortOrder: SidebarProjectSortOrder,
   delegatedUnderParent: ReadonlySet<string>,
+  providersByEnvironment?: Parameters<typeof isThreadListed>[1],
 ): TProject[] {
   return sortLogicalProjectsForSidebar(
     projects,
-    filterSidebarV2VisibleThreads(threads, null, delegatedUnderParent),
+    filterSidebarV2VisibleThreads(threads, null, delegatedUnderParent, providersByEnvironment),
     sortOrder,
   );
 }

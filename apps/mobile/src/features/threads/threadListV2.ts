@@ -257,6 +257,7 @@ export function sortThreadsForListV2<
 
 export function getThreadListV2OrderedSection(input: {
   readonly threads: readonly EnvironmentThreadShell[];
+  readonly providersByEnvironment?: Parameters<typeof isThreadListed>[1];
   readonly section: "pinned" | "active";
   readonly pendingOrder?: PendingThreadOrder | null;
   readonly now: string;
@@ -266,7 +267,8 @@ export function getThreadListV2OrderedSection(input: {
 }): EnvironmentThreadShell[] {
   const queuedThreadKeys = input.queuedThreadKeys?.size ? input.queuedThreadKeys : undefined;
   const threads = input.threads.filter((thread) => {
-    if (thread.archivedAt !== null || !isThreadListed(thread)) return false;
+    if (thread.archivedAt !== null || !isThreadListed(thread, input.providersByEnvironment))
+      return false;
     if (
       (input.settlementEnvironmentIds?.has(thread.environmentId) ?? true) &&
       thread.settledOverride === "settled" &&
@@ -594,6 +596,7 @@ function sortSettledThreadsReusingLast(
 export function buildThreadListV2Items(input: {
   readonly pendingOrder?: PendingThreadOrder | null;
   readonly threads: ReadonlyArray<EnvironmentThreadShell>;
+  readonly providersByEnvironment?: Parameters<typeof isThreadListed>[1];
   readonly environmentId: EnvironmentId | null;
   readonly projectRefs?: ReadonlyArray<{
     readonly environmentId: EnvironmentId;
@@ -647,7 +650,7 @@ export function buildThreadListV2Items(input: {
   const listedThreads = input.threads.filter(
     (thread) =>
       thread.archivedAt === null &&
-      isThreadListed(thread) &&
+      isThreadListed(thread, input.providersByEnvironment) &&
       (input.environmentId === null || thread.environmentId === input.environmentId) &&
       (projectKeys === null || projectKeys.has(`${thread.environmentId}:${thread.projectId}`)),
   );

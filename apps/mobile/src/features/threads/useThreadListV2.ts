@@ -12,6 +12,8 @@ import {
   threadListInboxReturns,
 } from "./threadListV2";
 import { computeThreadMoveAvailability } from "./threadOrder";
+import { useAtomValue } from "@effect/atom-react";
+import { threadListEnvironmentsAtom } from "../../state/server";
 
 /**
  * Screens' select handlers read the content-only key set; a fresh one per list rebuild gave
@@ -56,6 +58,7 @@ export function useThreadListV2(input: {
   readonly selectedThreadKey: string | null;
 }) {
   const { threads, workingShelfEnabled } = input;
+  const { providersByEnvironmentId } = useAtomValue(threadListEnvironmentsAtom);
   // A thread can stop working when the threads change, or when its exit grace expires.
   const inboxVersion = useSyncExternalStore(
     threadListInboxReturns.subscribe,
@@ -78,6 +81,7 @@ export function useThreadListV2(input: {
         section === "pinned" ? input.pinReorderEnvironmentIds : input.activeReorderEnvironmentIds,
       ordered: getThreadListV2OrderedSection({
         threads,
+        providersByEnvironment: providersByEnvironmentId,
         section,
         pendingOrder: input.pendingOrder,
         now: input.now,
@@ -101,6 +105,7 @@ export function useThreadListV2(input: {
   const layout = buildThreadListV2Items({
     pendingOrder: input.pendingOrder,
     threads: threads.filter((thread) => thread.archivedAt === null),
+    providersByEnvironment: providersByEnvironmentId,
     environmentId: input.environmentId,
     projectRefs: input.projectRefs,
     searchQuery: input.searchQuery,

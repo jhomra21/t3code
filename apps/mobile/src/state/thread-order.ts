@@ -1,3 +1,4 @@
+import { threadListEnvironmentsAtom } from "./server";
 import { useAtomValue } from "@effect/atom-react";
 import { deadlineStore, minuteTick } from "@t3tools/client-runtime/clock";
 import { Atom } from "effect/reactivity";
@@ -68,6 +69,8 @@ export function beginPendingThreadOrder(pending: PendingThreadOrder) {
     const nowMs = Date.now();
     const ordered = getThreadListV2OrderedSection({
       threads,
+      providersByEnvironment: appAtomRegistry.get(threadListEnvironmentsAtom)
+        .providersByEnvironmentId,
       section: current.section,
       now: new Date(nowMs).toISOString(),
       queuedThreadKeys: appAtomRegistry.get(queuedThreadKeysAtom),
@@ -89,6 +92,7 @@ export function beginPendingThreadOrder(pending: PendingThreadOrder) {
   unsubscribers.push(
     appAtomRegistry.subscribe(environmentThreadShells.navigationThreadShellsAtom, refresh),
     appAtomRegistry.subscribe(environmentServerConfigsAtom, refresh),
+    appAtomRegistry.subscribe(threadListEnvironmentsAtom, refresh),
     appAtomRegistry.subscribe(queuedThreadKeysAtom, refresh),
     minuteTick.subscribe(refresh),
   );

@@ -100,6 +100,7 @@ export function useCommandPaletteThreadItems(input: {
   const { activeThread, threadSearchQuery } = input;
   const navigate = useNavigate();
   const threads = useThreadShells();
+  const providersByEnvironment = useEnvironmentProviders();
   const { projectEnvironmentLocationById } = useEnvironmentLookups();
   const providerEntryByEnvironmentAndInstanceId = useProviderEntryByEnvironmentAndInstanceId();
   const messageSearch = useConnectedThreadSearch(threadSearchQuery);
@@ -111,6 +112,7 @@ export function useCommandPaletteThreadItems(input: {
   const { environments } = useEnvironments();
   const threadItems = buildThreadActionItems({
     threads,
+    providersByEnvironment,
     ...(environments.length > 1
       ? {
           environmentLabelOf: (thread: (typeof threads)[number]) =>

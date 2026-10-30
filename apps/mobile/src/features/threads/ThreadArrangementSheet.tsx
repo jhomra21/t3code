@@ -15,6 +15,7 @@ import { AppText as Text } from "../../components/ui/AppText";
 import { SymbolView } from "../../components/ui/AppSymbol";
 import { scopedThreadKey } from "../../lib/scopedEntities";
 import { environmentServerConfigsAtom } from "../../state/server";
+import { threadListEnvironmentsAtom } from "../../state/server";
 import { environmentThreadShells } from "../../state/threads";
 import { sortSettledThreads } from "@t3tools/client-runtime/state/thread-sort";
 import { useOlderSettledShelf, useOlderSettledShelfGrowth } from "../../state/olderSettledShelf";
@@ -164,6 +165,7 @@ function DragHandle(props: {
 function ThreadArrangementSheet(props: { onClose: () => void }) {
   const threads = useAtomValue(environmentThreadShells.navigationThreadShellsAtom);
   const configs = useAtomValue(environmentServerConfigsAtom);
+  const { providersByEnvironmentId } = useAtomValue(threadListEnvironmentsAtom);
   const queuedThreadKeys = useAtomValue(queuedThreadKeysAtom);
   const pendingOrder = useAtomValue(pendingThreadOrderAtom);
   const dropBusy = useAtomValue(threadDropBusyAtom);
@@ -183,6 +185,7 @@ function ThreadArrangementSheet(props: { onClose: () => void }) {
   const sections = useMemo(() => {
     const shared = {
       threads,
+      providersByEnvironment: providersByEnvironmentId,
       now,
       queuedThreadKeys,
       pendingOrder,
@@ -203,7 +206,15 @@ function ThreadArrangementSheet(props: { onClose: () => void }) {
       snoozed: parked.filter((thread) => effectiveSnoozed(thread, { now })),
       settled: sortSettledThreads(parked.filter((thread) => !effectiveSnoozed(thread, { now }))),
     };
-  }, [threads, configs, now, queuedThreadKeys, pendingOrder, workingShelfEnabled]);
+  }, [
+    threads,
+    configs,
+    providersByEnvironmentId,
+    now,
+    queuedThreadKeys,
+    pendingOrder,
+    workingShelfEnabled,
+  ]);
   const listedSettled = sections.settled.filter(olderSettledShelf.isListed);
   useOlderSettledShelfGrowth(olderSettledShelf, listedSettled);
   const visibleSettled = listedSettled.slice(0, settledVisibleCount);

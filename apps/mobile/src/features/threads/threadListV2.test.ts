@@ -1220,7 +1220,7 @@ it("lists only working Droid subagents and retains user forks", () => {
   const runningRuntime = () => ({
     status: "running" as const,
     activeRunId: null,
-    providerInstanceId: ProviderInstanceId.make("factory_droid"),
+    providerInstanceId: ProviderInstanceId.make("work-agent"),
     providerName: "Droid",
     lastError: null,
     updatedAt: NOW,
@@ -1229,7 +1229,7 @@ it("lists only working Droid subagents and retains user forks", () => {
   const child = makeThread({
     id: ThreadId.make("child"),
     title: "Child",
-    providerInstanceId: ProviderInstanceId.make("factory_droid"),
+    providerInstanceId: ProviderInstanceId.make("work-agent"),
     runtime: runningRuntime(),
     lineage: { parentThreadId: root.id, rootThreadId: root.id, relationshipToParent: "subagent" },
   });
@@ -1241,7 +1241,7 @@ it("lists only working Droid subagents and retains user forks", () => {
   const otherProviderChild = makeThread({
     ...child,
     id: ThreadId.make("codex-child"),
-    providerInstanceId: ProviderInstanceId.make("codex"),
+    providerInstanceId: ProviderInstanceId.make("android-codex"),
   });
   const fork = makeThread({
     id: ThreadId.make("fork"),
@@ -1249,23 +1249,40 @@ it("lists only working Droid subagents and retains user forks", () => {
     lineage: { parentThreadId: root.id, rootThreadId: root.id, relationshipToParent: "fork" },
   });
   const threads = [root, child, settledChild, otherProviderChild, fork];
+  const providersByEnvironment = new Map([
+    [
+      root.environmentId,
+      [
+        { instanceId: ProviderInstanceId.make("work-agent"), driver: "droid" as const },
+        { instanceId: ProviderInstanceId.make("android-codex"), driver: "codex" as const },
+      ],
+    ],
+  ]);
   expect(
-    buildThreadListV2Items({ threads, environmentId: null, searchQuery: "", now: NOW }).items.map(
-      (item) => item.thread.id,
-    ),
+    buildThreadListV2Items({
+      threads,
+      providersByEnvironment,
+      environmentId: null,
+      searchQuery: "",
+      now: NOW,
+    }).items.map((item) => item.thread.id),
   ).toEqual([child.id, fork.id, root.id]);
   expect(
     buildThreadListV2Items({
       threads,
+      providersByEnvironment,
       environmentId: null,
       searchQuery: "Child",
       now: NOW,
     }).items.map((item) => item.thread.id),
   ).toEqual([child.id]);
   expect(
-    getThreadListV2OrderedSection({ threads, section: "active", now: NOW }).map(
-      (thread) => thread.id,
-    ),
+    getThreadListV2OrderedSection({
+      threads,
+      providersByEnvironment,
+      section: "active",
+      now: NOW,
+    }).map((thread) => thread.id),
   ).toEqual([child.id, fork.id, root.id]);
 });
 
