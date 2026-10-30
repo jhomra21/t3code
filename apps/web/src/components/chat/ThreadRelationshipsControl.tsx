@@ -666,6 +666,7 @@ export function ThreadRelationshipsPanel(props: {
                 <SubagentTooltipContent
                   title={threadTitle}
                   model={agent.model}
+                  reportedEffort={agent.effort}
                   providerInstanceId={agent.providerInstanceId}
                   origin={agent.origin}
                   modelSelection={agent.modelSelection}
