@@ -397,6 +397,36 @@ describe("orchestration V2 contracts", () => {
     },
   );
 
+  it("decodes optional subagent effort for native tasks and legacy records", () => {
+    const subagent = {
+      id: "native-task",
+      threadId: "thread-1",
+      runId: null,
+      parentNodeId: "node-root-1",
+      origin: "provider_native",
+      createdBy: "agent",
+      driver: "droid",
+      providerInstanceId: "droid",
+      providerThreadId: null,
+      childThreadId: null,
+      nativeTaskRef: null,
+      prompt: "Inspect package metadata",
+      title: null,
+      model: "gpt-5.4",
+      effort: "high",
+      status: "completed",
+      progress: "Inspecting package metadata",
+      result: "Package is private.",
+      startedAt: null,
+      completedAt: null,
+      updatedAt: now,
+    };
+
+    expect(decodeOrchestrationV2Subagent(subagent).effort).toBe("high");
+    const { effort: _effort, ...legacySubagent } = subagent;
+    expect(decodeOrchestrationV2Subagent(legacySubagent).effort).toBeUndefined();
+  });
+
   it("decodes historical provider-thread JSON without pendingBackgroundTasks as empty roster", () => {
     const providerThread = decodeOrchestrationV2ProviderThreadJson({
       id: "provider-thread-1",
