@@ -3,6 +3,7 @@ import { assert, describe, it } from "@effect/vitest";
 import * as NodeFSP from "node:fs/promises";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
 import * as NodeEvents from "node:events";
 import {
   EnvironmentId,
@@ -630,13 +631,7 @@ describe("Droid adapter", () => {
             '{"model":"custom:GPT-6 Luna-12"}',
           ),
         );
-        f.listeners[0]!(
-          "change",
-          f.file
-            .replace(/\.jsonl$/u, ".settings.json")
-            .split("/")
-            .at(-1)!,
-        );
+        f.listeners[0]!("change", NodePath.basename(f.file.replace(/\.jsonl$/u, ".settings.json")));
         yield* Deferred.await(f.childModelReady);
 
         const task = f.status();
@@ -723,7 +718,7 @@ describe("Droid adapter", () => {
         yield* f.append(
           f.text("late", "late text") + f.row({ type: "agent_turn_outcome", reason: "completed" }),
         );
-        f.listeners[0]!("change", f.file.split("/").at(-1)!);
+        f.listeners[0]!("change", NodePath.basename(f.file));
         yield* Deferred.await(f.finished);
         assert.equal(f.status()?.result, "parent result");
         // A parent barrier waits for settlement's roster publication and cleanup.
@@ -775,7 +770,7 @@ describe("Droid adapter", () => {
         yield* f.append(
           f.text("late", "late text") + f.row({ type: "agent_turn_outcome", reason: "completed" }),
         );
-        f.listeners[0]!("change", f.file.split("/").at(-1)!);
+        f.listeners[0]!("change", NodePath.basename(f.file));
         yield* Deferred.await(f.finished);
         yield* Deferred.await(f.terminal);
         const rosterAdded = f.events.findIndex(
@@ -830,7 +825,7 @@ describe("Droid adapter", () => {
             f.text("fresh-resumed-final", "fresh resumed result") +
             f.row({ type: "agent_turn_outcome", reason: "completed" }),
         );
-        f.listeners[1]!("change", f.file.split("/").at(-1)!);
+        f.listeners[1]!("change", NodePath.basename(f.file));
         yield* f.complete();
         assert.equal(f.status()?.status, "completed");
         assert.equal(f.status()?.result, "parent result");
@@ -1009,7 +1004,7 @@ describe("Droid adapter", () => {
             f.row({ type: "agent_turn_outcome", reason: "completed" }),
           healthyChild,
         );
-        f.listeners[1]!("change", healthyFile.split("/").at(-1)!);
+        f.listeners[1]!("change", NodePath.basename(healthyFile));
         yield* Deferred.await(settledHealthy);
         assert.equal(f.status(healthyChild)?.status, "completed");
         assert.equal(f.status(healthyChild)?.result, "healthy fresh result");
@@ -1059,7 +1054,7 @@ describe("Droid adapter", () => {
             f.row({ type: "agent_turn_outcome", reason: "completed" }),
           priorChild,
         );
-        f.listeners[2]!("change", priorFile.split("/").at(-1)!);
+        f.listeners[2]!("change", NodePath.basename(priorFile));
         yield* Deferred.await(resumedSettled);
         assert.equal(f.status(priorChild)?.status, "completed");
         assert.equal(f.status(priorChild)?.result, "prior resumed fresh result");
@@ -1124,7 +1119,7 @@ describe("Droid adapter", () => {
         assert.equal(f.status()?.status, "running");
         assert.isTrue(f.watchers[0]!.closed);
         assert.equal(f.watchers[0]!.listenerCount("error"), 0);
-        f.listeners[0]!("change", f.file.split("/").at(-1)!);
+        f.listeners[0]!("change", NodePath.basename(f.file));
         yield* f.barrier;
         assert.equal(f.status()?.status, "running");
         const resumedAt = yield* DateTime.now;
@@ -1206,7 +1201,7 @@ describe("Droid adapter", () => {
             f.text("active-final", "active result") +
               f.row({ type: "agent_turn_outcome", reason: "completed" }),
           );
-          f.listeners[0]!("change", f.file.split("/").at(-1)!);
+          f.listeners[0]!("change", NodePath.basename(f.file));
           yield* f.complete();
           assert.equal(f.status()?.status, "completed");
           assert.isTrue(f.watchers[1]!.closed);
@@ -2680,6 +2675,51 @@ describe("Droid adapter", () => {
 
         assert.equal(snapshot.providerTurns.at(-1)?.tokenUsage?.usedTokens, 18_000);
         assert.equal(snapshot.providerTurns.at(-1)?.tokenUsage?.maxTokens, 300_000);
+      }),
+    ),
+  );
+
+  it.effect("normalizes Droid MCP tool names for turn items", () =>
+    provide(
+      Effect.gen(function* () {
+        const fake = yield* makeFakeDroid();
+        const { runtime, input } = yield* open(fake);
+        const toolItemReady =
+          yield* Deferred.make<
+            Extract<ProviderAdapter.ProviderAdapterV2Event, { type: "turn_item.updated" }>
+          >();
+        yield* runtime.events.pipe(
+          Stream.runForEach((event) =>
+            event.type === "turn_item.updated" &&
+            event.turnItem.type === "dynamic_tool" &&
+            event.turnItem.nativeItemRef?.nativeId === "mcp-render"
+              ? Deferred.succeed(toolItemReady, event)
+              : Effect.void,
+          ),
+          Effect.forkChild,
+        );
+        yield* runtime.startTurn(input);
+        yield* fake.takeRequest("droid.add_user_message");
+        yield* fake.emitNotification({
+          type: "create_message",
+          message: {
+            id: "mcp-message",
+            role: "assistant",
+            content: [
+              {
+                type: "tool_use",
+                id: "mcp-render",
+                name: "t3-code___html_render",
+                input: {},
+              },
+            ],
+          },
+        });
+        const event = yield* Deferred.await(toolItemReady);
+        if (event.type !== "turn_item.updated" || event.turnItem.type !== "dynamic_tool")
+          return assert.fail("Expected a dynamic tool turn item");
+        assert.equal(event.turnItem.toolName, "t3-code.html_render");
+        assert.equal(event.turnItem.title, "t3-code.html_render");
       }),
     ),
   );

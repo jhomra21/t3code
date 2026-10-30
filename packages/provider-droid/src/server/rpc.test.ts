@@ -84,7 +84,7 @@ describe("DroidRpc", () => {
         onRequest: (request) =>
           request.method === "droid.ask_user"
             ? Effect.die("handler failed")
-            : Effect.succeed(undefined),
+            : Effect.sync(() => undefined),
       });
       yield* rpc.request("requests", {});
       const replies = yield* rpc.notifications.pipe(Stream.take(3), Stream.runCollect);

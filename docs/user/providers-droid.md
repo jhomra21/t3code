@@ -12,7 +12,7 @@ checks the `droid` executable and version, verifies sign-in, and loads the
 available models.
 If `droid` is not on the server's `PATH`, set **Binary path** to its executable.
 
-T3 Code does not install or update Factory Droid. If the provider check cannot
+T3 Code does not install Factory Droid. If the provider check cannot
 verify authentication or discover models, refresh after signing in and confirm
 that the configured binary runs on the environment's machine.
 
@@ -32,6 +32,7 @@ settings when you need a model that is not in the discovered list.
 
 Models that report reasoning-effort choices show a **Reasoning** option. The
 selected model's supported efforts and default come from Droid.
+Available Droid skills can be invoked from the composer with `$`.
 
 T3 Code maps its [permission modes](./permission-modes.md) to Droid autonomy:
 **Supervised** uses `off`, **Auto-accept edits** uses `low`, **Auto** uses
@@ -48,11 +49,9 @@ approval, session approval when offered, and cancellation. Pending approvals
 are live requests: if the provider session stops, they cannot be answered later.
 Droid does not request approval for file reads.
 
-Droid subagents appear in the shared subagent view with their status and
-result. When a subagent asks for approval or asks a question, the request is
-shown on that subagent. T3 Code follows the child session transcript and shows
-its conversation, tool activity, model, and effort in the child thread.
-T3 Code cannot wait for or close a subagent independently.
+Droid subagents can request approvals or ask questions. T3 Code follows their
+session transcripts to report their activity. T3 Code cannot wait for or close
+a subagent independently.
 
 ## Limits
 

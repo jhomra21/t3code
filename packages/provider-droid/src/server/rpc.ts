@@ -198,8 +198,10 @@ export const makeConnection = Effect.fn("DroidRpc.makeConnection")(function* (op
       serverRequests.set(frame.id, incomingRequest);
       const handled =
         closing || options.onRequest === undefined
-          ? Effect.succeed(undefined)
-          : Effect.suspend(() => options.onRequest?.(incomingRequest) ?? Effect.succeed(undefined));
+          ? Effect.sync(() => undefined)
+          : Effect.suspend(
+              () => options.onRequest?.(incomingRequest) ?? Effect.sync(() => undefined),
+            );
       yield* handled.pipe(
         // ignoreCause would discard the handler's reply, answering every request with the default.
         Effect.catchCause((cause) =>
@@ -231,17 +233,15 @@ export const makeConnection = Effect.fn("DroidRpc.makeConnection")(function* (op
 
   yield* child.exitCode.pipe(
     Effect.matchEffect({
-      onSuccess: (code) =>
-        Effect.gen(function* () {
-          ended = true;
-          yield* fail(new DroidRpcError({ operation: "exit", code: Number(code) }));
-        }),
-      onFailure: (cause) =>
-        Effect.gen(function* () {
-          ended = true;
-          const error = new DroidRpcError({ operation: "exit", cause });
-          yield* fail(error);
-        }),
+      onSuccess: Effect.fn("DroidRpc.onExit")(function* (code) {
+        ended = true;
+        yield* fail(new DroidRpcError({ operation: "exit", code: Number(code) }));
+      }),
+      onFailure: Effect.fn("DroidRpc.onExitFailure")(function* (cause) {
+        ended = true;
+        const error = new DroidRpcError({ operation: "exit", cause });
+        yield* fail(error);
+      }),
     }),
     Effect.forkIn(scope),
   );
