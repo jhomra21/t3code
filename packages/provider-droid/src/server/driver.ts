@@ -57,134 +57,140 @@ export const DroidDriver: ProviderDriver<DroidSettings, DroidDriverEnv> = {
   metadata: { displayName: "Factory Droid", supportsMultipleInstances: true },
   configSchema: DroidSettings,
   defaultConfig: () => decodeDroidSettings({}),
-  create: ({ instanceId, displayName, accentColor, environment, enabled, config }) =>
-    Effect.gen(function* () {
-      const host = yield* ProviderHost.ProviderHost;
-      const continuationRequests = yield* ProviderContinuationRequests.ProviderContinuationRequests;
-      const latestVersions = yield* ProviderLatestVersions.ProviderLatestVersions;
-      const httpClient = yield* HttpClient.HttpClient;
-      const fileSystem = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-      const hostEnvironment = yield* HostProcess.Environment;
-      const hostHome = yield* HostProcess.HomeDirectory;
-      const processEnvironment = yield* makeDroidInstanceEnvironment(environment, hostEnvironment);
-      const effectiveConfig = {
-        ...config,
-        enabled,
-        binaryPath: expandHomePath(config.binaryPath, hostHome),
-      };
-      const continuationIdentity = defaultProviderContinuationIdentity({
-        driverKind: DROID_PROVIDER,
-        instanceId,
-      });
-      const stampIdentity = withInstanceIdentity({
-        instanceId,
-        driverKind: DROID_PROVIDER,
-        displayName,
-        accentColor,
-        continuationGroupKey: continuationIdentity.continuationKey,
-      });
-      const resolveMaintenance = yield* makeCachedProviderMaintenanceResolution(
-        resolveProviderMaintenanceCapabilitiesEffect(droidMaintenanceResolver, {
-          binaryPath: effectiveConfig.binaryPath,
-          env: processEnvironment,
-        }).pipe(
-          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
-          Effect.provideService(FileSystem.FileSystem, fileSystem),
-          Effect.provideService(Path.Path, path),
-        ),
-      );
-      const snapshotSettings = yield* makeProviderSnapshotSettingsSource(effectiveConfig);
-      const snapshot = yield* makeManagedServerProvider({
-        resolveMaintenance,
-        getSettings: snapshotSettings.getSettings,
-        streamSettings: snapshotSettings.streamSettings,
-        haveSettingsChanged: haveProviderSnapshotSettingsChanged,
-        initialSnapshot: (settings) =>
-          makePendingDroidProvider(settings.provider).pipe(Effect.map(stampIdentity)),
-        enrichSnapshot: ({ settings, snapshot: currentSnapshot, publishSnapshot }) =>
-          resolveMaintenance().pipe(
-            Effect.flatMap((maintenanceCapabilities) =>
-              enrichDroidSnapshot({
-                snapshot: currentSnapshot,
-                maintenanceCapabilities,
-                enableProviderUpdateChecks: settings.enableProviderUpdateChecks,
-              }),
-            ),
-            Effect.provideService(HttpClient.HttpClient, httpClient),
-            Effect.provideService(ProviderLatestVersions.ProviderLatestVersions, latestVersions),
-            Effect.map(stampIdentity),
-            Effect.flatMap(publishSnapshot),
-          ),
-        checkProvider: checkDroidProviderStatus(
-          effectiveConfig,
-          processEnvironment,
-          host.paths.cwd,
-          hostHome,
-        ).pipe(
-          Effect.map(stampIdentity),
-          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
-          Effect.provideService(FileSystem.FileSystem, fileSystem),
-          Effect.provideService(Path.Path, path),
-        ),
+  create: Effect.fn("DroidDriver.create")(function* ({
+    instanceId,
+    displayName,
+    accentColor,
+    environment,
+    enabled,
+    config,
+  }) {
+    const host = yield* ProviderHost.ProviderHost;
+    const continuationRequests = yield* ProviderContinuationRequests.ProviderContinuationRequests;
+    const latestVersions = yield* ProviderLatestVersions.ProviderLatestVersions;
+    const httpClient = yield* HttpClient.HttpClient;
+    const fileSystem = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+    const hostEnvironment = yield* HostProcess.Environment;
+    const hostHome = yield* HostProcess.HomeDirectory;
+    const processEnvironment = yield* makeDroidInstanceEnvironment(environment, hostEnvironment);
+    const effectiveConfig = {
+      ...config,
+      enabled,
+      binaryPath: expandHomePath(config.binaryPath, hostHome),
+    };
+    const continuationIdentity = defaultProviderContinuationIdentity({
+      driverKind: DROID_PROVIDER,
+      instanceId,
+    });
+    const stampIdentity = withInstanceIdentity({
+      instanceId,
+      driverKind: DROID_PROVIDER,
+      displayName,
+      accentColor,
+      continuationGroupKey: continuationIdentity.continuationKey,
+    });
+    const resolveMaintenance = yield* makeCachedProviderMaintenanceResolution(
+      resolveProviderMaintenanceCapabilitiesEffect(droidMaintenanceResolver, {
+        binaryPath: effectiveConfig.binaryPath,
+        env: processEnvironment,
       }).pipe(
-        Effect.mapError(
-          (cause) =>
-            new ProviderDriverError({
-              driver: DROID_PROVIDER,
-              instanceId,
-              detail: "Failed to build Factory Droid snapshot.",
-              cause,
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+        Effect.provideService(FileSystem.FileSystem, fileSystem),
+        Effect.provideService(Path.Path, path),
+      ),
+    );
+    const snapshotSettings = yield* makeProviderSnapshotSettingsSource(effectiveConfig);
+    const snapshot = yield* makeManagedServerProvider({
+      resolveMaintenance,
+      getSettings: snapshotSettings.getSettings,
+      streamSettings: snapshotSettings.streamSettings,
+      haveSettingsChanged: haveProviderSnapshotSettingsChanged,
+      initialSnapshot: (settings) =>
+        makePendingDroidProvider(settings.provider).pipe(Effect.map(stampIdentity)),
+      enrichSnapshot: ({ settings, snapshot: currentSnapshot, publishSnapshot }) =>
+        resolveMaintenance().pipe(
+          Effect.flatMap((maintenanceCapabilities) =>
+            enrichDroidSnapshot({
+              snapshot: currentSnapshot,
+              maintenanceCapabilities,
+              enableProviderUpdateChecks: settings.enableProviderUpdateChecks,
             }),
+          ),
+          Effect.provideService(HttpClient.HttpClient, httpClient),
+          Effect.provideService(ProviderLatestVersions.ProviderLatestVersions, latestVersions),
+          Effect.map(stampIdentity),
+          Effect.flatMap(publishSnapshot),
         ),
-      );
-      const orchestrationAdapter = yield* makeDroidAdapterV2({
-        instanceId,
-        environment: processEnvironment,
-        binaryPath: effectiveConfig.binaryPath.trim() || "droid",
-        modelCatalog: snapshot.getSnapshot.pipe(Effect.map((current) => current.models)),
-        continuationRequests,
-      });
-      const snapshotForCwd = (cwd: string) =>
-        !effectiveConfig.enabled
-          ? snapshot.getSnapshot
-          : Effect.all([
-              snapshot.getSnapshot,
-              discoverDroidProjectSkills(cwd).pipe(
-                Effect.mapError(
-                  (cause) =>
-                    new ProviderDriverError({
-                      driver: DROID_PROVIDER,
-                      instanceId,
-                      detail: `Failed to discover Factory Droid skills for '${cwd}'`,
-                      cause,
-                    }),
-                ),
+      checkProvider: checkDroidProviderStatus(
+        effectiveConfig,
+        processEnvironment,
+        host.paths.cwd,
+        hostHome,
+      ).pipe(
+        Effect.map(stampIdentity),
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+        Effect.provideService(FileSystem.FileSystem, fileSystem),
+        Effect.provideService(Path.Path, path),
+      ),
+    }).pipe(
+      Effect.mapError(
+        (cause) =>
+          new ProviderDriverError({
+            driver: DROID_PROVIDER,
+            instanceId,
+            detail: "Failed to build Factory Droid snapshot.",
+            cause,
+          }),
+      ),
+    );
+    const orchestrationAdapter = yield* makeDroidAdapterV2({
+      instanceId,
+      environment: processEnvironment,
+      binaryPath: effectiveConfig.binaryPath.trim() || "droid",
+      modelCatalog: snapshot.getSnapshot.pipe(Effect.map((current) => current.models)),
+      continuationRequests,
+    });
+    const snapshotForCwd = (cwd: string) =>
+      !effectiveConfig.enabled
+        ? snapshot.getSnapshot
+        : Effect.all([
+            snapshot.getSnapshot,
+            discoverDroidProjectSkills(cwd).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new ProviderDriverError({
+                    driver: DROID_PROVIDER,
+                    instanceId,
+                    detail: `Failed to discover Factory Droid skills for '${cwd}'`,
+                    cause,
+                  }),
               ),
-            ]).pipe(
-              Effect.map(([machineSnapshot, projectSkills]) => ({
-                ...machineSnapshot,
-                skills: mergeDroidSkills(
-                  machineSnapshot.skills.filter((skill) => skill.scope !== "project"),
-                  projectSkills,
-                ),
-              })),
-              Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
-              Effect.provideService(FileSystem.FileSystem, fileSystem),
-              Effect.provideService(Path.Path, path),
-            );
-      return {
-        instanceId,
-        driverKind: DROID_PROVIDER,
-        continuationIdentity,
-        displayName,
-        accentColor,
-        enabled,
-        snapshot,
-        snapshotForCwd,
-        orchestrationAdapter,
-        textGeneration: makeDroidTextGeneration(),
-      } satisfies ProviderInstance;
-    }),
+            ),
+          ]).pipe(
+            Effect.map(([machineSnapshot, projectSkills]) => ({
+              ...machineSnapshot,
+              skills: mergeDroidSkills(
+                machineSnapshot.skills.filter((skill) => skill.scope !== "project"),
+                projectSkills,
+              ),
+            })),
+            Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+            Effect.provideService(FileSystem.FileSystem, fileSystem),
+            Effect.provideService(Path.Path, path),
+          );
+    return {
+      instanceId,
+      driverKind: DROID_PROVIDER,
+      continuationIdentity,
+      displayName,
+      accentColor,
+      enabled,
+      snapshot,
+      snapshotForCwd,
+      orchestrationAdapter,
+      textGeneration: makeDroidTextGeneration(),
+    } satisfies ProviderInstance;
+  }),
 };

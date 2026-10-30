@@ -5,6 +5,8 @@ import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as NodeOS from "node:os";
+import { vi } from "vite-plus/test";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 
 import { DroidSettings } from "../settings.ts";
 import {
@@ -14,7 +16,9 @@ import {
   checkDroidProviderStatus,
 } from "./status.ts";
 
-const settings = Schema.decodeSync(DroidSettings)({});
+vi.mock("node:os", { spy: true });
+
+const settings = Schema.decodeSync(DroidSettings)({ enabled: false });
 const missingBinarySettings = Schema.decodeSync(DroidSettings)({
   enabled: true,
   binaryPath: "/definitely-missing/droid",
@@ -43,12 +47,10 @@ const userCustomModels = [
 const writeFakeDroid = Effect.fn("writeFakeDroid")(function* (directory: string) {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const binary = path.join(directory, "droid");
+  const isWindows = (yield* HostProcess.Platform) === "win32";
+  const binary = path.join(directory, isWindows ? "droid.cmd" : "droid");
   const calls = path.join(directory, "calls.jsonl");
-  yield* fileSystem.writeFileString(
-    binary,
-    `#!${process.execPath}
-const fs = require("node:fs");
+  const script = `const fs = require("node:fs");
 const path = require("node:path");
 const args = process.argv.slice(2);
 const sandboxSettingsPath = process.env.FACTORY_HOME_OVERRIDE && path.join(process.env.FACTORY_HOME_OVERRIDE, ".factory", "settings.json");
@@ -95,9 +97,17 @@ if (args[0] === "--version") {
     }
   });
 }
-`,
-  );
-  yield* fileSystem.chmod(binary, 0o755);
+`;
+  if (isWindows) {
+    yield* fileSystem.writeFileString(path.join(directory, "droid.cjs"), script);
+    yield* fileSystem.writeFileString(
+      binary,
+      `@echo off\r\n"${process.execPath}" "%~dp0droid.cjs" %*\r\n`,
+    );
+  } else {
+    yield* fileSystem.writeFileString(binary, `#!${process.execPath}\n${script}`);
+    yield* fileSystem.chmod(binary, 0o755);
+  }
   return { binary, calls };
 });
 
@@ -370,6 +380,49 @@ describe("Droid status", () => {
           }
         }
       }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("falls back to the OS home directory when HOME is unset", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const directory = yield* fileSystem.makeTempDirectoryScoped({
+        directory: NodeOS.tmpdir(),
+        prefix: "droid-status-os-home-",
+      });
+      const home = path.join(directory, "home");
+      yield* writeUserSettings(
+        home,
+        JSON.stringify({
+          customModels: [
+            { model: "home-model", id: "custom:home", provider: "anthropic", baseUrl: "https://h" },
+          ],
+        }),
+      );
+      const skillDirectory = path.join(home, ".factory", "skills", "home-skill");
+      yield* fileSystem.makeDirectory(skillDirectory, { recursive: true });
+      yield* fileSystem.writeFileString(
+        path.join(skillDirectory, "SKILL.md"),
+        ["---", "name: home-skill", "description: Personal skill", "---", ""].join("\n"),
+      );
+      const { binary, calls } = yield* writeFakeDroid(directory);
+      const homedir = vi.spyOn(NodeOS, "homedir").mockReturnValue(home);
+      const snapshot = yield* checkDroidProviderStatus(
+        { ...missingBinarySettings, binaryPath: binary },
+        { DROID_STATUS_CALLS: calls },
+        directory,
+      ).pipe(Effect.ensuring(Effect.sync(() => homedir.mockRestore())));
+      const discovery = yield* readDiscoveryInvocations(calls);
+      assert.deepStrictEqual(JSON.parse(discovery[0].sandboxSettings), {
+        customModels: [
+          { model: "home-model", id: "custom:home", provider: "anthropic", baseUrl: "https://h" },
+        ],
+      });
+      assert.deepEqual(
+        snapshot.skills.map((skill) => skill.name),
+        ["home-skill"],
+      );
+    }).pipe(Effect.provide(NodeServices.layer)),
   );
 
   it("adds non-interactive settings without mutating the given environment", () => {
