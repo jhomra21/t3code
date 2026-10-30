@@ -12,7 +12,10 @@ disabled until you enable it. T3 Code checks the `droid` executable and version,
 verifies sign-in, and loads the available models.
 If `droid` is not on the server's `PATH`, set **Binary path** to its executable.
 
-T3 Code does not install Factory Droid. If the provider check cannot
+T3 Code does not install Factory Droid, but it can update it. When a newer
+release is out, the provider card shows it, and **Update now** runs
+`droid update` or the package manager that installed Droid. See
+[Providers](./install.md#providers). If the provider check cannot
 verify authentication or discover models, refresh after signing in and confirm
 that the configured binary runs on the environment's machine.
 
