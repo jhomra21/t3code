@@ -394,6 +394,7 @@ export function useThreadLifecycle(input: ThreadLifecycleInput) {
     activeRoster: input.activeProviderThread?.pendingBackgroundTasks ?? [],
     settledTasks: pendingBackgroundTasks,
   });
+  const activeBackgroundTasks = !isWorking && activeThread ? pendingBackgroundTasks : [];
   const [stoppingBackgroundWorkKey, setStoppingBackgroundWorkKey] = useState<string | null>(null);
   const isStoppingBackgroundWork =
     stoppingBackgroundWorkKey === `${environmentId}:${activeThreadId}`;
@@ -552,7 +553,7 @@ export function useThreadLifecycle(input: ThreadLifecycleInput) {
   const backgroundWorkNow = activeThread
     ? backgroundWorkNowItem({
         threadId: activeThread.id,
-        tasks: backgroundWork.tasks,
+        tasks: activeBackgroundTasks,
         canStop: backgroundWork.canStop,
         turnItems,
         stopDisabled: !canOperateThread || isStoppingBackgroundWork,
