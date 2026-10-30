@@ -5,7 +5,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
-import { fromYamlString } from "@t3tools/shared/schemaYaml";
+import { fromYaml } from "@t3tools/shared/schemaYaml";
 import { DroidRpcError, makeConnection, type DroidRpcConnection } from "./rpc.ts";
 const isDroidRpcError = Schema.is(DroidRpcError);
 
@@ -25,7 +25,7 @@ const ProjectSkillFrontmatter = Schema.Struct({
   description: Schema.optional(Schema.String),
   "user-invocable": Schema.optional(Schema.Boolean),
 });
-const ProjectSkillYaml = Schema.String.pipe(Schema.decodeTo(Schema.Unknown, fromYamlString));
+const ProjectSkillYaml = fromYaml(Schema.Unknown);
 const decodeProjectSkillYaml = Schema.decodeUnknownOption(ProjectSkillYaml);
 const decodeProjectSkillFrontmatter = Schema.decodeUnknownOption(ProjectSkillFrontmatter);
 const InstalledPlugins = Schema.Struct({
@@ -99,7 +99,7 @@ const readSkillsFromRoot = Effect.fn("readDroidSkillsFromRoot")(function* (
     const directoryInfo = yield* fileSystem.stat(skillDirectory).pipe(
       Effect.catchTags({
         PlatformError: (error) =>
-          error.reason._tag === "NotFound" ? Effect.succeed(undefined) : Effect.fail(error),
+          error.reason._tag === "NotFound" ? Effect.sync(() => undefined) : Effect.fail(error),
       }),
     );
     if (directoryInfo?.type !== "Directory") continue;
@@ -107,7 +107,7 @@ const readSkillsFromRoot = Effect.fn("readDroidSkillsFromRoot")(function* (
     const info = yield* fileSystem.stat(skillPath).pipe(
       Effect.catchTags({
         PlatformError: (error) =>
-          error.reason._tag === "NotFound" ? Effect.succeed(undefined) : Effect.fail(error),
+          error.reason._tag === "NotFound" ? Effect.sync(() => undefined) : Effect.fail(error),
       }),
     );
     if (info?.type !== "File" || info.size > 1_000_000n) continue;
@@ -216,7 +216,7 @@ export const discoverDroidSkills = Effect.fn("discoverDroidSkills")(function* (
   const pluginsContents = yield* fileSystem.readFileString(pluginsFile).pipe(
     Effect.catchTags({
       PlatformError: (error) =>
-        error.reason._tag === "NotFound" ? Effect.succeed(undefined) : Effect.fail(error),
+        error.reason._tag === "NotFound" ? Effect.sync(() => undefined) : Effect.fail(error),
     }),
   );
   const personalSkills = yield* discoverDroidUserSkills(home, pluginsContents);

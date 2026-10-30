@@ -522,10 +522,14 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
   return ProviderAdapter.ProviderAdapterV2.of({
     instanceId: options.instanceId,
     driver: DROID_PROVIDER,
-    getCapabilities: () => Effect.succeed(droidProviderCapabilitiesV2),
-    planSelectionTransition: () => Effect.succeed(turnScopedSelectionTransition()),
-    openSession: (sessionInput: ProviderAdapter.ProviderAdapterV2OpenSessionInput) =>
-      Effect.gen(function* () {
+    getCapabilities: Effect.fn("DroidAdapter.getCapabilities")(() =>
+      Effect.succeed(droidProviderCapabilitiesV2),
+    ),
+    planSelectionTransition: Effect.fn("DroidAdapter.planSelectionTransition")(() =>
+      Effect.succeed(turnScopedSelectionTransition()),
+    ),
+    openSession: Effect.fn("DroidAdapter.openSession")(
+      function* (sessionInput: ProviderAdapter.ProviderAdapterV2OpenSessionInput) {
         if (sessionInput.runtimePolicy.interactionMode === "plan")
           return yield* protocolError("Factory Droid does not expose T3's proposed-plan mode");
         const sessionScope = yield* Effect.scope;
@@ -777,43 +781,51 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
         });
         const textBuffer = new Map<string, string>();
         const textDeltas = {
-          append: ({
-            turnId,
-            itemId,
-            delta,
-          }: {
-            readonly turnId: string;
-            readonly itemId: string;
-            readonly delta: string;
-          }) => {
-            const context = active;
-            if (context === null || context.turn.id !== turnId) return Effect.void;
-            const key = `${turnId}\0${itemId}`;
-            const text = `${textBuffer.get(key) ?? ""}${delta}`;
-            textBuffer.set(key, text);
-            return emitText(context, itemId, text, itemId.endsWith(":thinking"), true);
-          },
-          complete: ({
-            turnId,
-            itemId,
-            finalText,
-            emitEmpty = true,
-          }: {
-            readonly turnId: string;
-            readonly itemId: string;
-            readonly finalText?: string;
-            readonly emitEmpty?: boolean;
-          }) => {
-            const key = `${turnId}\0${itemId}`;
-            const text = finalText ?? textBuffer.get(key) ?? "";
-            textBuffer.delete(key);
-            const context = active;
-            if (context === null || context.turn.id !== turnId || (!emitEmpty && text.length === 0))
-              return Effect.succeed(text);
-            return emitText(context, itemId, text, itemId.endsWith(":thinking"), false).pipe(
-              Effect.as(text),
-            );
-          },
+          append: Effect.fn("DroidAdapter.appendText")(
+            ({
+              turnId,
+              itemId,
+              delta,
+            }: {
+              readonly turnId: string;
+              readonly itemId: string;
+              readonly delta: string;
+            }) => {
+              const context = active;
+              if (context === null || context.turn.id !== turnId) return Effect.void;
+              const key = `${turnId}\0${itemId}`;
+              const text = `${textBuffer.get(key) ?? ""}${delta}`;
+              textBuffer.set(key, text);
+              return emitText(context, itemId, text, itemId.endsWith(":thinking"), true);
+            },
+          ),
+          complete: Effect.fn("DroidAdapter.completeText")(
+            ({
+              turnId,
+              itemId,
+              finalText,
+              emitEmpty = true,
+            }: {
+              readonly turnId: string;
+              readonly itemId: string;
+              readonly finalText?: string;
+              readonly emitEmpty?: boolean;
+            }) => {
+              const key = `${turnId}\0${itemId}`;
+              const text = finalText ?? textBuffer.get(key) ?? "";
+              textBuffer.delete(key);
+              const context = active;
+              if (
+                context === null ||
+                context.turn.id !== turnId ||
+                (!emitEmpty && text.length === 0)
+              )
+                return Effect.succeed(text);
+              return emitText(context, itemId, text, itemId.endsWith(":thinking"), false).pipe(
+                Effect.as(text),
+              );
+            },
+          ),
           flushTurn: (turnId: string) => {
             const context = active;
             if (context === null || context.turn.id !== turnId) return Effect.void;
@@ -842,6 +854,8 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
           changes?: ReadonlyArray<{ operation: string; path: string }>,
         ) {
           const updatedAt = yield* DateTime.now;
+          // Released clients recognize the Codex `server.tool` form, not Droid's native separator.
+          const toolName = tool.name.replace("___", ".");
           const key =
             child === undefined ? tool.id : `${child.task.nativeTaskRef?.nativeId}:${tool.id}`;
           const nodeId = ids.derive.nodeFromProviderItem({
@@ -854,7 +868,7 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
             runId: child === undefined ? context.input.runId : null,
             nodeId,
             status,
-            title: tool.name,
+            title: toolName,
             providerThreadId: child === undefined ? context.input.providerThread.id : null,
             providerTurnId: child === undefined ? context.turn.id : null,
             completedAt: status === "running" ? null : updatedAt,
@@ -899,7 +913,7 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
             yield* emitItem({
               ...base,
               type: "dynamic_tool",
-              toolName: tool.name,
+              toolName,
               input: tool.input,
               ...(boundedOutput === undefined ? {} : { output: boundedOutput }),
             });
@@ -2336,6 +2350,7 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
             text: message.text,
             attachments: message.attachments,
             resolveAttachmentPath: providerHost.resolveAttachmentPath,
+            resolveExtractedTextPath: providerHost.resolveExtractedTextPath,
           });
         const startTurn = Effect.fnUntraced(function* (
           input: ProviderAdapter.ProviderAdapterV2TurnInput,
@@ -2455,7 +2470,7 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
           contextUsageAfterCompaction = false;
           yield* rpc.request("droid.add_user_message", {
             messageId: input.message.messageId,
-            text: messageText(input.message),
+            text: yield* messageText(input.message),
             imagePaths,
             userMessageSource: "sdk",
             queuePlacement: "end_of_turn",
@@ -2550,31 +2565,34 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
                   }),
               ),
             ),
-          steerTurn: (input) =>
-            Effect.gen(function* () {
+          steerTurn: Effect.fn("DroidAdapter.steerTurn")(
+            function* (input: ProviderAdapter.ProviderAdapterV2SteerInput) {
               if (active?.turn.id !== input.providerTurnId || active.toolSearchStopped)
                 return yield* protocolError("The requested Droid turn is not active");
               const rpc = yield* requireConnection();
               yield* rpc.request("droid.add_user_message", {
                 messageId: input.message.messageId,
-                text: messageText(input.message),
+                text: yield* messageText(input.message),
                 imagePaths: yield* imagePathsFor(input.message),
                 userMessageSource: "sdk",
                 queuePlacement: "end_of_loop",
               });
-            }).pipe(
-              Effect.mapError(
-                (cause) =>
-                  new ProviderAdapter.ProviderAdapterSteerRunError({
-                    driver: DROID_PROVIDER,
-                    providerThreadId: input.providerThread.id,
-                    providerTurnId: input.providerTurnId,
-                    cause,
-                  }),
+            },
+            (effect, input) =>
+              effect.pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new ProviderAdapter.ProviderAdapterSteerRunError({
+                      driver: DROID_PROVIDER,
+                      providerThreadId: input.providerThread.id,
+                      providerTurnId: input.providerTurnId,
+                      cause,
+                    }),
+                ),
               ),
-            ),
-          interruptTurn: (input) =>
-            Effect.gen(function* () {
+          ),
+          interruptTurn: Effect.fn("DroidAdapter.interruptTurn")(
+            function* (input: ProviderAdapter.ProviderAdapterV2InterruptInput) {
               if (active === null) {
                 return yield* protocolError("This Droid turn is no longer active");
               }
@@ -2587,19 +2605,22 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
               yield* rpc
                 .request("droid.interrupt_session", {})
                 .pipe(Effect.onError(() => terminal("interrupted")));
-            }).pipe(
-              Effect.mapError(
-                (cause) =>
-                  new ProviderAdapter.ProviderAdapterInterruptError({
-                    driver: DROID_PROVIDER,
-                    providerThreadId: input.providerThread.id,
-                    providerTurnId: input.providerTurnId,
-                    cause,
-                  }),
+            },
+            (effect, input) =>
+              effect.pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new ProviderAdapter.ProviderAdapterInterruptError({
+                      driver: DROID_PROVIDER,
+                      providerThreadId: input.providerThread.id,
+                      providerTurnId: input.providerTurnId,
+                      cause,
+                    }),
+                ),
               ),
-            ),
-          respondToRuntimeRequest: (input) =>
-            Effect.gen(function* () {
+          ),
+          respondToRuntimeRequest: Effect.fn("DroidAdapter.respondToRuntimeRequest")(
+            function* (input: ProviderAdapter.ProviderAdapterV2RuntimeRequestResponseInput) {
               const entry = pending.get(input.requestId);
               if (entry === undefined)
                 return yield* protocolError("No pending native Droid request");
@@ -2647,16 +2668,19 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
                 };
                 yield* Deferred.succeed(entry.reply, { result: { selectedOption } });
               }
-            }).pipe(
-              Effect.mapError(
-                (cause) =>
-                  new ProviderAdapter.ProviderAdapterRuntimeRequestResponseError({
-                    driver: DROID_PROVIDER,
-                    requestId: input.requestId,
-                    cause,
-                  }),
+            },
+            (effect, input) =>
+              effect.pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new ProviderAdapter.ProviderAdapterRuntimeRequestResponseError({
+                      driver: DROID_PROVIDER,
+                      requestId: input.requestId,
+                      cause,
+                    }),
+                ),
               ),
-            ),
+          ),
           readThreadSnapshot: (input) =>
             snapshot(input).pipe(
               Effect.mapError(
@@ -2668,8 +2692,8 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
                   }),
               ),
             ),
-          rollbackThread: (input) =>
-            Effect.gen(function* () {
+          rollbackThread: Effect.fn("DroidAdapter.rollbackThread")(
+            function* (input: ProviderAdapter.ProviderAdapterV2RollbackThreadInput) {
               const fail = (detail: string) =>
                 new ProviderAdapter.ProviderAdapterRollbackThreadError({
                   driver: DROID_PROVIDER,
@@ -2779,18 +2803,21 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
                 messages: [],
                 runtimeRequests: [],
               } satisfies ProviderAdapter.ProviderAdapterV2ThreadSnapshot;
-            }).pipe(
-              Effect.mapError((cause) =>
-                isRollbackThreadError(cause)
-                  ? cause
-                  : new ProviderAdapter.ProviderAdapterRollbackThreadError({
-                      driver: DROID_PROVIDER,
-                      providerThreadId: input.providerThread.id,
-                      checkpointId: input.target.checkpointId,
-                      cause,
-                    }),
+            },
+            (effect, input) =>
+              effect.pipe(
+                Effect.mapError((cause) =>
+                  isRollbackThreadError(cause)
+                    ? cause
+                    : new ProviderAdapter.ProviderAdapterRollbackThreadError({
+                        driver: DROID_PROVIDER,
+                        providerThreadId: input.providerThread.id,
+                        checkpointId: input.target.checkpointId,
+                        cause,
+                      }),
+                ),
               ),
-            ),
+          ),
           forkThread: (input) =>
             Effect.fail(
               new ProviderAdapter.ProviderAdapterForkThreadError({
@@ -2815,16 +2842,19 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
               ),
             ),
         } satisfies ProviderAdapter.ProviderAdapterV2SessionRuntime;
-      }).pipe(
-        Effect.mapError(
-          (cause) =>
-            new ProviderAdapter.ProviderAdapterOpenSessionError({
-              driver: DROID_PROVIDER,
-              providerSessionId: sessionInput.providerSessionId,
-              cause,
-            }),
+      },
+      (effect, sessionInput) =>
+        effect.pipe(
+          Effect.mapError(
+            (cause) =>
+              new ProviderAdapter.ProviderAdapterOpenSessionError({
+                driver: DROID_PROVIDER,
+                providerSessionId: sessionInput.providerSessionId,
+                cause,
+              }),
+          ),
         ),
-      ),
+    ),
   });
 });
 
