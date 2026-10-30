@@ -34,16 +34,10 @@ import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
-import * as HostProcess from "@t3tools/shared/HostProcess";
 
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 import * as ProviderContinuationRequests from "@t3tools/provider-core/server/ProviderContinuationRequests";
-import {
-  ProviderAdapterDriverCreateError,
-  type ProviderAdapterDriver,
-  type ProviderAdapterDriverCreateInput,
-} from "@t3tools/provider-core/server/adapterDriver";
 import {
   makeProviderFailure,
   makeProviderRetryTurnItem,
@@ -67,8 +61,6 @@ import {
 } from "@t3tools/provider-core/server/subagentProjection";
 import * as DroidRpc from "./rpc.ts";
 import { isAcceptedDroidProtocolVersion } from "./protocolVersion.ts";
-import { DroidSettings } from "../settings.ts";
-import { makeDroidInstanceEnvironment } from "./status.ts";
 import {
   findDroidSessionDirectory,
   makeDroidSubagentFollower,
@@ -80,7 +72,6 @@ import {
 } from "./sessionTranscript.ts";
 
 export const DROID_PROVIDER = ProviderDriverKind.make("droid");
-const DEFAULT_DROID_SETTINGS = Schema.decodeSync(DroidSettings)({});
 // These versions have been verified in replay; accept compatible 1.x versions from 1.246.0 onward.
 const VERIFIED_PROTOCOLS = new Set(["1.246.0", "1.252.0", "1.257.0"]);
 const SIGN_IN_LINK_INSTRUCTIONS = `\n\n<sign_in_links>
@@ -2857,43 +2848,3 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
     ),
   });
 });
-
-export type DroidAdapterV2DriverEnv =
-  | ChildProcessSpawner.ChildProcessSpawner
-  | FileSystem.FileSystem
-  | typeof HostProcess.Environment
-  | IdAllocator.IdAllocatorV2
-  | McpProviderSessions.McpProviderSessions
-  | ProviderContinuationRequests.ProviderContinuationRequests
-  | ProviderHost.ProviderHost;
-
-export const DroidAdapterV2Driver: ProviderAdapterDriver<DroidSettings, DroidAdapterV2DriverEnv> = {
-  driverKind: DROID_PROVIDER,
-  configSchema: DroidSettings,
-  defaultConfig: () => DEFAULT_DROID_SETTINGS,
-  create: Effect.fn("DroidAdapterV2Driver.create")(
-    function* (input: ProviderAdapterDriverCreateInput<DroidSettings>) {
-      const hostEnvironment = yield* HostProcess.Environment;
-      const continuationRequests = yield* ProviderContinuationRequests.ProviderContinuationRequests;
-      const environment = yield* makeDroidInstanceEnvironment(input.environment, hostEnvironment);
-      return yield* makeDroidAdapterV2({
-        instanceId: input.instanceId,
-        environment,
-        binaryPath: input.config.binaryPath.trim() || "droid",
-        continuationRequests,
-      });
-    },
-    (effect, input) =>
-      effect.pipe(
-        Effect.mapError(
-          (cause) =>
-            new ProviderAdapterDriverCreateError({
-              driver: DROID_PROVIDER,
-              instanceId: input.instanceId,
-              detail: "Failed to create Factory Droid adapter.",
-              cause,
-            }),
-        ),
-      ),
-  ),
-};

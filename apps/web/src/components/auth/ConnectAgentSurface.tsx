@@ -274,7 +274,7 @@ function ConnectAgentHeading({
   return <StandalonePageHeader context="Agent sign-in" title={title} description={description} />;
 }
 
-export function AccessOption({
+function AccessOption({
   access,
   selected,
 }: {

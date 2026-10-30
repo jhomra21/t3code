@@ -3,7 +3,7 @@ import { IsoDateTime, NonNegativeInt, ProjectId, TrimmedNonEmptyString } from ".
 import { ProviderInstanceId } from "./providerInstance.ts";
 
 /** Coding agent home directories the scanner knows how to read. */
-export const AgentSessionSource = Schema.Literals(["claudeAgent", "codex", "droid"]);
+export const AgentSessionSource = Schema.Literals(["claudeAgent", "codex", "droid", "pi"]);
 export type AgentSessionSource = typeof AgentSessionSource.Type;
 
 export const AgentSessionImportSource = Schema.Struct({
