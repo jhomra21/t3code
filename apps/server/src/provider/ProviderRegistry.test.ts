@@ -729,6 +729,72 @@ it.layer(
       );
     });
 
+    it("replaces Droid models after a ready probe and keeps them after failed discovery", () => {
+      const staleCapabilities = createModelCapabilities({ optionDescriptors: [] });
+      const freshCapabilities = createModelCapabilities({
+        optionDescriptors: [
+          {
+            type: "select",
+            id: "reasoning_effort",
+            label: "Reasoning",
+            currentValue: "high",
+            options: [
+              { id: "low", label: "low", isDefault: false },
+              { id: "high", label: "high", isDefault: true },
+            ],
+          },
+        ],
+      });
+      const readyProvider = {
+        instanceId: ProviderInstanceId.make("droid"),
+        driver: ProviderDriverKind.make("droid"),
+        status: "ready",
+        enabled: true,
+        installed: true,
+        auth: { status: "authenticated" },
+        checkedAt: "2026-10-15T09:00:00.000Z",
+        version: "0.241.1",
+        models: [
+          { slug: "auto", name: "Auto", isCustom: false, capabilities: staleCapabilities },
+          {
+            slug: "custom:Claude Haiku 5.5-16",
+            name: "Claude Haiku 5.5",
+            isCustom: false,
+            capabilities: staleCapabilities,
+          },
+        ],
+        slashCommands: [],
+        skills: [],
+      } satisfies ServerProvider;
+      const refreshedProvider = {
+        ...readyProvider,
+        checkedAt: "2026-10-15T09:01:00.000Z",
+        models: [
+          {
+            slug: "custom:Claude Haiku 5.5-16",
+            name: "Claude Haiku 5.5",
+            isCustom: false,
+            capabilities: freshCapabilities,
+          },
+        ],
+      } satisfies ServerProvider;
+      const failedDiscoveryProvider = {
+        ...readyProvider,
+        checkedAt: "2026-10-15T09:02:00.000Z",
+        status: "warning",
+        models: [],
+      } satisfies ServerProvider;
+
+      assert.deepStrictEqual(
+        ProviderRegistry.mergeProviderSnapshot(readyProvider, refreshedProvider).models,
+        refreshedProvider.models,
+      );
+      assert.deepStrictEqual(
+        ProviderRegistry.mergeProviderSnapshot(readyProvider, failedDiscoveryProvider).models,
+        readyProvider.models,
+      );
+    });
+
     it("retains stale OpenCode models when a refresh fails", () => {
       const previousProvider = {
         instanceId: ProviderInstanceId.make("opencode"),
@@ -1938,7 +2004,7 @@ it.layer(
           decodeServerSettings(
             deepMerge(encodedDefaultServerSettings, {
               providerInstances: {
-                ...disabledDefaultSlots("claudeAgent", "cursor", "droid", "grok", "opencode"),
+                ...disabledDefaultSlots("claudeAgent", "cursor", "grok", "opencode"),
                 [ProviderInstanceId.make("codex")]: {
                   driver: ProviderDriverKind.make("codex"),
                   enabled: true,
@@ -2033,7 +2099,7 @@ it.layer(
           );
           yield* serverSettings.updateSettings({
             providerInstances: {
-              ...disabledDefaultSlots("claudeAgent", "cursor", "droid", "grok", "opencode"),
+              ...disabledDefaultSlots("claudeAgent", "cursor", "grok", "opencode"),
               [ProviderInstanceId.make("codex")]: {
                 driver: ProviderDriverKind.make("codex"),
                 enabled: true,
