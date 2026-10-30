@@ -181,6 +181,7 @@ function WorkflowMemberRow(props: {
           <SubagentTooltipContent
             title={member.title}
             model={member.model}
+            reportedEffort={member.effort}
             providerInstanceId={props.providerInstanceId}
             origin="provider_native"
             provider={props.providers.find(

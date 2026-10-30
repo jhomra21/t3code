@@ -1217,6 +1217,14 @@ describe("cross-section thread drops", () => {
 });
 
 it("lists only working Droid subagents and retains user forks", () => {
+  const runningRuntime = () => ({
+    status: "running" as const,
+    activeRunId: null,
+    providerInstanceId: ProviderInstanceId.make("factory_droid"),
+    providerName: "Droid",
+    lastError: null,
+    updatedAt: NOW,
+  });
   const root = makeThread({ id: ThreadId.make("root"), title: "Root" });
   const child = makeThread({
     id: ThreadId.make("child"),

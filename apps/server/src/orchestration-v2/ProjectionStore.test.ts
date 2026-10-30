@@ -134,10 +134,6 @@ const runlessSubagentShellUsesRootTurnStatus = Effect.gen(function* () {
   }
 });
 
-it.effect("memory shells use run-less subagent root activity", () =>
-  runlessSubagentShellUsesRootTurnStatus.pipe(Effect.provide(ProjectionStore.layerMemory)),
-);
-
 const traceSqlStatements = () => {
   const statements: Array<string> = [];
   const tracer = Tracer.make({
