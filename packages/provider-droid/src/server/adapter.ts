@@ -223,6 +223,15 @@ const ApprovalDetails = Schema.Struct({
   files: Schema.optionalKey(Schema.Array(ApprovalFile)),
 });
 const decodeApprovalDetails = Schema.decodeUnknownOption(ApprovalDetails);
+const ScriptApprovalDetails = Schema.Struct({
+  calls: Schema.Array(
+    Schema.Struct({
+      toolName: Schema.String,
+      confirmation: Schema.Unknown,
+    }),
+  ),
+});
+const decodeScriptApprovalDetails = Schema.decodeUnknownOption(ScriptApprovalDetails);
 const ApplyPatchResultFile = Schema.Struct({
   file_path: Schema.String,
   display_operation: Schema.Literals(["create", "update", "delete"]),
@@ -310,40 +319,42 @@ const boundedLines = (lines: ReadonlyArray<string>) => {
   const remaining = lines.length - visible.length;
   return remaining > 0 ? `${visible.join("\n")}\n+${remaining} more` : visible.join("\n");
 };
+const droidApprovalEntries = (permission: typeof Permission.Type) =>
+  permission.toolUses.flatMap((entry) => {
+    if (entry.confirmationType !== "script")
+      return [
+        {
+          confirmationType: entry.confirmationType,
+          details: entry.details,
+          name: entry.toolUse.name,
+        },
+      ];
+    const script = decodeScriptApprovalDetails(entry.details);
+    if (Option.isNone(script))
+      return [{ confirmationType: entry.confirmationType, details: entry.details, name: "Script" }];
+    return script.value.calls.map((call) => ({
+      confirmationType: stringField(call.confirmation, "type") ?? "",
+      details: call.confirmation,
+      name: call.toolName,
+    }));
+  });
 const droidApprovalPrompt = (permission: typeof Permission.Type) => {
-  const tools = permission.toolUses;
-  const execTools = tools.filter((entry) => entry.confirmationType === "exec");
-  if (execTools.length > 0) {
-    const commands = execTools.map((entry) => decodeApprovalDetails(entry.details));
-    if (
-      commands.every((details) => Option.isSome(details) && details.value.fullCommand !== undefined)
-    )
-      return boundedLines(
-        commands.flatMap((details) =>
-          Option.isSome(details) && details.value.fullCommand !== undefined
-            ? [details.value.fullCommand]
-            : [],
-        ),
-      );
-  }
-  const patchTools = tools.filter((entry) => entry.confirmationType === "apply_patch");
-  if (patchTools.length > 0) {
-    const decoded = patchTools.map((entry) => decodeApprovalDetails(entry.details));
-    if (decoded.every(Option.isSome)) {
-      const changes = decoded.flatMap((details) => {
-        if (Option.isNone(details)) return [];
+  return boundedLines(
+    droidApprovalEntries(permission).flatMap((entry) => {
+      const details = decodeApprovalDetails(entry.details);
+      if (Option.isSome(details) && entry.confirmationType === "exec")
+        return details.value.fullCommand === undefined ? [entry.name] : [details.value.fullCommand];
+      if (Option.isSome(details) && entry.confirmationType === "apply_patch") {
         const files = details.value.files;
-        if (files !== undefined && files.length > 0) {
-          if (files.some((file) => file.filePath === undefined || file.operation === undefined))
-            return [];
-          return files.map((file) => `${file.operation} ${file.filePath}`);
-        }
-        return details.value.filePath === undefined ? [] : [details.value.filePath];
-      });
-      if (changes.length > 0) return boundedLines(changes);
-    }
-  }
-  return tools.map((entry) => entry.toolUse.name).join(", ");
+        if (files !== undefined && files.length > 0)
+          return files.every((file) => file.filePath !== undefined && file.operation !== undefined)
+            ? files.map((file) => `${file.operation} ${file.filePath}`)
+            : [entry.name];
+        return details.value.filePath === undefined ? [entry.name] : [details.value.filePath];
+      }
+      return [entry.name];
+    }),
+  );
 };
 const droidTodoSteps = (input: unknown): ReadonlyArray<OrchestrationV2PlanStep> | undefined => {
   const todos = stringField(input, "todos");
@@ -1516,6 +1527,7 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
               : undefined;
           const permission =
             asking === undefined ? yield* decode(Permission, request.params) : undefined;
+          const approvalEntries = permission === undefined ? [] : droidApprovalEntries(permission);
           const requestId = yield* ids.allocate.runtimeRequest({
             driver: DROID_PROVIDER,
             providerTurnId: context.turn.id,
@@ -1526,9 +1538,9 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
           const kind =
             asking !== undefined
               ? "user_input"
-              : permission?.toolUses.some((entry) => entry.confirmationType === "exec")
+              : approvalEntries.some((entry) => entry.confirmationType === "exec")
                 ? "command"
-                : permission?.toolUses.some((entry) => entry.confirmationType === "apply_patch")
+                : approvalEntries.some((entry) => entry.confirmationType === "apply_patch")
                   ? "file-change"
                   : "permission";
           const node: OrchestrationV2ExecutionNode = {
