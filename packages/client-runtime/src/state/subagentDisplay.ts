@@ -37,7 +37,6 @@ export function isThreadListed(
   );
 }
 
-/** Summarizes one adjacent group, without changing its member identities or order. */
 export function subagentGroupSummary(
   members: ReadonlyArray<{ readonly status: OrchestrationV2TurnItemStatus }>,
 ) {
