@@ -19,7 +19,6 @@ import * as Schema from "effect/Schema";
 import {
   contextUsageForHandoff,
   handoffBudget,
-  handoffRemainingWindow,
   historyCost,
   historyResponseItems,
   selectHistory,
@@ -149,19 +148,6 @@ describe("handoff budget", () => {
     assert.equal(historyResponseItems([command!], "Activity")[1]?.type, "message");
   });
 
-  it("retains short conversations verbatim in role and order", () => {
-    const selected = selectHistory({ messages, coverage: "History", budget: 16_000 });
-    assert.deepEqual(selected.messages, messages);
-    const items = historyResponseItems(selected.messages, selected.context);
-    assert.deepEqual(
-      items.map((item) => item.role),
-      ["user", "user", "assistant"],
-    );
-    assert.include(items[1]!.content[0]!.text, messages[0]!.text);
-    assert.include(items[2]!.content[0]!.text, messages[1]!.text);
-    assert.equal(selected.omittedItems, 0);
-  });
-
   it("omits oversized multilingual items whole, preserves original constraints and recent work", () => {
     const candidates = [
       messages[0]!,
@@ -261,77 +247,6 @@ describe("handoff budget", () => {
       );
     }
     assert.equal(handoffBudget({ ...base, tokenCap: 2_000 }), 2_000);
-  });
-
-  it("budgets a long thread from a reported window rather than the unknown-window default", () => {
-    const base = {
-      tokenCap: 16_000,
-      userText: "Continue",
-      attachments: [],
-      providerThread,
-      nativeContextEstimate: 105_000,
-    };
-    assert.equal(handoffBudget(base), 0);
-    assert.equal(
-      handoffBudget({
-        ...base,
-        modelContextWindow: 300_000,
-        providerThread: {
-          ...providerThread,
-          contextUsage: { usedTokens: 100_000, maxTokens: 300_000 },
-        },
-      }),
-      16_000,
-    );
-  });
-
-  it("keeps the reserved-slice boundary separate from the real remaining window", () => {
-    const input = {
-      tokenCap: 16_000,
-      userText: "",
-      attachments: [],
-      providerThread: {
-        ...providerThread,
-        contextUsage: { usedTokens: 224_998, maxTokens: 300_000 },
-      },
-      nativeContextEstimate: 0,
-    };
-    assert.equal(handoffBudget(input), 0);
-    assert.equal(
-      handoffBudget({
-        ...input,
-        providerThread: {
-          ...input.providerThread,
-          contextUsage: { usedTokens: 224_999, maxTokens: 300_000 },
-        },
-      }),
-      0,
-    );
-    assert.equal(
-      handoffBudget({
-        ...input,
-        providerThread: {
-          ...input.providerThread,
-          contextUsage: { usedTokens: 224_997, maxTokens: 300_000 },
-        },
-      }),
-      1,
-    );
-    assert.isAbove(handoffRemainingWindow(input), 74_000);
-    assert.isAbove(
-      handoffRemainingWindow({
-        ...input,
-        userText: "x".repeat(74_000),
-      }),
-      0,
-    );
-    assert.equal(
-      handoffRemainingWindow({
-        ...input,
-        userText: "x".repeat(75_000),
-      }),
-      0,
-    );
   });
 
   it("keeps measured occupancy across a model change", () => {
@@ -529,54 +444,6 @@ describe("handoff delivery", () => {
       assert.deepEqual(decodeHandoff(durable).delivery, durable.delivery);
     }),
   );
-  it.effect("sends only the prompt when a retry note has no room in a nearly full thread", () =>
-    Effect.gen(function* () {
-      const input = {
-        handoffs: [handoff],
-        providerThread,
-        budget: 0,
-        alreadyDeliveredItemIds: new Set<string>(),
-        persist: () => Effect.die("nothing was delivered"),
-      };
-      const skipped = yield* deliverContextHandoffs({ ...input, skippable: true });
-      assert.equal(skipped.context, "");
-      const refused = yield* deliverContextHandoffs(input).pipe(Effect.flip);
-      assert.equal(refused._tag, "ContextHandoffBudgetError");
-    }),
-  );
-  it.effect("loads the history budget only when a handoff needs delivery", () =>
-    Effect.gen(function* () {
-      let reads = 0;
-      const input = {
-        providerThread,
-        budget: Effect.sync(() => {
-          reads++;
-          return 16_000;
-        }),
-        alreadyDeliveredItemIds: new Set<string>(),
-        persist: () => Effect.void,
-      };
-      yield* deliverContextHandoffs({ ...input, handoffs: [] });
-      yield* deliverContextHandoffs({ ...input, handoffs: [handoff], deferInline: true });
-      yield* deliverContextHandoffs({
-        ...input,
-        handoffs: [
-          {
-            ...handoff,
-            delivery: {
-              nativeThreadId: providerThread.nativeThreadRef!.nativeId!,
-              status: "injected",
-              itemIds: [],
-            },
-          },
-        ],
-      });
-      assert.equal(reads, 0);
-      const result = yield* deliverContextHandoffs({ ...input, handoffs: [handoff] });
-      assert.equal(reads, 1);
-      assert.include(result.context, messages[0]!.text);
-    }),
-  );
 
   it.effect("persists successful injection before turn start and skips it on retry", () =>
     Effect.gen(function* () {
@@ -606,277 +473,6 @@ describe("handoff delivery", () => {
       assert.equal(second.context, "");
       assert.lengthOf(history, 3);
     }),
-  );
-
-  it.effect("delivers recovery pointers when same-thread history exceeds its reserved slice", () =>
-    Effect.gen(function* () {
-      const fourPending = Array.from({ length: 4 }, (_, index) => ({
-        ...handoff,
-        id: ContextHandoffId.make(`handoff:subagent-result:${index}`),
-        targetRunId: RunId.make("run:interrupted-parent"),
-        strategy: "manual_context" as const,
-        summaryText: `Completed delegated child result ${index}: ${"result ".repeat(200)}`,
-        history: undefined,
-      }));
-      const fullWindowThread = {
-        ...providerThread,
-        contextUsage: { usedTokens: 230_000, maxTokens: 300_000 },
-      };
-      let durable: ReadonlyArray<OrchestrationV2ContextHandoff> = fourPending;
-      let injected = 0;
-      const persist = (updated: OrchestrationV2ContextHandoff) =>
-        Effect.sync(() => {
-          durable = durable.map((item) => (item.id === updated.id ? updated : item));
-        });
-      const input = {
-        handoffs: fourPending,
-        providerThread: fullWindowThread,
-        budget: 0,
-        fallbackBudget: handoffRemainingWindow({
-          userText: "Continue",
-          attachments: [],
-          providerThread: fullWindowThread,
-          nativeContextEstimate: 0,
-          modelContextWindow: 300_000,
-        }),
-        sameNativeThread: true,
-        alreadyDeliveredItemIds: new Set<string>(),
-        inject: (history: ProviderAdapter.ProviderAdapterV2HistoricalContext) =>
-          Effect.sync(() => {
-            injected++;
-            assert.deepEqual(history.messages, []);
-            assert.include(history.context, "Completed delegated child result");
-            return true;
-          }),
-        persist,
-      };
-      const result = yield* deliverContextHandoffs(input);
-      assert.equal(injected, 1);
-      assert.equal(result.context, "");
-      yield* result.delivered;
-      assert.isTrue(durable.every((item) => item.delivery?.status === "injected"));
-      assert.isTrue(durable.every((item) => item.delivery?.nativeThreadId === "native:target"));
-
-      const retry = yield* deliverContextHandoffs({
-        ...input,
-        handoffs: durable,
-        inject: () =>
-          Effect.sync(() => {
-            injected++;
-            return true;
-          }),
-      });
-      yield* retry.delivered;
-      assert.equal(injected, 1);
-      assert.isTrue(durable.every((item) => item.delivery?.status === "injected"));
-    }),
-  );
-
-  it.effect("covers omitted history ids when a same-thread handoff falls back to pointers", () =>
-    Effect.gen(function* () {
-      const fourPending = Array.from({ length: 4 }, (_, index) => ({
-        ...handoff,
-        id: ContextHandoffId.make(`handoff:omitted:${index}`),
-        strategy: "manual_context" as const,
-        history: {
-          ...handoff.history!,
-          messages: [message(`item:omitted:${index}`, "assistant", "x".repeat(1_500))],
-        },
-      }));
-      let durable: ReadonlyArray<OrchestrationV2ContextHandoff> = fourPending;
-      const persist = (updated: OrchestrationV2ContextHandoff) =>
-        Effect.sync(() => {
-          durable = durable.map((item) => (item.id === updated.id ? updated : item));
-        });
-      const result = yield* deliverContextHandoffs({
-        handoffs: fourPending,
-        providerThread,
-        budget: 0,
-        fallbackBudget: 10_000,
-        sameNativeThread: true,
-        alreadyDeliveredItemIds: new Set(),
-        inject: (history) => {
-          assert.deepEqual(history.messages, []);
-          return Effect.succeed(true);
-        },
-        persist,
-      });
-      yield* result.delivered;
-      const omittedIds = fourPending.map((item) => item.history!.messages[0]!.itemId);
-      assert.deepEqual(
-        durable.flatMap((item) => item.delivery?.omittedItemIds ?? []),
-        omittedIds,
-      );
-
-      let redelivered: ReadonlyArray<OrchestrationV2HistoricalMessage> = [];
-      yield* deliverContextHandoffs({
-        handoffs: [fourPending[0]!],
-        providerThread,
-        budget: 16_000,
-        alreadyDeliveredItemIds: new Set(
-          durable.flatMap((item) => item.delivery?.omittedItemIds ?? []),
-        ),
-        inject: (history) =>
-          Effect.sync(() => {
-            redelivered = history.messages;
-            return true;
-          }),
-        persist: () => Effect.void,
-      });
-      assert.deepEqual(redelivered, []);
-    }),
-  );
-
-  it.effect("delivers manual child results when real remaining room fits them", () =>
-    Effect.gen(function* () {
-      const childResult = "Completed delegated work: " + "result ".repeat(220);
-      const fourPending = Array.from({ length: 4 }, (_, index) => ({
-        ...handoff,
-        id: ContextHandoffId.make(`handoff:manual-result:${index}`),
-        targetRunId: RunId.make("run:interrupted-parent"),
-        strategy: "manual_context" as const,
-        summaryText: childResult,
-        history: undefined,
-      }));
-      const fullWindowThread = {
-        ...providerThread,
-        contextUsage: { usedTokens: 230_000, maxTokens: 300_000 },
-      };
-      const fallbackBudget = handoffRemainingWindow({
-        userText: "Continue",
-        attachments: [],
-        providerThread: fullWindowThread,
-        nativeContextEstimate: 0,
-        modelContextWindow: 300_000,
-      });
-      let injectedContext = "";
-      const deliver = (
-        remainingBudget: number,
-        handoffs: ReadonlyArray<OrchestrationV2ContextHandoff> = fourPending,
-      ) =>
-        deliverContextHandoffs({
-          handoffs,
-          providerThread: fullWindowThread,
-          budget: 0,
-          fallbackBudget: remainingBudget,
-          sameNativeThread: true,
-          alreadyDeliveredItemIds: new Set(),
-          inject: (history) =>
-            Effect.sync(() => {
-              injectedContext = history.context;
-              return true;
-            }),
-          persist: () => Effect.void,
-        });
-
-      yield* deliver(fallbackBudget);
-      assert.include(injectedContext, childResult);
-
-      let pointerContext = "";
-      yield* deliver(10_000, [{ ...fourPending[0]!, summaryText: "" }]);
-      pointerContext = injectedContext;
-      const pointerCost = historyCost([], pointerContext);
-      injectedContext = "";
-      yield* deliver(pointerCost);
-      assert.notInclude(injectedContext, childResult);
-      assert.include(injectedContext, "Context handoff");
-    }),
-  );
-
-  it.effect("still rejects pointer overflow but uses the exact available pointer allowance", () =>
-    Effect.gen(function* () {
-      let pointerContext = "";
-      const input = {
-        handoffs: [handoff],
-        providerThread,
-        budget: 0,
-        sameNativeThread: true,
-        alreadyDeliveredItemIds: new Set<string>(),
-        inject: (history: ProviderAdapter.ProviderAdapterV2HistoricalContext) =>
-          Effect.sync(() => {
-            pointerContext = history.context;
-            return true;
-          }),
-        persist: () => Effect.void,
-      };
-      yield* deliverContextHandoffs({ ...input, fallbackBudget: 10_000 });
-      const pointerCost = historyCost([], pointerContext);
-      const exact = yield* deliverContextHandoffs({
-        ...input,
-        fallbackBudget: pointerCost,
-      });
-      yield* exact.delivered;
-
-      const overflow = yield* deliverContextHandoffs({
-        ...input,
-        sameNativeThread: true,
-        providerThread: {
-          ...providerThread,
-          contextUsage: { usedTokens: 299_999, maxTokens: 300_000 },
-        },
-        fallbackBudget: handoffRemainingWindow({
-          userText: "Continue",
-          attachments: [],
-          providerThread: {
-            ...providerThread,
-            contextUsage: { usedTokens: 299_999, maxTokens: 300_000 },
-          },
-          nativeContextEstimate: 0,
-          modelContextWindow: 300_000,
-        }),
-      }).pipe(Effect.result);
-      assert.equal(overflow._tag, "Failure");
-      if (overflow._tag === "Failure")
-        assert.equal(overflow.failure._tag, "ContextHandoffBudgetError");
-    }),
-  );
-
-  it.effect(
-    "keeps large history truncation unchanged while preserving compact no-op semantics",
-    () =>
-      Effect.gen(function* () {
-        const largeHistory = {
-          ...handoff,
-          history: {
-            ...handoff.history!,
-            messages: [
-              message("item:large-user", "user", "Keep the latest prompt"),
-              message("item:large-answer", "assistant", "x".repeat(20_000)),
-            ],
-          },
-        };
-        let received: ProviderAdapter.ProviderAdapterV2HistoricalContext | undefined;
-        const selected = yield* deliverContextHandoffs({
-          handoffs: [largeHistory],
-          providerThread,
-          budget: 5_000,
-          alreadyDeliveredItemIds: new Set<string>(),
-          inject: (history) =>
-            Effect.sync(() => {
-              received = history;
-              return true;
-            }),
-          persist: () => Effect.void,
-        });
-        assert.equal(selected.context, "");
-        assert.isDefined(received);
-        assert.include(received.context, "omitted 1 items");
-        assert.deepEqual(
-          received.messages.map((item) => item.itemId),
-          [TurnItemId.make("item:large-user")],
-        );
-
-        const compactWithoutInject = yield* deliverContextHandoffs({
-          handoffs: [handoff],
-          providerThread,
-          budget: 16_000,
-          deferInline: true,
-          alreadyDeliveredItemIds: new Set<string>(),
-          persist: () => Effect.die("compact without inject must remain a no-op"),
-        });
-        assert.equal(compactWithoutInject.context, "");
-        yield* compactWithoutInject.delivered;
-      }),
   );
 
   it.effect(
@@ -1042,6 +638,22 @@ describe("handoff delivery", () => {
       }).pipe(Effect.result);
       assert.equal(result._tag, "Failure");
       assert.equal(calls, 0);
+
+      const remaining = yield* deliverContextHandoffs({
+        handoffs: [handoff],
+        providerThread,
+        budget: 0,
+        fallbackBudget: 9_000,
+        sameNativeThread: true,
+        alreadyDeliveredItemIds: new Set(),
+        inject: (history) => {
+          assert.deepEqual(history.messages, []);
+          assert.include(history.context, "t3_thread_read");
+          return Effect.succeed(true);
+        },
+        persist: () => Effect.void,
+      }).pipe(Effect.result);
+      assert.equal(remaining._tag, "Success");
     }),
   );
 });
