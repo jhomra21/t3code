@@ -27,6 +27,7 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as Logger from "effect/Logger";
 import * as Queue from "effect/Queue";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
@@ -45,6 +46,7 @@ import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter"
 import type * as ProviderContinuationRequests from "@t3tools/provider-core/server/ProviderContinuationRequests";
 import * as TestProviderHost from "@t3tools/provider-testing/TestProviderHost";
 import { DROID_PROVIDER, droidSystemPromptAppend, makeDroidAdapterV2 } from "./adapter.ts";
+import droid1286Direct from "./fixtures/1.286.0-direct.json" with { type: "json" };
 import {
   DroidSessionWatch,
   DroidSessionRead,
@@ -596,6 +598,61 @@ const lifecycleFixture = Effect.fnUntraced(function* (
 });
 
 describe("Droid adapter", () => {
+  it.effect("replays captured 1.286.0 direct tools without unknown notification warnings", () => {
+    const warnings: unknown[] = [];
+    const logger = Logger.make(({ logLevel, message }) => {
+      if (logLevel === "Warn") warnings.push(message);
+    });
+    return provide(
+      Effect.gen(function* () {
+        const fake = yield* makeFakeDroid({ protocolVersion: "1.286.0" });
+        const { runtime, input } = yield* open(fake);
+        const terminal = yield* Deferred.make<void>();
+        const events: ProviderAdapter.ProviderAdapterV2Event[] = [];
+        yield* runtime.events.pipe(
+          Stream.runForEach((event) => {
+            events.push(event);
+            return event.type === "turn.terminal"
+              ? Deferred.succeed(terminal, undefined)
+              : Effect.void;
+          }),
+          Effect.forkChild,
+        );
+        yield* runtime.startTurn(input);
+        yield* fake.takeRequest("droid.add_user_message");
+        for (const notification of droid1286Direct)
+          yield* fake.emitNotification({
+            ...notification,
+            ...("turnId" in notification ? { turnId: input.message.messageId } : {}),
+          });
+        yield* Deferred.await(terminal);
+        assert.deepEqual(
+          events.flatMap((event) =>
+            event.type === "turn_item.updated" &&
+            event.turnItem.type === "command_execution" &&
+            event.turnItem.status === "completed"
+              ? [event.turnItem.input]
+              : [],
+          ),
+          ["git --version", "bun --version"],
+        );
+        assert.isTrue(
+          events.some(
+            (event) =>
+              event.type === "turn_item.updated" &&
+              event.turnItem.type === "file_change" &&
+              event.turnItem.status === "completed" &&
+              event.turnItem.changes?.some(
+                (change) =>
+                  change.operation === "create" && change.path === "/workspace/capture-a.txt",
+              ),
+          ),
+        );
+        assert.deepEqual(warnings, []);
+      }).pipe(Effect.provide(Logger.layer([logger], { mergeWithExisting: false }))),
+    );
+  });
+
   it.effect("projects reported native child effort without inheriting parent options", () =>
     provide(
       Effect.gen(function* () {
