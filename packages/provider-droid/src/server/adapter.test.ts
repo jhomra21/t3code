@@ -4361,6 +4361,7 @@ describe("Droid adapter", () => {
         const request = yield* Deferred.await(pendingRequest);
         assert.isTrue(request?.type === "runtime_request.updated");
         if (request?.type !== "runtime_request.updated") return;
+        assert.equal(request.runtimeRequest.kind, "file-change");
         yield* runtime.respondToRuntimeRequest({
           requestId: request.runtimeRequest.id,
           decision: "accept",
@@ -4371,6 +4372,184 @@ describe("Droid adapter", () => {
           id: "approval-1",
           result: { selectedOption: "proceed_once" },
         });
+        yield* Fiber.interrupt(reader);
+      }),
+    ),
+  );
+
+  it.effect("shows every call in a Droid Script approval batch", () =>
+    provide(
+      Effect.gen(function* () {
+        const fake = yield* makeFakeDroid();
+        const { runtime, input } = yield* open(fake);
+        const waiting = yield* Deferred.make<ProviderAdapter.ProviderAdapterV2Event>();
+        const pendingRequest = yield* Deferred.make<ProviderAdapter.ProviderAdapterV2Event>();
+        const reader = yield* runtime.events.pipe(
+          Stream.runForEach((event) =>
+            Effect.gen(function* () {
+              if (
+                event.type === "turn_item.updated" &&
+                event.turnItem.type === "approval_request" &&
+                event.turnItem.status === "waiting"
+              )
+                yield* Deferred.succeed(waiting, event);
+              if (
+                event.type === "runtime_request.updated" &&
+                event.runtimeRequest.status === "pending"
+              )
+                yield* Deferred.succeed(pendingRequest, event);
+            }),
+          ),
+          Effect.forkChild,
+        );
+        yield* runtime.startTurn(input);
+        yield* fake.takeRequest("droid.initialize_session");
+        yield* fake.takeRequest("droid.get_context_breakdown");
+        yield* fake.takeRequest("droid.get_context_breakdown");
+        yield* fake.takeRequest("droid.add_user_message");
+        yield* fake.emitRequest("script-approval", "droid.request_permission", {
+          toolUses: [
+            {
+              toolUse: { id: "script-1", name: "Script", input: {} },
+              confirmationType: "script",
+              details: {
+                type: "script",
+                impactLevel: "low",
+                calls: [
+                  {
+                    toolName: "Execute",
+                    line: 2,
+                    column: 2,
+                    toolInput: { command: "git --version" },
+                    confirmation: {
+                      type: "exec",
+                      fullCommand: "git --version",
+                      command: "git",
+                      extractedCommands: ["git"],
+                      impactLevel: "low",
+                    },
+                  },
+                  {
+                    toolName: "Execute",
+                    line: 3,
+                    column: 2,
+                    toolInput: { command: "bun --version" },
+                    confirmation: {
+                      type: "exec",
+                      fullCommand: "bun --version",
+                      command: "bun",
+                      extractedCommands: ["bun"],
+                      impactLevel: "low",
+                    },
+                  },
+                  {
+                    toolName: "ApplyPatch",
+                    line: 4,
+                    column: 2,
+                    toolInput: {
+                      input:
+                        "*** Begin Patch\\n*** Add File: /workspace/capture-a.txt\\n+probe\\n*** End Patch",
+                    },
+                    confirmation: {
+                      type: "apply_patch",
+                      filePath: "/workspace/capture-a.txt",
+                      fileName: "capture-a.txt",
+                      patchContent:
+                        "*** Begin Patch\\n*** Add File: /workspace/capture-a.txt\\n+probe\\n*** End Patch",
+                      oldContent: "",
+                      newContent: "probe",
+                      files: [
+                        {
+                          filePath: "/workspace/capture-a.txt",
+                          fileName: "capture-a.txt",
+                          operation: "create",
+                          oldContent: "",
+                          newContent: "probe",
+                        },
+                      ],
+                    },
+                  },
+                ],
+              },
+            },
+          ],
+          options: [{ label: "Yes, allow all", value: "proceed_once" }],
+        });
+        const approval = yield* Deferred.await(waiting);
+        assert.equal(
+          approval.type === "turn_item.updated" && approval.turnItem.type === "approval_request"
+            ? approval.turnItem.prompt
+            : undefined,
+          "git --version\nbun --version\ncreate /workspace/capture-a.txt",
+        );
+        const request = yield* Deferred.await(pendingRequest);
+        assert.isTrue(request.type === "runtime_request.updated");
+        if (request.type === "runtime_request.updated")
+          assert.equal(request.runtimeRequest.kind, "command");
+        yield* Fiber.interrupt(reader);
+      }),
+    ),
+  );
+
+  it.effect("shows mixed exec and patch approval details", () =>
+    provide(
+      Effect.gen(function* () {
+        const fake = yield* makeFakeDroid();
+        const { runtime, input } = yield* open(fake);
+        const waiting = yield* Deferred.make<ProviderAdapter.ProviderAdapterV2Event>();
+        const pendingRequest = yield* Deferred.make<ProviderAdapter.ProviderAdapterV2Event>();
+        const reader = yield* runtime.events.pipe(
+          Stream.runForEach((event) =>
+            Effect.gen(function* () {
+              if (
+                event.type === "turn_item.updated" &&
+                event.turnItem.type === "approval_request" &&
+                event.turnItem.status === "waiting"
+              )
+                yield* Deferred.succeed(waiting, event);
+              if (
+                event.type === "runtime_request.updated" &&
+                event.runtimeRequest.status === "pending"
+              )
+                yield* Deferred.succeed(pendingRequest, event);
+            }),
+          ),
+          Effect.forkChild,
+        );
+        yield* runtime.startTurn(input);
+        yield* fake.takeRequest("droid.initialize_session");
+        yield* fake.takeRequest("droid.get_context_breakdown");
+        yield* fake.takeRequest("droid.get_context_breakdown");
+        yield* fake.takeRequest("droid.add_user_message");
+        yield* fake.emitRequest("mixed-approval", "droid.request_permission", {
+          toolUses: [
+            {
+              toolUse: { id: "exec-1", name: "Execute", input: { command: "git --version" } },
+              confirmationType: "exec",
+              details: { type: "exec", fullCommand: "git --version" },
+            },
+            {
+              toolUse: { id: "patch-1", name: "ApplyPatch", input: {} },
+              confirmationType: "apply_patch",
+              details: {
+                type: "apply_patch",
+                files: [{ filePath: "/workspace/mixed.txt", operation: "create" }],
+              },
+            },
+          ],
+          options: [{ label: "Yes, allow", value: "proceed_once" }],
+        });
+        const approval = yield* Deferred.await(waiting);
+        assert.equal(
+          approval.type === "turn_item.updated" && approval.turnItem.type === "approval_request"
+            ? approval.turnItem.prompt
+            : undefined,
+          "git --version\ncreate /workspace/mixed.txt",
+        );
+        const request = yield* Deferred.await(pendingRequest);
+        assert.isTrue(request.type === "runtime_request.updated");
+        if (request.type === "runtime_request.updated")
+          assert.equal(request.runtimeRequest.kind, "command");
         yield* Fiber.interrupt(reader);
       }),
     ),
