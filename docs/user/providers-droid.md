@@ -34,6 +34,12 @@ settings when you need a model that is not in the discovered list.
 Models that report reasoning-effort choices show a **Reasoning** option. The
 selected model's supported efforts and default come from Droid.
 
+In **Settings → Providers → Factory Droid**, **Tool execution mode** controls
+new sessions. **Default** lets Droid choose for the model. **Direct tools only**
+uses individual tool calls; **Script only** uses JavaScript tool batches.
+Changing this setting does not change an existing session or enable native
+subagents inside Scripts.
+
 T3 Code maps its [permission modes](./permission-modes.md) to Droid autonomy:
 **Supervised** uses `off`, **Auto-accept edits** uses `low`, **Auto** uses
 `medium`, and **Full access** uses `high`. Droid enforces the selected autonomy;

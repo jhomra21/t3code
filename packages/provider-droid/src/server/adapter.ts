@@ -435,6 +435,7 @@ export type DroidAdapterV2Options = {
   readonly instanceId: ProviderInstanceId;
   readonly environment: NodeJS.ProcessEnv;
   readonly binaryPath: string;
+  readonly toolExecutionMode?: "default" | "direct_only" | "script_only" | undefined;
   readonly modelCatalog?: Effect.Effect<ReadonlyArray<ServerProviderModel>>;
   readonly continuationRequests?: Pick<
     Context.Service.Shape<typeof ProviderContinuationRequests.ProviderContinuationRequests>,
@@ -2258,6 +2259,10 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
                     machineId: "default",
                     cwd,
                     ...settings,
+                    ...(options.toolExecutionMode === undefined ||
+                    options.toolExecutionMode === "default"
+                      ? {}
+                      : { toolExecutionMode: options.toolExecutionMode }),
                     ...loadOptions,
                     systemPrompt: {
                       type: "preset",
