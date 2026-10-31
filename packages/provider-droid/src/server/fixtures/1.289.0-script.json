@@ -175,7 +175,7 @@
         "id": "call_DYpS5eJWSdiUvijtzs8yOmWn",
         "name": "Script",
         "input": {
-          "script": "// @input: patch <<'EOF'\n*** Begin Patch\n*** Add File: C:\\t3-peer"
+          "script": "// @input: patch <<'EOF'\n*** Begin Patch\n*** Add File: /workspace/..."
         }
       }
     }
@@ -189,7 +189,7 @@
         "id": "call_DYpS5eJWSdiUvijtzs8yOmWn",
         "name": "Script",
         "input": {
-          "script": "// @input: patch <<'EOF'\n*** Begin Patch\n*** Add File: C:\\t3-peer\\up"
+          "script": "// @input: patch <<'EOF'\n*** Begin Patch\n*** Add File: /workspace/..."
         }
       }
     }
@@ -203,7 +203,7 @@
         "id": "call_DYpS5eJWSdiUvijtzs8yOmWn",
         "name": "Script",
         "input": {
-          "script": "// @input: patch <<'EOF'\n*** Begin Patch\n*** Add File: C:\\t3-peer\\upstream-prep\\"
+          "script": "// @input: patch <<'EOF'\n*** Begin Patch\n*** Add File: /workspace/..."
         }
       }
     }
@@ -217,7 +217,7 @@
         "id": "call_DYpS5eJWSdiUvijtzs8yOmWn",
         "name": "Script",
         "input": {
-          "script": "// @input: patch <<'EOF'\n*** Begin Patch\n*** Add File: C:\\t3-peer\\upstream-prep\\scratch\\droid"
+          "script": "// @input: patch <<'EOF'\n*** Begin Patch\n*** Add File: /workspace/..."
         }
       }
     }
@@ -231,7 +231,7 @@
         "id": "call_DYpS5eJWSdiUvijtzs8yOmWn",
         "name": "Script",
         "input": {
-          "script": "// @input: patch <<'EOF'\n*** Begin Patch\n*** Add File: C:\\t3-peer\\upstream-prep\\scratch\\droid1\\batch"
+          "script": "// @input: patch <<'EOF'\n*** Begin Patch\n*** Add File: /workspace/..."
         }
       }
     }
@@ -245,7 +245,7 @@
         "id": "call_DYpS5eJWSdiUvijtzs8yOmWn",
         "name": "Script",
         "input": {
-          "script": "// @input: patch <<'EOF'\n*** Begin Patch\n*** Add File: /workspace\\script-w"
+          "script": "// @input: patch <<'EOF'\n*** Begin Patch\n*** Add File: /workspace/..."
         }
       }
     }
@@ -259,7 +259,7 @@
         "id": "call_DYpS5eJWSdiUvijtzs8yOmWn",
         "name": "Script",
         "input": {
-          "script": "// @input: patch <<'EOF'\n*** Begin Patch\n*** Add File: /workspace\\probe"
+          "script": "// @input: patch <<'EOF'\n*** Begin Patch\n*** Add File: /workspace/..."
         }
       }
     }
@@ -918,11 +918,11 @@
       "content": [
         {
           "type": "text",
-          "text": "{\"tool\":\"Execute\",\"status\":\"fulfilled\",\"value\":{\"output\":\"git version 2.51.2.windows.1\\n\",\"exitCode\":0}}\n{\"tool\":\"ApplyPatch\",\"status\":\"fulfilled\",\"value\":\"Success. Applied changes to the following files:\\nA C:\\\\t3-peer\\\\upstream-prep\\\\scratch\\\\droid1\\\\batch1\\\\script-ws\\/probe.txt\"}"
+          "text": "{\"tool\":\"Execute\",\"status\":\"fulfilled\",\"value\":{\"output\":\"git version 2.51.2.windows.1\\n\",\"exitCode\":0}}\n{\"tool\":\"ApplyPatch\",\"status\":\"fulfilled\",\"value\":\"Success. Applied changes to the following files:\\nA /workspace/...\"}"
         },
         {
           "type": "text",
-          "text": "[Script completed · 0.5 s elapsed · 2 calls · log: C:\\Users\\jhonr\\.factory\\artifacts\\scripts\\13952e22-7983-4c71-bf48-914919b91c59\\call_DYpS5eJWSdiUvijtzs8yOmWn.log]"
+          "text": "[Script completed · 0.5 s elapsed · 2 calls · log: <log>]"
         }
       ],
       "isError": false
