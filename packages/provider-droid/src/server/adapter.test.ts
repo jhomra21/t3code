@@ -97,6 +97,7 @@ const makeFakeDroid = (
     readonly nativeSessionId?: string;
     readonly rewindSessionId?: string;
     readonly forkSessionId?: string;
+    readonly failChangeWorkingDirectory?: boolean;
     readonly failInterruptSession?: boolean;
     readonly holdInterruptSessionResponse?: boolean;
   } = {},
@@ -235,6 +236,7 @@ const responseFor = (
     readonly nativeSessionId?: string;
     readonly rewindSessionId?: string;
     readonly forkSessionId?: string;
+    readonly failChangeWorkingDirectory?: boolean;
     readonly failInterruptSession?: boolean;
     readonly holdInterruptSessionResponse?: boolean;
   },
@@ -245,25 +247,27 @@ const responseFor = (
   factoryProtocolVersion: options.protocolVersion ?? "1.257.0",
   ...(frame.method === "droid.interrupt_session" && options.failInterruptSession
     ? { error: { code: -32000, message: "Synthetic interrupt failure" } }
-    : {
-        result:
-          frame.method === "droid.initialize_session"
-            ? {
-                sessionId: options.nativeSessionId ?? "native-session",
-                session: { messages: [] },
-              }
-            : frame.method === "droid.load_session"
-              ? { session: { messages: [] } }
-              : frame.method === "droid.get_context_breakdown"
-                ? (options.contextBreakdown ?? {})
-                : frame.method === "droid.compact_session"
-                  ? (options.compactSessionResult ?? {})
-                  : frame.method === "droid.execute_rewind"
-                    ? { newSessionId: options.rewindSessionId ?? "rewound-session" }
-                    : frame.method === "droid.fork_session"
-                      ? { newSessionId: options.forkSessionId ?? "forked-session" }
-                      : {},
-      }),
+    : frame.method === "droid.change_working_directory" && options.failChangeWorkingDirectory
+      ? { error: { code: -32000, message: "Synthetic cwd change failure" } }
+      : {
+          result:
+            frame.method === "droid.initialize_session"
+              ? {
+                  sessionId: options.nativeSessionId ?? "native-session",
+                  session: { messages: [] },
+                }
+              : frame.method === "droid.load_session"
+                ? { session: { messages: [] } }
+                : frame.method === "droid.get_context_breakdown"
+                  ? (options.contextBreakdown ?? {})
+                  : frame.method === "droid.compact_session"
+                    ? (options.compactSessionResult ?? {})
+                    : frame.method === "droid.execute_rewind"
+                      ? { newSessionId: options.rewindSessionId ?? "rewound-session" }
+                      : frame.method === "droid.fork_session"
+                        ? { newSessionId: options.forkSessionId ?? "forked-session" }
+                        : {},
+        }),
 });
 
 const RpcFrameSchema = Schema.Struct({
@@ -686,6 +690,7 @@ describe("Droid adapter", () => {
           })).providerTurns;
           const fake = yield* makeFakeDroid();
           const targetThreadId = ThreadId.make("droid-fork-target");
+          const targetCwd = "C:\\scratch\\droid-fork-target";
           const config: McpProviderSessionConfig = {
             environmentId: EnvironmentId.make("droid-adapter-test-environment"),
             threadId: targetThreadId,
@@ -698,7 +703,7 @@ describe("Droid adapter", () => {
           const target = yield* open(
             fake,
             undefined,
-            undefined,
+            targetCwd,
             config,
             undefined,
             source.providerThread,
@@ -728,6 +733,8 @@ describe("Droid adapter", () => {
           yield* fake.takeRequest("droid.fork_session");
           const forkLoad = yield* fake.takeRequest("droid.load_session");
           assert.equal(Reflect.get(forkLoad.params ?? {}, "sessionId"), "forked-session");
+          const changeDirectory = yield* fake.takeRequest("droid.change_working_directory");
+          assert.equal(Reflect.get(changeDirectory.params ?? {}, "workingDirectory"), targetCwd);
           assert.deepEqual(Reflect.get(forkLoad.params ?? {}, "mcpServers"), [
             {
               type: "http",
@@ -739,6 +746,42 @@ describe("Droid adapter", () => {
           assert.notInclude(fake.requestedMethods, "droid.execute_rewind");
         }),
       ),
+  );
+
+  it.effect("fails a fork when restoring the target working directory fails", () =>
+    provide(
+      Effect.gen(function* () {
+        const source = yield* open(yield* makeFakeDroid());
+        const targetThreadId = ThreadId.make("droid-fork-target");
+        const fake = yield* makeFakeDroid({ failChangeWorkingDirectory: true });
+        const config: McpProviderSessionConfig = {
+          environmentId: EnvironmentId.make("droid-adapter-test-environment"),
+          threadId: targetThreadId,
+          providerSessionId: "droid-adapter-test-session",
+          providerInstanceId: instanceId,
+          endpoint: "http://127.0.0.1:9/mcp",
+          authorizationHeader: "Bearer dummy",
+          browserToolsAvailable: false,
+        };
+        const target = yield* open(
+          fake,
+          undefined,
+          "C:\\scratch\\droid-fork-target",
+          config,
+          undefined,
+          source.providerThread,
+          true,
+        );
+        const error = yield* Effect.flip(
+          target.runtime.forkThread({
+            sourceProviderThread: source.providerThread,
+            targetThreadId,
+          }),
+        );
+        assert.instanceOf(error, ProviderAdapter.ProviderAdapterForkThreadError);
+        assert.notInclude(fake.requestedMethods, "droid.update_session_settings");
+      }),
+    ),
   );
 
   it.effect.each(["historical", "same-id", "active", "source-active", "background"])(
