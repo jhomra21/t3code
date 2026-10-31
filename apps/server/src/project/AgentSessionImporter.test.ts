@@ -243,6 +243,29 @@ const makeImporter = Effect.fn(function* (
   return { run: importer.importRecentAgentThreads({ projectId }), published };
 });
 
+it.effect("imports Droid sessions with their native resume cursor", () =>
+  Effect.gen(function* () {
+    const source = candidate(
+      { ...CODEX_MODEL_SELECTION, instanceId: ProviderInstanceId.make("droid") },
+      "native-droid-session",
+      "droid",
+    );
+    const importer = yield* makeImporter([source]);
+    expect(yield* importer.run).toEqual({ importedCount: 1, skippedCount: 0 });
+    const projections = yield* ProjectionStore.ProjectionStoreV2;
+    const records = yield* projections.getThreadRecords(importId(source), ["providerThreads"]);
+    expect(records.providerThreads[0]?.nativeThreadRef).toMatchObject({
+      driver: "droid",
+      nativeId: "native-droid-session",
+      strength: "strong",
+    });
+    const runtimes = yield* ProviderSessionRuntime.ProviderSessionRuntimeRepository;
+    expect(yield* runtimes.getByThreadId({ threadId: importId(source) })).toMatchObject({
+      value: { resumeCursor: { sessionId: "native-droid-session" } },
+    });
+  }).pipe(Effect.provide(persistence)),
+);
+
 it.effect(
   "ignores owned sessions, including archived and deleted threads, but imports other instances and unowned sessions",
   () =>
