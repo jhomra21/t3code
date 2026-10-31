@@ -470,6 +470,7 @@ type ActiveTurn = {
 };
 type ChildState = {
   task: OrchestrationV2Subagent;
+  recordedEffort: string | undefined;
   background: boolean;
   readonly rootNodeId: NodeId;
   readonly parentRootNodeId: NodeId;
@@ -1037,6 +1038,7 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
           const childThreadId = child.task.childThreadId;
           if (childThreadId === null) return;
           const updatedAt = yield* DateTime.now;
+          if (work.effort !== undefined) child.recordedEffort = work.effort;
           if (
             (work.model !== undefined && work.model !== child.task.model) ||
             (work.effort !== undefined && work.effort !== child.task.effort)
@@ -1269,6 +1271,7 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
           const tool = context.tools.get(notice.toolUseId);
           const complexity = stringField(tool?.input, "complexity");
           const effort =
+            existing?.recordedEffort ??
             (complexity === undefined ? undefined : DROID_EFFORT_BY_COMPLEXITY.get(complexity)) ??
             existing?.task.effort;
           const model =
@@ -1319,6 +1322,7 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
           };
           const child: ChildState = {
             task,
+            recordedEffort: existing?.recordedEffort,
             background: existing?.background ?? false,
             context,
             rootNodeId: ids.derive.nodeFromProviderItem({
