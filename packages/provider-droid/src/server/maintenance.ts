@@ -18,7 +18,21 @@ const LatestPackage = Schema.fromJsonString(Schema.Struct({ version: Schema.Stri
 
 export const parseDroidVersion = parseGenericCliVersion;
 
-export const droidMaintenanceResolver = makePackageManagedProviderMaintenanceResolver({
+const isPackageManagedPath = (commandPath: string) => {
+  const normalized = normalizeCommandPath(commandPath);
+  return (
+    normalized.includes("/node_modules/") ||
+    normalized.includes("/.bun/bin/") ||
+    /\/yarn\/(?:data\/)?global\/node_modules\//.test(normalized) ||
+    /\/(?:\.local\/share\/pnpm|library\/pnpm|local\/share\/pnpm|pnpm\/global)\//.test(normalized) ||
+    /\/(?:\.vite-plus|\.local\/share\/vite-plus|appdata\/local\/vite-plus)\/bin\//.test(
+      normalized,
+    ) ||
+    normalized.includes("/.volta/tools/image/packages/")
+  );
+};
+
+const packageManagedResolver = makePackageManagedProviderMaintenanceResolver({
   provider: DRIVER,
   npmPackageName: "droid",
   nativeUpdate: {
@@ -26,9 +40,18 @@ export const droidMaintenanceResolver = makePackageManagedProviderMaintenanceRes
     isCommandPath: (commandPath) =>
       /(?:\/\.local\/bin\/droid(?:\.exe)?$|^[a-z]:\/users\/[^/]+\/bin\/droid\.exe$)/.test(
         normalizeCommandPath(commandPath),
-      ),
+      ) && !isPackageManagedPath(commandPath),
   },
 });
+
+export const droidMaintenanceResolver = {
+  resolve: (context: Parameters<typeof packageManagedResolver.resolve>[0]) =>
+    packageManagedResolver.resolve(
+      context !== null && isPackageManagedPath(context.realCommandPath)
+        ? { ...context, resolvedCommandPath: context.realCommandPath }
+        : context,
+    ),
+};
 
 const latestDroidVersion = Effect.fn("latestDroidVersion")(function* (options?: {
   readonly fresh?: boolean;
