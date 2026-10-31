@@ -1053,6 +1053,45 @@ describe("Droid adapter", () => {
     );
   });
 
+  it.effect.each(["failed", "disconnected"] as const)(
+    "warns when Droid's injected t3-code MCP server is %s during a turn",
+    (status) => {
+      const warnings: unknown[] = [];
+      const logger = Logger.make(({ logLevel, message }) => {
+        if (logLevel === "Warn") warnings.push(message);
+      });
+      return provide(
+        Effect.gen(function* () {
+          const fake = yield* makeFakeDroid();
+          const { runtime, input } = yield* open(fake);
+          const terminal = yield* Deferred.make<void>();
+          yield* runtime.events.pipe(
+            Stream.runForEach((event) =>
+              event.type === "turn.terminal" ? Deferred.succeed(terminal, undefined) : Effect.void,
+            ),
+            Effect.forkChild,
+          );
+          yield* runtime.startTurn(input);
+          yield* fake.takeRequest("droid.add_user_message");
+          yield* fake.emitNotification({
+            type: "mcp_status_changed",
+            servers: [{ name: "t3-code", status, error: "private endpoint with token" }],
+            summary: { total: 1, connected: 0, connecting: 0, failed: 1, disabled: 0 },
+          });
+          yield* fake.emitNotification({
+            type: "agent_turn_completed",
+            reason: "completed",
+            turnId: input.message.messageId,
+          });
+          yield* Deferred.await(terminal);
+          assert.deepEqual(warnings, [
+            ["Droid's injected t3-code MCP server is unavailable.", { status }],
+          ]);
+        }).pipe(Effect.provide(Logger.layer([logger], { mergeWithExisting: false }))),
+      );
+    },
+  );
+
   it.effect("projects reported native child effort without inheriting parent options", () =>
     provide(
       Effect.gen(function* () {
