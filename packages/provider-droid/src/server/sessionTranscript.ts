@@ -39,7 +39,12 @@ const rowSchema = Schema.Struct({
 });
 const decodeRow = Schema.decodeUnknownOption(Schema.fromJsonString(rowSchema));
 const decodeSettings = Schema.decodeOption(
-  Schema.fromJsonString(Schema.Struct({ model: Schema.optional(Schema.String) })),
+  Schema.fromJsonString(
+    Schema.Struct({
+      model: Schema.optional(Schema.String),
+      reasoningEffort: Schema.optional(Schema.String),
+    }),
+  ),
 );
 
 export type DroidSubagentStep =
@@ -60,6 +65,7 @@ export type DroidSubagentStep =
 
 export type DroidSubagentWork = {
   readonly model?: string;
+  readonly effort?: string;
   readonly steps: ReadonlyArray<DroidSubagentStep>;
   readonly activityOffset?: number;
   readonly outcome?: "completed" | "cancelled" | "failed";
@@ -110,9 +116,14 @@ const readSessionModel = (file: string) =>
   ).pipe(
     Effect.map((text) => {
       const decoded = decodeSettings(text);
-      return decoded._tag === "Some" ? displayModel(decoded.value.model) : undefined;
+      return decoded._tag === "Some"
+        ? {
+            model: displayModel(decoded.value.model),
+            effort: decoded.value.reasoningEffort?.trim() || undefined,
+          }
+        : { model: undefined, effort: undefined };
     }),
-    Effect.orElseSucceed(() => undefined),
+    Effect.orElseSucceed(() => ({ model: undefined, effort: undefined })),
   );
 
 export const readDroidDefinitionModel = (
@@ -255,7 +266,7 @@ export const makeDroidSubagentFollower = Effect.fn("DroidTranscript.makeFollower
     const tools = new Map<string, Extract<DroidSubagentStep, { readonly kind: "tool" }>>();
     let offset = 0;
     let inode: number | undefined;
-    let model = yield* readSessionModel(expectedFile);
+    let settings = yield* readSessionModel(expectedFile);
     let previousActivityOffset = input.previousActivityOffset;
     let lastUserOffset: number | undefined;
     let outcome: DroidSubagentWork["outcome"];
@@ -272,7 +283,11 @@ export const makeDroidSubagentFollower = Effect.fn("DroidTranscript.makeFollower
           outcome = undefined;
         }
         inode = appended.inode;
-        if (model === undefined) model = yield* readSessionModel(expectedFile);
+        const recorded = yield* readSessionModel(expectedFile);
+        settings = {
+          model: recorded.model ?? settings.model,
+          effort: recorded.effort ?? settings.effort,
+        };
         const steps = new Map<string, DroidSubagentStep>();
         let rowOffset = offset;
         for (const line of appended.text.split("\n").slice(0, -1)) {
@@ -338,7 +353,8 @@ export const makeDroidSubagentFollower = Effect.fn("DroidTranscript.makeFollower
           (previousActivityOffset === undefined || lastUserOffset > previousActivityOffset);
         const currentOutcome = currentTurn ? outcome : undefined;
         const work: DroidSubagentWork = {
-          ...(model === undefined ? {} : { model }),
+          ...(settings.model === undefined ? {} : { model: settings.model }),
+          ...(settings.effort === undefined ? {} : { effort: settings.effort }),
           steps: Array.from(steps.values()),
           ...(lastUserOffset === undefined ? {} : { activityOffset: lastUserOffset }),
           ...(currentOutcome === undefined ? {} : { outcome: currentOutcome }),

@@ -685,7 +685,7 @@ describe("Droid adapter", () => {
         yield* Effect.promise(() =>
           NodeFSP.writeFile(
             f.file.replace(/\.jsonl$/u, ".settings.json"),
-            '{"model":"custom:GPT-6 Luna-12"}',
+            '{"model":"custom:GPT-6 Luna-12","reasoningEffort":"low"}',
           ),
         );
         f.listeners[0]!("change", NodePath.basename(f.file.replace(/\.jsonl$/u, ".settings.json")));
@@ -694,11 +694,9 @@ describe("Droid adapter", () => {
         const task = f.status();
         assert.isDefined(task);
         assert.equal(task.model, "GPT-6 Luna");
-        assert.equal(task.effort, "medium");
+        assert.equal(task.effort, "low");
         assert.equal(task.modelSelection?.model, "GPT-6 Luna");
-        assert.deepEqual(task.modelSelection?.options, [
-          { id: "reasoning_effort", value: "medium" },
-        ]);
+        assert.deepEqual(task.modelSelection?.options, [{ id: "reasoning_effort", value: "low" }]);
       }),
     ),
   );
