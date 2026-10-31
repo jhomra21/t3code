@@ -1097,6 +1097,11 @@ describe("Droid adapter", () => {
         assert.equal(task.effort, "low");
         assert.equal(task.modelSelection?.model, "GPT-6 Luna");
         assert.deepEqual(task.modelSelection?.options, [{ id: "reasoning_effort", value: "low" }]);
+        yield* f.register();
+        assert.equal(f.status()?.effort, "low");
+        assert.deepEqual(f.status()?.modelSelection?.options, [
+          { id: "reasoning_effort", value: "low" },
+        ]);
       }),
     ),
   );
