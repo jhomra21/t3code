@@ -24,7 +24,9 @@ export const droidMaintenanceResolver = makePackageManagedProviderMaintenanceRes
   nativeUpdate: {
     args: ["update"],
     isCommandPath: (commandPath) =>
-      /\/\.local\/bin\/droid(?:\.exe)?$/.test(normalizeCommandPath(commandPath)),
+      /(?:\/\.local\/bin\/droid(?:\.exe)?$|^[a-z]:\/users\/[^/]+\/bin\/droid\.exe$)/.test(
+        normalizeCommandPath(commandPath),
+      ),
   },
 });
 
