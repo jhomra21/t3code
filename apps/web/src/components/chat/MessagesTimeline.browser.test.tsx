@@ -208,6 +208,50 @@ const TASK_ID = ScheduledTaskId.make("task-1");
 const AUTOMATION_PROMPT = "Triage the inbox\n\nLabel every new issue and close duplicates.";
 
 describe("MessagesTimeline work rows", () => {
+  it("discloses nested tools without replacing their normal rows", async () => {
+    setup();
+    const at = DateTime.makeUnsafe(CREATED_AT);
+    const entries = deriveTimelineEntriesFromVisibleTurnItems({
+      visibleTurnItems: [
+        v2Item("dynamic_tool", {
+          id: "script",
+          toolName: "Script",
+          input: {},
+          status: "completed",
+          updatedAt: at,
+        }),
+        v2Item("command_execution", {
+          id: "nested-command",
+          parentItemId: "script",
+          input: "bun test nested",
+          status: "running",
+          updatedAt: at,
+        }),
+        v2Item("file_change", {
+          id: "nested-edit",
+          parentItemId: "script",
+          fileName: "/project/src/nested.ts",
+          status: "completed",
+          updatedAt: at,
+        }),
+      ],
+      optimisticMessages: [],
+    });
+    await using screen = await renderTimeline(entries);
+    const header = () =>
+      screen.container.querySelector<HTMLElement>('[data-v2-item-type="dynamic_tool"]')!;
+    await expect.element(page.getByRole("status")).toHaveTextContent("Running");
+    expect(screen.container.querySelector('[data-v2-item-type="command_execution"]')).toBeNull();
+    await click(header());
+    await expect.element(page.getByRole("button", { name: /bun test nested/ })).toBeVisible();
+    expect(
+      [...screen.container.querySelectorAll("[data-v2-item-type]")].map((row) =>
+        row.getAttribute("data-v2-item-type"),
+      ),
+    ).toEqual(["dynamic_tool", "command_execution", "file_change"]);
+    await click(header());
+    expect(screen.container.querySelector('[data-v2-item-type="command_execution"]')).toBeNull();
+  });
   it.each(["delegated", "legacy", "missing"] as const)(
     "uses the reported task for %s completion notifications",
     async (source) => {

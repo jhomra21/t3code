@@ -2,6 +2,7 @@ import type {
   ThreadPendingApproval,
   ThreadPendingUserInput,
 } from "@t3tools/client-runtime/state/thread-requests";
+import { groupNestedToolItems } from "@t3tools/client-runtime/work-log/nested-tools";
 import { turnItemIsWorkspacePreparation } from "@t3tools/client-runtime/state/turn-item-presentation";
 import type { ThreadCheckpointSummary } from "@t3tools/client-runtime/state/thread-checkpoints";
 import { formatSubagentDisplayTitle } from "@t3tools/client-runtime/state/subagent-display";
@@ -81,6 +82,7 @@ export type PendingApproval = ThreadPendingApproval;
 export type PendingUserInput = ThreadPendingUserInput;
 
 export interface ThreadFeedActivity {
+  readonly nestedToolActivities?: ReadonlyArray<ThreadFeedActivity>;
   readonly id: string;
   readonly createdAt: string;
   readonly runId: RunId | null;
@@ -879,6 +881,23 @@ function groupAdjacentActivities(
   childrenByRun: ReadonlyMap<RunId, ReadonlySet<string>>,
   onRestart?: (entryIndex: number, groupedLength: number) => void,
 ): ThreadFeedEntry[] {
+  const nestedEntries = groupNestedToolItems(
+    entries,
+    (entry) => (entry.type === "activity" ? entry.activity.projectedItem.item : undefined),
+    (entry, children, running) =>
+      entry.type === "activity"
+        ? {
+            ...entry,
+            activity: {
+              ...entry.activity,
+              lifecycleStatus: running ? "inProgress" : entry.activity.lifecycleStatus,
+              nestedToolActivities: children.flatMap((child) =>
+                child.type === "activity" ? [child.activity] : [],
+              ),
+            },
+          }
+        : entry,
+  );
   const grouped: ThreadFeedEntry[] = [];
   let firstActivityEntry: Extract<RawThreadFeedEntry, { readonly type: "activity" }> | null = null;
   let openGroupActivities: ThreadFeedActivity[] = [];
@@ -906,11 +925,12 @@ function groupAdjacentActivities(
     openGroupActivities = [];
   };
 
-  for (let entryIndex = 0; entryIndex < entries.length; entryIndex += 1) {
-    const entry = entries[entryIndex]!;
+  for (let entryIndex = 0; entryIndex < nestedEntries.length; entryIndex += 1) {
+    const entry = nestedEntries[entryIndex]!;
     if (entry.type === "activity") {
       const item = entry.activity.projectedItem.item;
       if (
+        entry.activity.nestedToolActivities === undefined &&
         item.type === "dynamic_tool" &&
         item.runId !== null &&
         (item.status === "running" || item.status === "completed") &&
@@ -933,11 +953,12 @@ function groupAdjacentActivities(
     if (entry.type !== "activity") {
       flushGroup();
       grouped.push(entry);
-      onRestart?.(entryIndex, grouped.length);
+      if (nestedEntries.length === entries.length) onRestart?.(entryIndex, grouped.length);
       continue;
     }
 
     const isStandaloneActivity =
+      entry.activity.nestedToolActivities !== undefined ||
       entry.activity.workEntry.questionAnswer !== undefined ||
       entry.activity.projectedItem.item.type === "compaction" ||
       entry.activity.projectedItem.item.type === "handoff" ||
@@ -1166,7 +1187,9 @@ function deriveThreadFeedRunFolds(
                   activity.projectedItem.item.type === "handoff" ||
                   // A child still working outlives its settled launching run;
                   // its group stays visible while any member is live.
-                  isLiveSubagentTurnItem(activity.projectedItem.item),
+                  isLiveSubagentTurnItem(activity.projectedItem.item) ||
+                  (activity.nestedToolActivities !== undefined &&
+                    activity.lifecycleStatus === "inProgress"),
               )
             ),
         )
@@ -1526,6 +1549,13 @@ export function deriveThreadFeedPresentation(
       (row) =>
         row.id === LIVE_ACTIVITY_ROW_ID ||
         (row.type === "activity-group" &&
+          row.activities.some(
+            (activity) =>
+              activity.nestedToolActivities !== undefined &&
+              activity.lifecycleStatus === "inProgress" &&
+              activity.runId === activeRunId,
+          )) ||
+        (row.type === "activity-group" &&
           isContextCompactionActivityGroup(row) &&
           row.runId === activeRunId &&
           row.activities[0]?.projectedItem.item.status === "running"),
@@ -1657,6 +1687,7 @@ function appendPresentedFeedEntry(
     isContextCompactionActivityGroup(entry) ||
     isContextHandoffActivityGroup(entry) ||
     isUserInputActivityGroup(entry) ||
+    entry.activities[0]?.nestedToolActivities !== undefined ||
     entry.activities[0]?.projectedItem.item.type === "subagent"
   ) {
     result.push(entry);
@@ -2010,7 +2041,9 @@ export function buildThreadFeed(
   // is reused only while these match the build that produced it.
   const foldedAnswerMessageIds = new Set<string>();
   const delegatedChildrenByRun = new Map<RunId, Set<string>>();
+  let hasNestedTools = false;
   for (const { item } of visibleTurnItems) {
+    hasNestedTools ||= item.parentItemId !== null;
     if (item.type === "user_input_request" && item.questionAnswer) {
       foldedAnswerMessageIds.add(`async-answer:${item.questionAnswer.requestId}`);
     } else if (item.type === "subagent" && item.origin === "app_owned" && item.runId !== null) {
@@ -2025,6 +2058,9 @@ export function buildThreadFeed(
   let restartIndex = -1;
   if (
     previous !== null &&
+    // Late children can change a group before any cached boundary, including a later prompt.
+    !hasNestedTools &&
+    !previous.rows.some(({ item }) => item.parentItemId !== null) &&
     anchoredMessages.length === 0 &&
     previous.attempts === options?.attempts &&
     previous.nodes === options?.nodes &&

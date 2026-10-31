@@ -3,6 +3,10 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./work-log/nested-tools": {
+      "types": "./src/work-log/nestedTools.ts",
+      "default": "./src/work-log/nestedTools.ts"
+    },
     "./zip/bounded-zip": {
       "types": "./src/zip/boundedZip.ts",
       "default": "./src/zip/boundedZip.ts"

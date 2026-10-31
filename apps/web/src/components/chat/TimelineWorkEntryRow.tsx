@@ -185,18 +185,25 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
       ? notificationChildThreadId(workEntry.projectedItem.item.source)
       : undefined;
   const groupView = use(WorkGroupViewCtx);
-  const [expanded, setExpanded] = useState(
-    () => groupView?.state.expandedEntries.has(workEntry.id) ?? false,
+  const entryViewState =
+    groupView?.state ?? (workEntry.nestedToolEntries ? ctx.workGroupViewState : undefined);
+  const nestedGroupView = groupView ?? {
+    state: ctx.workGroupViewState,
+    onToggleEntry: (collapsed: boolean) => props.onToggleEntry?.(collapsed),
+  };
+  const [locallyExpanded, setExpanded] = useState(
+    () => entryViewState?.expandedEntries.has(workEntry.id) ?? false,
   );
+  const expanded = locallyExpanded || workEntry.revealNestedTools === true;
   const toggleExpanded = () => {
     const next = !expanded;
     if (groupView) {
       groupView.onToggleEntry(!next);
-      if (next) groupView.state.expandedEntries.add(workEntry.id);
-      else groupView.state.expandedEntries.delete(workEntry.id);
     } else {
       props.onToggleEntry?.(!next);
     }
+    if (next) entryViewState?.expandedEntries.add(workEntry.id);
+    else entryViewState?.expandedEntries.delete(workEntry.id);
     setExpanded(next);
   };
   const failureItem = workEntry.projectedItem?.item;
@@ -312,6 +319,7 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
         })
       : null;
   const canExpand =
+    workEntry.nestedToolEntries !== undefined ||
     previewText.trim().length > 0 ||
     (workEntry.itemType === "dynamic_tool" && workEntry.toolData !== undefined) ||
     Boolean(
@@ -337,7 +345,8 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
     workEntry.projectedItem !== undefined &&
     turnItemNeedsDetailFetch(workEntry.projectedItem.item);
   const canExpandProjectedItem =
-    plainOutput !== undefined
+    workEntry.nestedToolEntries !== undefined ||
+    (plainOutput !== undefined
       ? Boolean(plainOutput || viewedImage || workEntry.questionAnswer || plainOutputFetches)
       : workEntry.projectedItem === undefined
         ? canExpand
@@ -347,7 +356,7 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
               viewedImage ||
               workEntry.questionAnswer ||
               turnItemHasDetail(workEntry.projectedItem.item),
-            );
+            ));
   const iconWrapperClass = cn(
     "flex size-4 items-center justify-center",
     showWarningIndicator
@@ -457,6 +466,11 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
       }
       trailing={
         <>
+          {workEntry.nestedToolEntries && workEntry.toolLifecycleStatus === "inProgress" ? (
+            <span role="status" className="text-xs text-muted-foreground">
+              Running
+            </span>
+          ) : null}
           {createdThread ? (
             <button
               type="button"
@@ -506,6 +520,21 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
         </>
       }
     >
+      {expanded && workEntry.nestedToolEntries ? (
+        <div className="ms-7" onClick={(event) => event.stopPropagation()}>
+          <WorkGroupViewCtx value={nestedGroupView}>
+            {workEntry.nestedToolEntries.map((child) => (
+              <div key={child.id} data-timeline-row-id={child.id}>
+                <SimpleWorkEntryRow
+                  workEntry={child}
+                  workspaceRoot={workspaceRoot}
+                  onToggleEntry={props.onToggleEntry}
+                />
+              </div>
+            ))}
+          </WorkGroupViewCtx>
+        </div>
+      ) : null}
       {expanded && viewedImage && threadRef ? (
         <WorkLogDetails kind="media">
           <ChatMarkdownAssetImage
