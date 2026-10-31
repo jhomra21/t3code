@@ -46,6 +46,7 @@ import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter"
 import type * as ProviderContinuationRequests from "@t3tools/provider-core/server/ProviderContinuationRequests";
 import * as TestProviderHost from "@t3tools/provider-testing/TestProviderHost";
 import { DROID_PROVIDER, droidSystemPromptAppend, makeDroidAdapterV2 } from "./adapter.ts";
+import { DroidSettings } from "../settings.ts";
 import droid1286Direct from "./fixtures/1.286.0-direct.json" with { type: "json" };
 import droid1289Direct from "./fixtures/1.289.0-direct.json" with { type: "json" };
 import droid1289Script from "./fixtures/1.289.0-script.json" with { type: "json" };
@@ -64,6 +65,7 @@ const policy = {
 } satisfies ProviderAdapter.ProviderAdapterV2RuntimePolicy;
 const threadId = ThreadId.make("droid-adapter-test-thread");
 const decodeAppThread = Schema.decodeUnknownEffect(OrchestrationV2AppThread);
+const decodeDroidSettings = Schema.decodeUnknownEffect(DroidSettings);
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 
 type RpcFrame = {
@@ -284,6 +286,7 @@ const open = Effect.fnUntraced(function* (
   existingProviderThread?: ProviderAdapter.ProviderAdapterV2EnsureThreadInput["existingProviderThread"],
   skipEnsureThread = false,
   environment: NodeJS.ProcessEnv = {},
+  adapterOptions: Pick<Parameters<typeof makeDroidAdapterV2>[0], "toolExecutionMode"> = {},
 ) {
   const providerHost = yield* ProviderHost.ProviderHost;
   if (mcpSession !== undefined)
@@ -294,6 +297,7 @@ const open = Effect.fnUntraced(function* (
     instanceId,
     environment,
     binaryPath: "droid",
+    ...adapterOptions,
     ...(continuationRequests === undefined ? {} : { continuationRequests }),
   }).pipe(
     Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, fake.spawner),
@@ -604,6 +608,57 @@ const lifecycleFixture = Effect.fnUntraced(function* (
 });
 
 describe("Droid adapter", () => {
+  it.effect.each([undefined, "default", "direct_only", "script_only"])(
+    "initializes tool execution mode %s without sending it in updates or reloads",
+    (mode) =>
+      provide(
+        Effect.gen(function* () {
+          const settings = yield* decodeDroidSettings(
+            mode === undefined ? {} : { toolExecutionMode: mode },
+          );
+          const fake = yield* makeFakeDroid();
+          const options = { toolExecutionMode: settings.toolExecutionMode };
+          const fresh = yield* open(
+            fake,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            false,
+            {},
+            options,
+          );
+          yield* fresh.runtime.startTurn(fresh.input);
+          const init = yield* fake.takeRequest("droid.initialize_session");
+          assert.equal(
+            Reflect.get(init.params ?? {}, "toolExecutionMode"),
+            mode === "default" ? undefined : mode,
+          );
+          assert.isFalse(Object.hasOwn(init.params ?? {}, "allowSubagentsInScripts"));
+          const update = yield* fake.takeRequest("droid.update_session_settings");
+          assert.isFalse(Object.hasOwn(update.params ?? {}, "toolExecutionMode"));
+          assert.isFalse(Object.hasOwn(update.params ?? {}, "allowSubagentsInScripts"));
+          const resumedFake = yield* makeFakeDroid();
+          yield* open(
+            resumedFake,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            fresh.providerThread,
+            false,
+            {},
+            options,
+          );
+          const load = yield* resumedFake.takeRequest("droid.load_session");
+          assert.isFalse(Object.hasOwn(load.params ?? {}, "toolExecutionMode"));
+          const restored = yield* resumedFake.takeRequest("droid.update_session_settings");
+          assert.isFalse(Object.hasOwn(restored.params ?? {}, "toolExecutionMode"));
+        }),
+      ),
+  );
+
   it.effect.each([false, true])(
     "forks the session head with explicit boundary %s into a distinct thread with target MCP tools",
     (explicitBoundary) =>
