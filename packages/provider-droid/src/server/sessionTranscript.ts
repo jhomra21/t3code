@@ -24,6 +24,7 @@ const partSchema = Schema.Struct({
   tool_use_id: Schema.optionalKey(Schema.String),
   content: Schema.optionalKey(Schema.Unknown),
   is_error: Schema.optionalKey(Schema.Boolean),
+  script_execution: Schema.optionalKey(Schema.Unknown),
 });
 const rowSchema = Schema.Struct({
   type: Schema.String,
@@ -61,6 +62,7 @@ export type DroidSubagentStep =
       readonly input: unknown;
       readonly output: string | null;
       readonly isError: boolean;
+      readonly parentToolUseId?: string;
     };
 
 export type DroidSubagentWork = {
@@ -323,6 +325,14 @@ export const makeDroidSubagentFollower = Effect.fn("DroidTranscript.makeFollower
                 });
                 if (part.type === "text") lastAssistant = text;
               } else if (part.type === "tool_use" && part.id !== undefined) {
+                const execution = part.script_execution;
+                const parentToolUseId =
+                  typeof execution === "object" &&
+                  execution !== null &&
+                  "outer_tool_use_id" in execution &&
+                  typeof execution.outer_tool_use_id === "string"
+                    ? execution.outer_tool_use_id
+                    : undefined;
                 const step: Extract<DroidSubagentStep, { readonly kind: "tool" }> = {
                   kind: "tool",
                   id: part.id,
@@ -330,6 +340,7 @@ export const makeDroidSubagentFollower = Effect.fn("DroidTranscript.makeFollower
                   input: part.input ?? null,
                   output: null,
                   isError: false,
+                  ...(parentToolUseId === undefined ? {} : { parentToolUseId }),
                 };
                 tools.set(part.id, step);
                 steps.set(part.id, step);
