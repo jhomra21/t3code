@@ -2915,6 +2915,10 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
                 sessionId: result.newSessionId,
                 ...(yield* sessionLoadOptions(input.targetThreadId)),
               });
+              const cwd = yield* canonicalWorkspacePath(policy.cwd ?? providerHost.paths.cwd);
+              yield* rpc.request("droid.change_working_directory", {
+                workingDirectory: cwd,
+              });
               nativeId = result.newSessionId;
               yield* applySettings(selection, policy);
               const now = yield* DateTime.now;
