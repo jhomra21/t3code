@@ -49,6 +49,12 @@ const groupsOf = (subagents: ReadonlyArray<ProjectedSubagent>) =>
   deriveWorkflowGroups(projectedSubagentsToRuntime(subagents));
 
 describe("projectedSubagentsToRuntime workflow expansion", () => {
+  it("preserves provider-reported effort on the projected coordinator", () => {
+    const [coordinator] = projectedSubagentsToRuntime([subagent({ effort: "xhigh" })]);
+
+    expect(coordinator?.effort).toBe("xhigh");
+  });
+
   it("uses a settled member's wall-clock completion separately from its execution duration", () => {
     const [, settled] = projectedSubagentsToRuntime([
       subagent({
