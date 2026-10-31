@@ -567,6 +567,23 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
         let lastContext: ActiveTurn | null = null;
         let providerThread: OrchestrationV2ProviderThread | null = null;
         let connection: DroidRpc.DroidRpcConnection | null = null;
+        const sessionLoadOptions = Effect.fn("DroidAdapter.sessionLoadOptions")(function* () {
+          const mcp = yield* mcpSessions.read(sessionInput.threadId);
+          return {
+            mcpServers:
+              mcp === undefined
+                ? []
+                : [
+                    {
+                      type: "http",
+                      name: "t3-code",
+                      url: mcp.endpoint,
+                      headers: [{ name: "Authorization", value: mcp.authorizationHeader }],
+                    },
+                  ],
+            autoRejectPermissionRequests: false,
+          };
+        });
         let nativeId: string | null = null;
         let connectionScope: Scope.Closeable | null = null;
         let wakePending = false;
@@ -2204,17 +2221,7 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
               Effect.provideService(Scope.Scope, childScope),
             );
             connection = rpc;
-            const mcpServers =
-              mcp === undefined
-                ? []
-                : [
-                    {
-                      type: "http",
-                      name: "t3-code",
-                      url: mcp.endpoint,
-                      headers: [{ name: "Authorization", value: mcp.authorizationHeader }],
-                    },
-                  ];
+            const loadOptions = yield* sessionLoadOptions();
             const settings = yield* resolveSettings(selection, policy);
             const response = yield* rpc.request(
               resumeId === undefined ? "droid.initialize_session" : "droid.load_session",
@@ -2223,15 +2230,14 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
                     machineId: "default",
                     cwd,
                     ...settings,
-                    mcpServers,
-                    autoRejectPermissionRequests: false,
+                    ...loadOptions,
                     systemPrompt: {
                       type: "preset",
                       preset: "droid",
                       append: droidSystemPromptAppend(mcp !== undefined),
                     },
                   }
-                : { sessionId: resumeId, mcpServers, autoRejectPermissionRequests: false },
+                : { sessionId: resumeId, ...loadOptions },
             );
             const protocolVersion = response.factoryProtocolVersion;
             if (protocolVersion === undefined || !isAcceptedDroidProtocolVersion(protocolVersion)) {
@@ -2446,16 +2452,18 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
               Schema.Struct({ newSessionId: Schema.String }),
               response.result,
             );
+            if (result.newSessionId !== nativeId) {
+              yield* rpc.request("droid.load_session", {
+                sessionId: result.newSessionId,
+                ...(yield* sessionLoadOptions()),
+              });
+            }
             nativeId = result.newSessionId;
             providerThread = {
               ...providerThread,
               nativeThreadRef: nativeRef(nativeId),
               updatedAt: yield* DateTime.now,
             };
-            yield* rpc.request("droid.load_session", {
-              sessionId: nativeId,
-              autoRejectPermissionRequests: false,
-            });
             yield* emit({
               type: "provider_thread.updated",
               driver: DROID_PROVIDER,
@@ -2770,7 +2778,7 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
               );
               yield* rpc.request("droid.load_session", {
                 sessionId: result.newSessionId,
-                autoRejectPermissionRequests: false,
+                ...(yield* sessionLoadOptions()),
               });
 
               const rolledBackTurns = new Set(
