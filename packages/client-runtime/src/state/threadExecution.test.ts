@@ -22,6 +22,7 @@ import {
   deriveReportedModelSelection,
   deriveLatestThreadRun,
   deriveProviderSubagentStatus,
+  formatModelSelectionEffort,
   deriveRunlessWorkStartedAt,
   deriveThreadActivityRun,
   deriveThreadRuntime,
@@ -461,6 +462,40 @@ describe("provider-reported model selection", () => {
         ],
       }),
     ).toBeNull();
+  });
+});
+
+describe("formatModelSelectionEffort", () => {
+  it("finds the catalog model when the selection names it by display name or alias", () => {
+    const selection = {
+      ...v2Projection.thread.modelSelection,
+      model: "GPT-6 Luna",
+      options: [{ id: "reasoning_effort", value: "medium" }],
+    };
+    const models = [
+      {
+        slug: "custom:GPT-6 Luna-12",
+        name: "GPT-6 Luna",
+        aliases: ["Luna-12"],
+        isCustom: true,
+        capabilities: {
+          optionDescriptors: [
+            {
+              id: "reasoning_effort",
+              label: "Reasoning",
+              type: "select" as const,
+              options: [
+                { id: "medium", label: "Medium" },
+                { id: "high", label: "High" },
+              ],
+            },
+          ],
+        },
+      },
+    ];
+
+    expect(formatModelSelectionEffort(selection, models)).toBe("Medium");
+    expect(formatModelSelectionEffort({ ...selection, model: "Luna-12" }, models)).toBe("Medium");
   });
 });
 

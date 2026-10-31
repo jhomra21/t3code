@@ -154,12 +154,27 @@ export const REASONING_EFFORT_OPTION_IDS: ReadonlyArray<string> = [
   "thinking_level",
 ];
 
+function findSelectionCatalogModel(
+  models: ReadonlyArray<ServerProviderModel>,
+  model: string,
+): ServerProviderModel | undefined {
+  const name = model.trim().toLowerCase();
+  return (
+    models.find((candidate) => candidate.slug === model) ??
+    models.find(
+      (candidate) =>
+        candidate.name.trim().toLowerCase() === name ||
+        candidate.aliases?.some((alias) => alias.trim().toLowerCase() === name),
+    )
+  );
+}
+
 export function formatModelSelectionEffort(
   selection: ModelSelection,
   models: ReadonlyArray<ServerProviderModel> = [],
   reportedSelection?: ModelSelection | null,
 ): string | null {
-  const caps = models.find((model) => model.slug === selection.model)?.capabilities;
+  const caps = findSelectionCatalogModel(models, selection.model)?.capabilities;
   if (!caps) return null;
   for (const id of REASONING_EFFORT_OPTION_IDS) {
     const descriptor = caps.optionDescriptors?.find((candidate) => candidate.id === id);
