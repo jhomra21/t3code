@@ -40,6 +40,7 @@ import {
   handoffBudget,
   attachmentTokenAllowance,
   contextUsageForHandoff,
+  handoffRemainingWindow,
   historicalMessage,
   latestNativeContextUsage,
 } from "@t3tools/provider-core/server/handoffBudget";
@@ -939,6 +940,18 @@ export const layer: Layer.Layer<
           legacyInputRunIds,
           missedRuns,
           missedRunIds,
+          fallbackBudget: Effect.gen(function* () {
+            return handoffRemainingWindow({
+              modelContextWindow,
+              userText: restartNote === "" ? userText : `${restartNote}\n\n${userText}`,
+              attachments: message.attachments,
+              providerThread: budgetProviderThread,
+              nativeContextEstimate:
+                budgetProviderThread.contextUsage?.usedTokens === undefined
+                  ? yield* nativeContextEstimate
+                  : 0,
+            });
+          }),
           budget: Effect.gen(function* () {
             return handoffBudget({
               tokenCap,
@@ -1123,6 +1136,8 @@ export const layer: Layer.Layer<
             handoffs: [...handoffs, ...resumedRetryHandoff],
             providerThread: { ...resumed.success, id: providerThread.id },
             budget: context.budget,
+            fallbackBudget: context.fallbackBudget,
+            sameNativeThread: context.sameNativeThread,
             deferInline: isCompactionCommandMessage(message) || goalCommand,
             alreadyDeliveredItemIds: context.deliveredItemIds,
             persist: () => Effect.void,
@@ -1386,7 +1401,9 @@ export const layer: Layer.Layer<
           const delivery = yield* deliverContextHandoffs({
             handoffs: [...effectiveHandoffs, ...retryHandoff],
             deferInline: compact || goalCommand,
+            sameNativeThread,
             providerThread: runningProviderThread,
+            fallbackBudget: handoffContext.fallbackBudget,
             budget,
             alreadyDeliveredItemIds: deliveredItemIds,
             ...(session.injectHistory === undefined

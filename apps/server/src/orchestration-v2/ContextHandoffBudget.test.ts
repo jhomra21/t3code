@@ -638,6 +638,22 @@ describe("handoff delivery", () => {
       }).pipe(Effect.result);
       assert.equal(result._tag, "Failure");
       assert.equal(calls, 0);
+
+      const remaining = yield* deliverContextHandoffs({
+        handoffs: [handoff],
+        providerThread,
+        budget: 0,
+        fallbackBudget: 9_000,
+        sameNativeThread: true,
+        alreadyDeliveredItemIds: new Set(),
+        inject: (history) => {
+          assert.deepEqual(history.messages, []);
+          assert.include(history.context, "t3_thread_read");
+          return Effect.succeed(true);
+        },
+        persist: () => Effect.void,
+      }).pipe(Effect.result);
+      assert.equal(remaining._tag, "Success");
     }),
   );
 });

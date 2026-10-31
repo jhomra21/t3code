@@ -18,6 +18,8 @@ export const deliverContextHandoffs = Effect.fn("orchestrationV2.deliverContextH
     readonly handoffs: ReadonlyArray<OrchestrationV2ContextHandoff>;
     readonly providerThread: OrchestrationV2ProviderThread;
     readonly budget: number | Effect.Effect<number, BudgetError>;
+    readonly fallbackBudget?: number | Effect.Effect<number, BudgetError>;
+    readonly sameNativeThread?: boolean;
     readonly deferInline?: boolean;
     readonly alreadyDeliveredItemIds: ReadonlySet<string>;
     readonly inject?: (
@@ -64,15 +66,42 @@ export const deliverContextHandoffs = Effect.fn("orchestrationV2.deliverContextH
       oldContext && historyCost([], `${coverage}\n${oldContext}`) + 512 <= budget
         ? `${coverage}\n${oldContext}`
         : coverage;
-    const selected = selectHistory({
+    let selected = selectHistory({
       messages,
       coverage: fullCoverage,
       omittedItems: pending.reduce((sum, handoff) => sum + (handoff.history?.omittedItems ?? 0), 0),
       budget,
     });
     if (historyCost(selected.messages, selected.context) > budget) {
-      if (input.deferInline) return { context: "", delivered: Effect.void, unsent: Effect.void };
-      return yield* new ContextHandoffBudgetError();
+      if (
+        nativeThreadId !== undefined &&
+        input.sameNativeThread &&
+        input.fallbackBudget !== undefined
+      ) {
+        const fallbackBudget =
+          typeof input.fallbackBudget === "number"
+            ? input.fallbackBudget
+            : yield* input.fallbackBudget;
+        const pointer = selectHistory({
+          messages: [],
+          coverage,
+          omittedItems: pending.reduce(
+            (sum, handoff) =>
+              sum + (handoff.history?.omittedItems ?? 0) + (handoff.history?.messages.length ?? 0),
+            0,
+          ),
+          budget: fallbackBudget,
+        });
+        if (historyCost(pointer.messages, pointer.context) <= fallbackBudget)
+          selected = {
+            ...pointer,
+            omittedItemIds: messages.map((message) => message.itemId),
+          };
+        else if (!input.deferInline) return yield* new ContextHandoffBudgetError();
+        else return { context: "", delivered: Effect.void, unsent: Effect.void };
+      } else if (input.deferInline)
+        return { context: "", delivered: Effect.void, unsent: Effect.void };
+      else return yield* new ContextHandoffBudgetError();
     }
     const omittedItemIds = new Set(selected.omittedItemIds);
     const persist = (status: "pending" | "injected" | "inline") =>
