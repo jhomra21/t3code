@@ -117,7 +117,7 @@ const droidProviderCapabilitiesV2 = {
     canCreateEmptyThread: true,
     canReadThreadSnapshot: true,
     canRollbackThread: true,
-    canForkThread: false,
+    canForkThread: true,
     canForkFromTurn: false,
     canForkFromSubagentThread: false,
     exposesNativeThreadId: true,
@@ -570,8 +570,10 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
         let lastContext: ActiveTurn | null = null;
         let providerThread: OrchestrationV2ProviderThread | null = null;
         let connection: DroidRpc.DroidRpcConnection | null = null;
-        const sessionLoadOptions = Effect.fn("DroidAdapter.sessionLoadOptions")(function* () {
-          const mcp = yield* mcpSessions.read(sessionInput.threadId);
+        const sessionLoadOptions = Effect.fn("DroidAdapter.sessionLoadOptions")(function* (
+          threadId = sessionInput.threadId,
+        ) {
+          const mcp = yield* mcpSessions.read(threadId);
           return {
             mcpServers:
               mcp === undefined
@@ -2213,6 +2215,7 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
             selection: ModelSelection,
             policy: ProviderAdapter.ProviderAdapterV2RuntimePolicy,
             resumeId?: string,
+            restoreSettings = true,
           ) {
             if (connection !== null && nativeId === resumeId) return;
             if (connection !== null) yield* closeConnection();
@@ -2279,7 +2282,7 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
             nativeId = resumeId ?? result.sessionId ?? null;
             if (nativeId === null)
               return yield* protocolError("Droid initialization did not return a session id");
-            if (resumeId !== undefined) {
+            if (resumeId !== undefined && restoreSettings) {
               yield* rpc.request("droid.update_session_settings", settings);
             }
             settingsModel = selection.model;
@@ -2860,16 +2863,96 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
                 ),
               ),
           ),
-          forkThread: (input) =>
-            Effect.fail(
-              new ProviderAdapter.ProviderAdapterForkThreadError({
+          forkThread: Effect.fn("DroidAdapter.forkThread")(
+            function* (input: ProviderAdapter.ProviderAdapterV2ForkThreadInput) {
+              if (input.providerTurnId !== undefined) {
+                const head = (input.sourceProviderTurns ?? Array.from(turns.values())).reduce<
+                  OrchestrationV2ProviderTurn | undefined
+                >(
+                  (latest, turn) =>
+                    turn.providerThreadId === input.sourceProviderThread.id &&
+                    (latest === undefined || turn.ordinal > latest.ordinal)
+                      ? turn
+                      : latest,
+                  undefined,
+                );
+                if (
+                  head?.id !== input.providerTurnId ||
+                  head.status === "running" ||
+                  head.status === "pending"
+                )
+                  return yield* protocolError("Droid can only fork the current session head");
+              }
+              if (
+                active !== null ||
+                input.sourceProviderThread.status === "active" ||
+                pending.size > 0 ||
+                wakePending ||
+                children.values().some((child) => child.task.status === "running") ||
+                (input.sourceProviderThread.pendingBackgroundTasks?.length ?? 0) > 0
+              )
+                return yield* protocolError("Stop active and background work before forking Droid");
+              const sourceId = input.sourceProviderThread.nativeThreadRef?.nativeId;
+              if (sourceId === undefined || sourceId === null)
+                return yield* protocolError("Droid fork source has no native session id");
+              const selection = input.modelSelection ?? sessionInput.modelSelection;
+              const policy = input.runtimePolicy ?? sessionInput.runtimePolicy;
+              yield* openConnection(selection, policy, sourceId, false);
+              const rpc = yield* requireConnection();
+              const response = yield* rpc.request("droid.fork_session", {});
+              const result = yield* decode(
+                Schema.Struct({ newSessionId: Schema.String }),
+                response.result,
+              );
+              if (result.newSessionId.length === 0 || result.newSessionId === sourceId)
+                return yield* protocolError("Droid fork did not return a distinct session id");
+              yield* rpc.request("droid.load_session", {
+                sessionId: result.newSessionId,
+                ...(yield* sessionLoadOptions(input.targetThreadId)),
+              });
+              nativeId = result.newSessionId;
+              yield* applySettings(selection, policy);
+              const now = yield* DateTime.now;
+              providerThread = {
+                id: ids.derive.providerThread({
+                  driver: DROID_PROVIDER,
+                  providerInstanceId: options.instanceId,
+                  nativeThreadId: nativeId,
+                }),
                 driver: DROID_PROVIDER,
-                providerThreadId: input.sourceProviderThread.id,
-                cause: protocolError(
-                  "Native Droid fork identity and history semantics have not been verified",
+                providerInstanceId: options.instanceId,
+                providerSessionId: session.id,
+                appThreadId: input.targetThreadId,
+                ownerNodeId: input.ownerNodeId ?? null,
+                nativeThreadRef: nativeRef(nativeId),
+                nativeConversationHeadRef: null,
+                status: "idle",
+                firstRunOrdinal: null,
+                lastRunOrdinal: null,
+                handoffIds: [],
+                forkedFrom: {
+                  providerThreadId: input.sourceProviderThread.id,
+                  ...(input.providerTurnId === undefined
+                    ? {}
+                    : { providerTurnId: input.providerTurnId }),
+                },
+                createdAt: now,
+                updatedAt: now,
+              };
+              return providerThread;
+            },
+            (effect, input) =>
+              effect.pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new ProviderAdapter.ProviderAdapterForkThreadError({
+                      driver: DROID_PROVIDER,
+                      providerThreadId: input.sourceProviderThread.id,
+                      cause,
+                    }),
                 ),
-              }),
-            ),
+              ),
+          ),
           compactThread: (input) =>
             startTurnWithFailureCleanup(input, true).pipe(
               Effect.mapError(

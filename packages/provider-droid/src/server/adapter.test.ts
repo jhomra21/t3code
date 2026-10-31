@@ -94,6 +94,7 @@ const makeFakeDroid = (
     readonly holdAddUserMessageResponse?: boolean;
     readonly nativeSessionId?: string;
     readonly rewindSessionId?: string;
+    readonly forkSessionId?: string;
     readonly failInterruptSession?: boolean;
     readonly holdInterruptSessionResponse?: boolean;
   } = {},
@@ -231,6 +232,7 @@ const responseFor = (
     };
     readonly nativeSessionId?: string;
     readonly rewindSessionId?: string;
+    readonly forkSessionId?: string;
     readonly failInterruptSession?: boolean;
     readonly holdInterruptSessionResponse?: boolean;
   },
@@ -256,7 +258,9 @@ const responseFor = (
                   ? (options.compactSessionResult ?? {})
                   : frame.method === "droid.execute_rewind"
                     ? { newSessionId: options.rewindSessionId ?? "rewound-session" }
-                    : {},
+                    : frame.method === "droid.fork_session"
+                      ? { newSessionId: options.forkSessionId ?? "forked-session" }
+                      : {},
       }),
 });
 
@@ -600,6 +604,127 @@ const lifecycleFixture = Effect.fnUntraced(function* (
 });
 
 describe("Droid adapter", () => {
+  it.effect.each([false, true])(
+    "forks the session head with explicit boundary %s into a distinct thread with target MCP tools",
+    (explicitBoundary) =>
+      provide(
+        Effect.gen(function* () {
+          const sourceFake = yield* makeFakeDroid();
+          const source = yield* open(sourceFake);
+          const completed = yield* Deferred.make<void>();
+          yield* source.runtime.events.pipe(
+            Stream.runForEach((event) =>
+              event.type === "turn.terminal" ? Deferred.succeed(completed, undefined) : Effect.void,
+            ),
+            Effect.forkChild,
+          );
+          yield* source.runtime.startTurn(source.input);
+          yield* sourceFake.takeRequest("droid.add_user_message");
+          yield* sourceFake.emitNotification({
+            type: "agent_turn_completed",
+            reason: "completed",
+            turnId: source.input.message.messageId,
+          });
+          yield* Deferred.await(completed);
+          const sourceTurns = (yield* source.runtime.readThreadSnapshot({
+            providerThread: source.providerThread,
+          })).providerTurns;
+          const fake = yield* makeFakeDroid();
+          const targetThreadId = ThreadId.make("droid-fork-target");
+          const config: McpProviderSessionConfig = {
+            environmentId: EnvironmentId.make("droid-adapter-test-environment"),
+            threadId: targetThreadId,
+            providerSessionId: "droid-adapter-test-session",
+            providerInstanceId: instanceId,
+            endpoint: "http://127.0.0.1:9/mcp",
+            authorizationHeader: "Bearer dummy",
+            browserToolsAvailable: false,
+          };
+          const target = yield* open(
+            fake,
+            undefined,
+            undefined,
+            config,
+            undefined,
+            source.providerThread,
+            true,
+          );
+          const forked = yield* target.runtime.forkThread({
+            sourceProviderThread: source.providerThread,
+            targetThreadId,
+            ...(explicitBoundary
+              ? { sourceProviderTurns: sourceTurns, providerTurnId: sourceTurns[0]!.id }
+              : {}),
+          });
+          assert.notEqual(forked.id, source.providerThread.id);
+          assert.equal(forked.nativeThreadRef?.nativeId, "forked-session");
+          assert.equal(source.providerThread.nativeThreadRef?.nativeId, "native-session");
+          assert.equal(forked.appThreadId, targetThreadId);
+          assert.deepEqual(forked.forkedFrom, {
+            providerThreadId: source.providerThread.id,
+            ...(explicitBoundary ? { providerTurnId: sourceTurns.at(-1)?.id } : {}),
+          });
+          assert.isBelow(
+            fake.requestedMethods.indexOf("droid.fork_session"),
+            fake.requestedMethods.indexOf("droid.update_session_settings"),
+          );
+          const sourceLoad = yield* fake.takeRequest("droid.load_session");
+          assert.equal(Reflect.get(sourceLoad.params ?? {}, "sessionId"), "native-session");
+          yield* fake.takeRequest("droid.fork_session");
+          const forkLoad = yield* fake.takeRequest("droid.load_session");
+          assert.equal(Reflect.get(forkLoad.params ?? {}, "sessionId"), "forked-session");
+          assert.deepEqual(Reflect.get(forkLoad.params ?? {}, "mcpServers"), [
+            {
+              type: "http",
+              name: "t3-code",
+              url: config.endpoint,
+              headers: [{ name: "Authorization", value: config.authorizationHeader }],
+            },
+          ]);
+          assert.notInclude(fake.requestedMethods, "droid.execute_rewind");
+        }),
+      ),
+  );
+
+  it.effect.each(["historical", "same-id", "active", "source-active", "background"])(
+    "rejects unsafe %s forks",
+    (reason) =>
+      provide(
+        Effect.gen(function* () {
+          const fake = yield* makeFakeDroid({
+            forkSessionId: reason === "same-id" ? "native-session" : "forked-session",
+          });
+          const { runtime, input, providerThread } = yield* open(fake);
+          if (reason === "active") {
+            yield* runtime.startTurn(input);
+            yield* fake.takeRequest("droid.add_user_message");
+          }
+          const error = yield* Effect.flip(
+            runtime.forkThread({
+              sourceProviderThread:
+                reason === "background"
+                  ? {
+                      ...providerThread,
+                      pendingBackgroundTasks: [
+                        { taskId: "child", kind: "subagent", description: "running" },
+                      ],
+                    }
+                  : reason === "source-active"
+                    ? { ...providerThread, status: "active" }
+                    : providerThread,
+              targetThreadId: ThreadId.make("droid-fork-target"),
+              ...(reason === "historical"
+                ? { providerTurnId: ProviderTurnId.make("old-turn") }
+                : {}),
+            }),
+          );
+          assert.instanceOf(error, ProviderAdapter.ProviderAdapterForkThreadError);
+          if (reason !== "same-id") assert.notInclude(fake.requestedMethods, "droid.fork_session");
+          assert.notInclude(fake.requestedMethods, "droid.execute_rewind");
+        }),
+      ),
+  );
+
   it.effect.each([
     { mode: "direct", frames: droid1289Direct },
     { mode: "script", frames: droid1289Script },
