@@ -172,6 +172,153 @@ it.effect("routes shared-runtime events only to their owning root run", () =>
   }),
 );
 
+it("claims a resumed run-owned subagent thread before routing its child events", () => {
+  const threadId = ThreadId.make("thread:resumed-child-routing");
+  const childThreadId = ThreadId.make("thread:resumed-child-routing:child");
+  const runId = RunId.make("run:resumed-child-routing");
+  const identity: RunExecutionService.ProviderEventRouteIdentity = {
+    threadId,
+    runId,
+    attemptId: RunAttemptId.make("attempt:resumed-child-routing"),
+    providerThreadId: ProviderThreadId.make("provider-thread:resumed-child-routing"),
+  };
+  const initial = RunExecutionService.makeProviderEventRoutingState({
+    identity,
+    providerTurnId: null,
+  });
+  const subagentEvent = {
+    type: "subagent.updated",
+    driver,
+    subagent: {
+      id: NodeId.make("node:resumed-child-routing"),
+      threadId,
+      runId,
+      childThreadId,
+      status: "running",
+    },
+  } as ProviderAdapter.ProviderAdapterV2Event;
+  const childNodeEvent = {
+    type: "node.updated",
+    driver,
+    node: {
+      id: NodeId.make("node:resumed-child-routing:root"),
+      threadId: childThreadId,
+      runId: null,
+      kind: "root_turn",
+      status: "running",
+      completedAt: null,
+      providerThreadId: null,
+    },
+  } as ProviderAdapter.ProviderAdapterV2Event;
+  const childItemEvent = {
+    type: "turn_item.updated",
+    driver,
+    turnItem: {
+      id: TurnItemId.make("turn-item:resumed-child-routing"),
+      threadId: childThreadId,
+      runId: null,
+      nodeId: null,
+      providerThreadId: null,
+      providerTurnId: null,
+      nativeItemRef: null,
+      parentItemId: null,
+      ordinal: 0,
+      status: "running",
+      title: null,
+      startedAt: null,
+      completedAt: null,
+      updatedAt: DateTime.makeUnsafe("2026-01-01T00:00:00.000Z"),
+      type: "assistant_message",
+      messageId: MessageId.make("message:resumed-child-routing"),
+      text: "Child event",
+      streaming: false,
+    },
+  } as ProviderAdapter.ProviderAdapterV2Event;
+  const [subagentAccepted, claimed] = RunExecutionService.routeProviderEvent(
+    subagentEvent,
+    identity,
+    initial,
+  );
+
+  assert.isTrue(subagentAccepted);
+  assert.isTrue(claimed.ownedThreadIds.has(childThreadId));
+  assert.isTrue(RunExecutionService.routeProviderEvent(childNodeEvent, identity, claimed)[0]);
+  assert.isTrue(RunExecutionService.routeProviderEvent(childItemEvent, identity, claimed)[0]);
+});
+
+it("does not claim an unowned subagent's child thread", () => {
+  const threadId = ThreadId.make("thread:unowned-child-routing");
+  const childThreadId = ThreadId.make("thread:unowned-child-routing:child");
+  const identity: RunExecutionService.ProviderEventRouteIdentity = {
+    threadId,
+    runId: RunId.make("run:unowned-child-routing"),
+    attemptId: RunAttemptId.make("attempt:unowned-child-routing"),
+    providerThreadId: ProviderThreadId.make("provider-thread:unowned-child-routing"),
+  };
+  const initial = RunExecutionService.makeProviderEventRoutingState({
+    identity,
+    providerTurnId: null,
+  });
+  const subagentEvent = {
+    type: "subagent.updated",
+    driver,
+    subagent: {
+      id: NodeId.make("node:unowned-child-routing"),
+      threadId: ThreadId.make("thread:unowned-child-routing:other-parent"),
+      runId: RunId.make("run:unowned-child-routing:other"),
+      childThreadId,
+      status: "running",
+    },
+  } as ProviderAdapter.ProviderAdapterV2Event;
+  const childNodeEvent = {
+    type: "node.updated",
+    driver,
+    node: {
+      id: NodeId.make("node:unowned-child-routing:root"),
+      threadId: childThreadId,
+      runId: null,
+      kind: "root_turn",
+      status: "running",
+      completedAt: null,
+      providerThreadId: null,
+    },
+  } as ProviderAdapter.ProviderAdapterV2Event;
+  const childItemEvent = {
+    type: "turn_item.updated",
+    driver,
+    turnItem: {
+      id: TurnItemId.make("turn-item:unowned-child-routing"),
+      threadId: childThreadId,
+      runId: null,
+      nodeId: null,
+      providerThreadId: null,
+      providerTurnId: null,
+      nativeItemRef: null,
+      parentItemId: null,
+      ordinal: 0,
+      status: "running",
+      title: null,
+      startedAt: null,
+      completedAt: null,
+      updatedAt: DateTime.makeUnsafe("2026-01-01T00:00:00.000Z"),
+      type: "assistant_message",
+      messageId: MessageId.make("message:unowned-child-routing"),
+      text: "Child event",
+      streaming: false,
+    },
+  } as ProviderAdapter.ProviderAdapterV2Event;
+  const [subagentAccepted, unchanged] = RunExecutionService.routeProviderEvent(
+    subagentEvent,
+    identity,
+    initial,
+  );
+
+  assert.isFalse(subagentAccepted);
+  assert.isFalse(unchanged.ownedThreadIds.has(childThreadId));
+  assert.isFalse(RunExecutionService.routeProviderEvent(childNodeEvent, identity, unchanged)[0]);
+  assert.isFalse(RunExecutionService.routeProviderEvent(childItemEvent, identity, unchanged)[0]);
+});
+
 it("routes only enrolled workflow members after the root turn ends", () => {
   const threadId = ThreadId.make("thread:late-child");
   const rootProviderTurnId = ProviderTurnId.make("provider-turn:late-child");
