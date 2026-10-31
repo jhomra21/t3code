@@ -154,6 +154,7 @@ Provider transcript recorders live with the server orchestration testkit, not wi
 packages. Use `bun run record:codex-replay -- --scenario <name>` for Codex app-server transcripts
 and `bun run record:claude-replay -- --scenario <name>` for Claude Agent SDK transcripts. Use
 `pnpm --filter t3 record:cursor-replay --scenario <name>` for Cursor Agent SDK transcripts.
+Use `pnpm --filter t3 record:droid-replay -- --scenario <name>` for Factory Droid JSON-RPC transcripts.
 
 ## Contract Test Levels
 

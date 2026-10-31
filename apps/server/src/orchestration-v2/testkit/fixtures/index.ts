@@ -54,8 +54,13 @@ import { assertClaudeMessageSteeringOutput } from "./message_steering/claude_out
 import { assertMessageSteeringOutput } from "./message_steering/codex_output.ts";
 import { assertCursorMessageSteeringOutput } from "./message_steering/cursor_output.ts";
 import { assertGrokMessageSteeringOutput } from "./message_steering/grok_output.ts";
+import { assertDroidMessageSteeringOutput } from "./message_steering/droid_output.ts";
 import { messageSteeringInput } from "./message_steering/input.ts";
 import { assertPiMessageSteeringOutput } from "./message_steering/pi_output.ts";
+import { DROID_PERMISSION_DECLINED_FILE, droidPermissionInput } from "./droid_permission/input.ts";
+import { assertDroidPermissionOutput } from "./droid_permission/output.ts";
+import { droidChildApprovalInput } from "./droid_child_approval/input.ts";
+import { assertDroidChildApprovalOutput } from "./droid_child_approval/output.ts";
 import { MUSE_PERMISSION_DECLINED_FILE, musePermissionInput } from "./muse_permission/input.ts";
 import { assertMusePermissionOutput } from "./muse_permission/output.ts";
 import { museSubagentApprovalInput } from "./muse_subagent_approval/input.ts";
@@ -65,11 +70,15 @@ import { assertMuseSubagentInterruptOutput } from "./muse_subagent_interrupt/out
 import { museWorkflowInput } from "./muse_workflow/input.ts";
 import { assertMuseWorkflowOutput } from "./muse_workflow/output.ts";
 import { assertMuseSubagentV2Output } from "./subagent_v2/muse_output.ts";
+import { droidBackgroundWakeInput } from "./droid_background_wake/input.ts";
+import { assertDroidBackgroundWakeOutput } from "./droid_background_wake/output.ts";
 import { assertMuseMultiTurnOutput } from "./multi_turn/muse_output.ts";
 import { assertMuseTurnInterruptOutput } from "./turn_interrupt/muse_output.ts";
 import { piCompactionInput } from "./pi_compaction/input.ts";
 import { assertPiCompactionOutput } from "./pi_compaction/output.ts";
+import { assertDroidCompactionOutput } from "./pi_compaction/droid_output.ts";
 import { providerThreadResumeInput } from "./provider_thread_resume/input.ts";
+import { assertDroidProviderThreadResumeOutput } from "./provider_thread_resume/droid_output.ts";
 import { assertPiProviderThreadResumeOutput } from "./provider_thread_resume/pi_output.ts";
 import { assertMultiTurnClaudeOutput } from "./multi_turn/claude_output.ts";
 import { assertMultiTurnOutput } from "./multi_turn/codex_output.ts";
@@ -121,12 +130,14 @@ import { proposedPlanInput } from "./proposed_plan/input.ts";
 import { assertQueuedCancelledWhileActiveOutput } from "./queued_cancelled_while_active/codex_output.ts";
 import { queuedCancelledWhileActiveInput } from "./queued_cancelled_while_active/input.ts";
 import { assertQueuedTurnOutput } from "./queued_turn/codex_output.ts";
+import { assertDroidQueuedTurnOutput } from "./queued_turn/droid_output.ts";
 import { queuedTurnInput } from "./queued_turn/input.ts";
 import { assertSimpleClaudeOutput } from "./simple/claude_output.ts";
 import { assertSkillInvocationCursorOutput } from "./skill_invocation/cursor_output.ts";
 import { skillInvocationInput } from "./skill_invocation/input.ts";
 import { assertSimpleOutput } from "./simple/codex_output.ts";
 import { assertPiSimpleOutput } from "./simple/pi_output.ts";
+import { assertDroidSimpleOutput } from "./simple/droid_output.ts";
 import { simpleInput } from "./simple/input.ts";
 import { malformedSessionUpdateInput } from "./malformed_session_update/input.ts";
 import { assertMalformedSessionUpdateOutput } from "./malformed_session_update/output.ts";
@@ -217,6 +228,7 @@ import {
   OPENCODE_MODEL_SELECTION,
   OPENCODE2_MODEL_SELECTION,
   PI_MODEL_SELECTION,
+  DROID_MODEL_SELECTION,
   READ_ONLY_NEVER_POLICY,
   READ_ONLY_ON_REQUEST_POLICY,
   RESTRICTED_GRANULAR_POLICY,
@@ -674,6 +686,12 @@ export const ORCHESTRATOR_REPLAY_FIXTURES: ReadonlyArray<OrchestratorReplayFixtu
         transcriptFile: new URL("./simple/muse_transcript.ndjson", import.meta.url),
         modelSelection: MUSE_MODEL_SELECTION,
         assertOutput: assertSimpleOutput,
+      },
+      {
+        driver: ProviderDriverKind.make("droid"),
+        transcriptFile: new URL("./simple/droid_transcript.ndjson", import.meta.url),
+        modelSelection: DROID_MODEL_SELECTION,
+        assertOutput: assertDroidSimpleOutput,
       },
     ],
   },
@@ -1273,6 +1291,50 @@ export const ORCHESTRATOR_REPLAY_FIXTURES: ReadonlyArray<OrchestratorReplayFixtu
         modelSelection: MUSE_MODEL_SELECTION,
         assertOutput: assertMuseMultiTurnOutput,
       },
+      {
+        driver: ProviderDriverKind.make("droid"),
+        transcriptFile: new URL("./multi_turn/droid_transcript.ndjson", import.meta.url),
+        modelSelection: DROID_MODEL_SELECTION,
+        assertOutput: assertMultiTurnOutput,
+      },
+    ],
+  },
+  {
+    name: "droid_background_wake",
+    buildInput: droidBackgroundWakeInput,
+    providers: [
+      {
+        driver: ProviderDriverKind.make("droid"),
+        transcriptFile: new URL("./droid_background_wake/droid_transcript.ndjson", import.meta.url),
+        modelSelection: DROID_MODEL_SELECTION,
+        runContinuationWorker: true,
+        assertOutput: assertDroidBackgroundWakeOutput,
+      },
+    ],
+  },
+  {
+    name: "droid_permission",
+    buildInput: droidPermissionInput,
+    providers: [
+      {
+        driver: ProviderDriverKind.make("droid"),
+        transcriptFile: new URL("./droid_permission/droid_transcript.ndjson", import.meta.url),
+        modelSelection: DROID_MODEL_SELECTION,
+        expectedAbsentWorkspacePaths: [DROID_PERMISSION_DECLINED_FILE],
+        assertOutput: assertDroidPermissionOutput,
+      },
+    ],
+  },
+  {
+    name: "droid_child_approval",
+    buildInput: droidChildApprovalInput,
+    providers: [
+      {
+        driver: ProviderDriverKind.make("droid"),
+        transcriptFile: new URL("./droid_child_approval/droid_transcript.ndjson", import.meta.url),
+        modelSelection: DROID_MODEL_SELECTION,
+        assertOutput: assertDroidChildApprovalOutput,
+      },
     ],
   },
   {
@@ -1338,6 +1400,12 @@ export const ORCHESTRATOR_REPLAY_FIXTURES: ReadonlyArray<OrchestratorReplayFixtu
         modelSelection: PI_MODEL_SELECTION,
         assertOutput: assertPiCompactionOutput,
       },
+      {
+        driver: ProviderDriverKind.make("droid"),
+        transcriptFile: new URL("./pi_compaction/droid_transcript.ndjson", import.meta.url),
+        modelSelection: DROID_MODEL_SELECTION,
+        assertOutput: assertDroidCompactionOutput,
+      },
     ],
   },
   {
@@ -1350,6 +1418,15 @@ export const ORCHESTRATOR_REPLAY_FIXTURES: ReadonlyArray<OrchestratorReplayFixtu
         modelSelection: PI_MODEL_SELECTION,
         assertOutput: assertPiProviderThreadResumeOutput,
       },
+      {
+        driver: ProviderDriverKind.make("droid"),
+        transcriptFile: new URL(
+          "./provider_thread_resume/droid_transcript.ndjson",
+          import.meta.url,
+        ),
+        modelSelection: DROID_MODEL_SELECTION,
+        assertOutput: assertDroidProviderThreadResumeOutput,
+      },
     ],
   },
   {
@@ -1361,6 +1438,12 @@ export const ORCHESTRATOR_REPLAY_FIXTURES: ReadonlyArray<OrchestratorReplayFixtu
         transcriptFile: new URL("./multi_turn_restart/claude_transcript.ndjson", import.meta.url),
         modelSelection: CLAUDE_MODEL_SELECTION,
         assertOutput: assertMultiTurnClaudeOutput,
+      },
+      {
+        driver: ProviderDriverKind.make("droid"),
+        transcriptFile: new URL("./multi_turn_restart/droid_transcript.ndjson", import.meta.url),
+        modelSelection: DROID_MODEL_SELECTION,
+        assertOutput: assertMultiTurnOutput,
       },
     ],
   },
@@ -1417,6 +1500,12 @@ export const ORCHESTRATOR_REPLAY_FIXTURES: ReadonlyArray<OrchestratorReplayFixtu
         transcriptFile: new URL("./queued_turn/registry_transcript.ndjson", import.meta.url),
         modelSelection: ACP_REGISTRY_MODEL_SELECTION,
         assertOutput: assertQueuedTurnOutput,
+      },
+      {
+        driver: ProviderDriverKind.make("droid"),
+        transcriptFile: new URL("./queued_turn/droid_transcript.ndjson", import.meta.url),
+        modelSelection: DROID_MODEL_SELECTION,
+        assertOutput: assertDroidQueuedTurnOutput,
       },
     ],
   },
@@ -1563,6 +1652,12 @@ export const ORCHESTRATOR_REPLAY_FIXTURES: ReadonlyArray<OrchestratorReplayFixtu
         modelSelection: PI_MODEL_SELECTION,
         assertOutput: assertPiMessageSteeringOutput,
       },
+      {
+        driver: ProviderDriverKind.make("droid"),
+        transcriptFile: new URL("./message_steering/droid_transcript.ndjson", import.meta.url),
+        modelSelection: DROID_MODEL_SELECTION,
+        assertOutput: assertDroidMessageSteeringOutput,
+      },
     ],
   },
   {
@@ -1616,6 +1711,12 @@ export const ORCHESTRATOR_REPLAY_FIXTURES: ReadonlyArray<OrchestratorReplayFixtu
         transcriptFile: new URL("./turn_interrupt/muse_transcript.ndjson", import.meta.url),
         modelSelection: MUSE_MODEL_SELECTION,
         assertOutput: assertMuseTurnInterruptOutput,
+      },
+      {
+        driver: ProviderDriverKind.make("droid"),
+        transcriptFile: new URL("./turn_interrupt/droid_transcript.ndjson", import.meta.url),
+        modelSelection: DROID_MODEL_SELECTION,
+        assertOutput: assertTurnInterruptOutput,
       },
     ],
   },

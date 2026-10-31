@@ -347,6 +347,12 @@ export const PI_MODEL_SELECTION = {
   model: "openrouter/deepseek/deepseek-v4-flash",
 } satisfies ModelSelection;
 
+/** Droid replay recordings use the locally authenticated custom model. */
+export const DROID_MODEL_SELECTION = {
+  instanceId: ProviderInstanceId.make("droid"),
+  model: "custom:GPT-6 Luna-12",
+} satisfies ModelSelection;
+
 export const ACP_REGISTRY_MODEL_SELECTION = {
   instanceId: ProviderInstanceId.make("acpRegistry"),
   model: "default",

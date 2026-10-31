@@ -41,6 +41,22 @@ const encodeServerSettingsPatch = Schema.encodeSync(ServerSettingsPatch);
 const decodeClaudeSettings = Schema.decodeUnknownSync(ClaudeSettings);
 
 describe("storage cleanup settings", () => {
+  it("keeps unconfigured Droid disabled while preserving explicit disabled and enabled settings", () => {
+    const driver = ProviderDriverKind.make("droid");
+    const instanceId = ProviderInstanceId.make("droid");
+    expect(resolveProviderInstanceEnabled({ driver, config: {} })).toBe(false);
+    expect(resolveProjectProviderInstanceEnabled(DEFAULT_SERVER_SETTINGS, null, instanceId)).toBe(
+      false,
+    );
+    for (const enabled of [false, true]) {
+      const stored = decodeServerSettings({
+        providerInstances: { droid: { driver, enabled, config: {} } },
+      });
+      const restored = decodeServerSettings(encodeServerSettings(stored));
+      expect(resolveProviderInstanceEnabled(restored.providerInstances[instanceId]!)).toBe(enabled);
+      expect(resolveProviderInstanceEnabled({ driver, config: { enabled } })).toBe(enabled);
+    }
+  });
   it("keeps cleanup disabled for existing installations", () => {
     expect(decodeServerSettings({}).worktreeCleanup).toBeNull();
     expect(decodeServerSettings({}).storageCleanup).toEqual({

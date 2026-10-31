@@ -29,6 +29,28 @@ export const T3_CODE_ORCHESTRATION_INSTRUCTIONS = `
 ${T3_CODE_ORCHESTRATION_SECTIONS.join("\n\n")}
 `;
 
+const DELEGATE_ONLY_SUBAGENT_BULLET = `- A delegated task/subagent is child work owned by the current thread. Start every subagent with \`delegate_task\`, including same-provider work, and never with the harness's native subagent tool: T3 cannot stop, track, or recover native children. Use \`orchestrator_capabilities\` to discover the current provider/model IDs from the same live catalog as the composer, including configured custom models. Retain each returned \`taskId\`, and use \`task_status\` or \`task_cancel\` to manage it. The returned \`childThreadId\` is backing storage for the subagent, not the target for starting another delegated review round. If a delegated child fails or disconnects, read it with \`task_status\` and \`t3_thread_read\`, then start a new \`delegate_task\` from its saved work. Use a native subagent tool only when the user asks for it by name.`;
+
+export interface T3OrchestrationInstructionOptions {
+  /** For harnesses whose native subagents T3 cannot track: \`delegate_task\` is the only subagent path. */
+  readonly delegateOnly?: boolean;
+  /** Adds harness-specific instructions for discovering and calling T3 tools. */
+  readonly toolAccess?: string;
+}
+
+export function t3CodeOrchestrationInstructions(
+  options: T3OrchestrationInstructionOptions = {},
+): string {
+  if (!options.delegateOnly && options.toolAccess === undefined) {
+    return T3_CODE_ORCHESTRATION_INSTRUCTIONS;
+  }
+  return (
+    T3_CODE_ORCHESTRATION_INSTRUCTIONS.replace(/^- Subagents:.*$/m, (bullet) =>
+      options.delegateOnly ? DELEGATE_ONLY_SUBAGENT_BULLET : bullet,
+    ) + (options.toolAccess === undefined ? "" : `\n\n${options.toolAccess}`)
+  );
+}
+
 export const T3_CODE_BROWSER_TOOL_INSTRUCTIONS = `
 
 ## T3 Code browser

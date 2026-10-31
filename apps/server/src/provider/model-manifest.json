@@ -101,6 +101,16 @@
       ]
     },
     {
+      "driver": "droid",
+      "t3CodeRange": ">=0.0.46",
+      "recommendedRange": ">=0.238.0",
+      "recommendedVersion": "0.238.0",
+      "ranges": [
+        { "range": ">=0.234.0", "status": "supported" },
+        { "range": "<0.234.0", "status": "unknown" }
+      ]
+    },
+    {
       "driver": "fx",
       "t3CodeRange": ">=0.0.46",
       "recommendedRange": ">=0.0.13",

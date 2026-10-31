@@ -176,9 +176,11 @@ const shouldRetainMissingProviderModels = (provider: ServerProvider): boolean =>
     );
   }
 
-  if (provider.driver === ProviderDriverKind.make("grok")) {
-    // Grok reports ready only after it discovers a model list; the pending,
-    // ACP-failed, empty-inventory, and logged-out probes are warning/error.
+  if (
+    provider.driver === ProviderDriverKind.make("droid") ||
+    provider.driver === ProviderDriverKind.make("grok")
+  ) {
+    // Both probes report ready only after discovery; failed probes must preserve the previous list.
     return !(provider.installed && provider.status === "ready");
   }
 
