@@ -47,6 +47,8 @@ import type * as ProviderContinuationRequests from "@t3tools/provider-core/serve
 import * as TestProviderHost from "@t3tools/provider-testing/TestProviderHost";
 import { DROID_PROVIDER, droidSystemPromptAppend, makeDroidAdapterV2 } from "./adapter.ts";
 import droid1286Direct from "./fixtures/1.286.0-direct.json" with { type: "json" };
+import droid1289Direct from "./fixtures/1.289.0-direct.json" with { type: "json" };
+import droid1289Script from "./fixtures/1.289.0-script.json" with { type: "json" };
 import {
   DroidSessionWatch,
   DroidSessionRead,
@@ -598,6 +600,88 @@ const lifecycleFixture = Effect.fnUntraced(function* (
 });
 
 describe("Droid adapter", () => {
+  it.effect.each([
+    { mode: "direct", frames: droid1289Direct },
+    { mode: "script", frames: droid1289Script },
+  ])("replays captured 1.289.0 $mode tools and approvals without warnings", ({ frames }) => {
+    const warnings: unknown[] = [];
+    const logger = Logger.make(({ logLevel, message }) => {
+      if (logLevel === "Warn") warnings.push(message);
+    });
+    return provide(
+      Effect.gen(function* () {
+        const fake = yield* makeFakeDroid({ protocolVersion: "1.289.0" });
+        const { runtime, input } = yield* open(fake);
+        const terminal = yield* Deferred.make<void>();
+        const events: ProviderAdapter.ProviderAdapterV2Event[] = [];
+        yield* runtime.events.pipe(
+          Stream.runForEach((event) => {
+            events.push(event);
+            if (event.type === "turn.terminal") return Deferred.succeed(terminal, undefined);
+            if (
+              event.type === "runtime_request.updated" &&
+              event.runtimeRequest.status === "pending"
+            )
+              return runtime.respondToRuntimeRequest({
+                requestId: event.runtimeRequest.id,
+                decision: "accept",
+              });
+            return Effect.void;
+          }),
+          Effect.forkChild,
+        );
+        yield* runtime.startTurn(input);
+        yield* fake.takeRequest("droid.add_user_message");
+        for (const frame of frames) {
+          if ("notification" in frame && frame.notification !== undefined) {
+            const notification = frame.notification;
+            yield* fake.emitNotification({
+              ...notification,
+              ...("turnId" in notification ? { turnId: input.message.messageId } : {}),
+            });
+          } else if (
+            "params" in frame &&
+            frame.params !== undefined &&
+            "id" in frame &&
+            typeof frame.id === "string"
+          ) {
+            yield* fake.emitRequest(frame.id, "droid.request_permission", frame.params);
+            const reply = yield* fake.takeReply;
+            assert.deepEqual(reply.result, { selectedOption: "proceed_once" });
+          }
+        }
+        yield* Deferred.await(terminal);
+        assert.isTrue(
+          events.some(
+            (event) =>
+              event.type === "turn_item.updated" &&
+              event.turnItem.type === "command_execution" &&
+              event.turnItem.status === "completed" &&
+              event.turnItem.input === "git --version",
+          ),
+        );
+        assert.isTrue(
+          events.some(
+            (event) =>
+              event.type === "turn_item.updated" &&
+              event.turnItem.type === "file_change" &&
+              event.turnItem.status === "completed" &&
+              event.turnItem.changes?.some(
+                (change) => change.operation === "create" && change.path === "/workspace/probe.txt",
+              ),
+          ),
+        );
+        assert.isTrue(
+          events.some(
+            (event) =>
+              event.type === "turn_item.updated" && event.turnItem.type === "approval_request",
+          ),
+        );
+        assert.deepEqual(warnings, []);
+      }).pipe(Effect.provide(Logger.layer([logger], { mergeWithExisting: false }))),
+    );
+  });
+
   it.effect("replays captured 1.286.0 direct tools without unknown notification warnings", () => {
     const warnings: unknown[] = [];
     const logger = Logger.make(({ logLevel, message }) => {
