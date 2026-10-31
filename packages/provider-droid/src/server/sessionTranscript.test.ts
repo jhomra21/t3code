@@ -34,6 +34,54 @@ const assistantRow = (id: string, text: string) =>
   });
 
 describe("Droid session transcript", () => {
+  it.effect("retains snake-case Script ancestry in child tools and results", () =>
+    withFile((directory) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const sessionId = "43a7fb2d-79a1-4c49-a8d1-3b089cf7d202";
+          yield* Effect.promise(() =>
+            NodeFSP.writeFile(
+              NodePath.join(directory, `${sessionId}.jsonl`),
+              row({
+                type: "message",
+                message: {
+                  role: "assistant",
+                  content: [
+                    { type: "tool_use", id: "script", name: "Script", input: {} },
+                    {
+                      type: "tool_use",
+                      id: "nested",
+                      name: "Execute",
+                      input: {},
+                      script_execution: { run_id: "run", outer_tool_use_id: "script" },
+                    },
+                  ],
+                },
+              }) +
+                row({
+                  type: "message",
+                  message: {
+                    role: "user",
+                    content: [{ type: "tool_result", tool_use_id: "nested", content: "done" }],
+                  },
+                }),
+            ),
+          );
+          const follower = yield* makeDroidSubagentFollower({
+            directory,
+            sessionId,
+            onWork: () => Effect.void,
+          });
+          const work = yield* follower.drain;
+          assert.deepInclude(
+            work.steps.find((step) => step.id === "nested"),
+            { parentToolUseId: "script", output: "done" },
+          );
+        }),
+      ),
+    ),
+  );
+
   it.effect("serializes final drains behind watch publication", () =>
     withFile((directory) =>
       Effect.scoped(
