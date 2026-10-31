@@ -121,16 +121,18 @@ function WorkingTimer({ createdAt }: { createdAt: string }) {
 
 const compactWorkEntryHeight = 24;
 
-function ExpandedWorkGroupEntries({
+export function ExpandedWorkGroupEntries({
   anchorKey,
   disclosureAnchorKey,
   entries,
   workspaceRoot,
+  onToggleEntry,
 }: {
   anchorKey: string;
   disclosureAnchorKey: string;
-  entries: TimelineWorkEntry[];
+  entries: ReadonlyArray<TimelineWorkEntry>;
   workspaceRoot: string | undefined;
+  onToggleEntry?: ((collapsed: boolean) => void) | undefined;
 }) {
   const { workGroupViewState: viewState, onToggleWorkEntry } = use(TimelineRowCtx);
   const [initialScrollIndex] = useState(() =>
@@ -154,7 +156,8 @@ function ExpandedWorkGroupEntries({
 
   const groupView = {
     state: viewState,
-    onToggleEntry: (collapsed: boolean) => onToggleWorkEntry(disclosureAnchorKey, collapsed),
+    onToggleEntry: (collapsed: boolean) =>
+      onToggleEntry ? onToggleEntry(collapsed) : onToggleWorkEntry(disclosureAnchorKey, collapsed),
   };
   const updateScrollFades = () => {
     const element = listRef.current?.getScrollableNode();

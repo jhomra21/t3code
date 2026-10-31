@@ -85,14 +85,18 @@ describe("groupNestedToolItems", () => {
     const parent = { ...tool("outer"), runId: null, providerTurnId: "turn" };
     const child = { ...tool("child", "outer"), runId: null, providerTurnId: "turn" };
     expect(group([child, parent])).toEqual([{ ...parent, children: [child] }]);
-    expect(
-      group([
-        { ...child, providerTurnId: null },
-        { ...parent, providerTurnId: null },
-      ]),
-    ).toEqual([
-      { ...child, providerTurnId: null },
-      { ...parent, providerTurnId: null },
+    const runlessParent = { ...parent, providerTurnId: null };
+    const runlessChild = { ...child, providerTurnId: null };
+    expect(group([runlessChild, runlessParent])).toEqual([
+      { ...runlessParent, children: [runlessChild] },
     ]);
+    for (const unrelated of [
+      { ...runlessChild, threadId: "other" },
+      { ...runlessChild, parentItemId: "missing" },
+      { ...runlessChild, providerTurnId: "other" },
+      { ...runlessChild, runId: "other" },
+    ]) {
+      expect(group([runlessParent, unrelated])).toEqual([runlessParent, unrelated]);
+    }
   });
 });

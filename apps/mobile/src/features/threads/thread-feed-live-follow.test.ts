@@ -29,6 +29,20 @@ describe("tool-group scroll restoration", () => {
       index: 2,
       viewOffset: -80,
     });
+    const nestedChildren = Array.from({ length: 1_000 }, (_, index) => ({
+      id: `child-${index}`,
+    }));
+    const nestedPosition = { ...position, rowId: "child-800" };
+    expect(resolveThreadWorkGroupInitialScroll(nestedChildren, nestedPosition)).toEqual({
+      index: 800,
+      viewOffset: -80,
+    });
+    expect(
+      resolveThreadWorkGroupInitialScroll(
+        nestedChildren.map((row) => ({ ...row })),
+        nestedPosition,
+      ),
+    ).toEqual({ index: 800, viewOffset: -80 });
   });
 });
 

@@ -234,6 +234,15 @@ describe("MessagesTimeline work rows", () => {
           status: "completed",
           updatedAt: at,
         }),
+        ...Array.from({ length: 1_000 }, (_, index) =>
+          v2Item("command_execution", {
+            id: `nested-command-${index}`,
+            parentItemId: "script",
+            input: `echo child-${index}`,
+            status: "completed",
+            updatedAt: at,
+          }),
+        ),
       ],
       optimisticMessages: [],
     });
@@ -244,13 +253,19 @@ describe("MessagesTimeline work rows", () => {
     expect(screen.container.querySelector('[data-v2-item-type="command_execution"]')).toBeNull();
     await click(header());
     await expect.element(page.getByRole("button", { name: /bun test nested/ })).toBeVisible();
-    expect(
-      [...screen.container.querySelectorAll("[data-v2-item-type]")].map((row) =>
-        row.getAttribute("data-v2-item-type"),
-      ),
-    ).toEqual(["dynamic_tool", "command_execution", "file_change"]);
+    await expect.element(page.getByRole("region", { name: "Tool calls" })).toBeVisible();
+    expect(screen.container.querySelectorAll("[data-v2-item-type]").length).toBeLessThan(100);
+    const list = screen.container.querySelector<HTMLElement>("[data-tool-group-scroll]")!;
+    await act(() => {
+      list.scrollTop = list.scrollHeight;
+      list.dispatchEvent(new Event("scroll"));
+    });
+    await expect.element(page.getByRole("button", { name: /echo child-999/ })).toBeVisible();
+    expect(screen.container.querySelectorAll("[data-v2-item-type]").length).toBeLessThan(100);
     await click(header());
     expect(screen.container.querySelector('[data-v2-item-type="command_execution"]')).toBeNull();
+    await click(header());
+    await expect.element(page.getByRole("button", { name: /echo child-999/ })).toBeVisible();
   });
   it.each(["delegated", "legacy", "missing"] as const)(
     "uses the reported task for %s completion notifications",
