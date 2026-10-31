@@ -3,7 +3,42 @@ import { ProviderInstanceId, ProviderThreadId } from "@t3tools/contracts";
 import {
   backgroundWorkHoldsCompletion,
   derivePendingBackgroundWork,
+  pendingBackgroundRosterForActiveThread,
 } from "./orchestrationV2PendingBackgroundWork.ts";
+
+describe("pendingBackgroundRosterForActiveThread", () => {
+  it("returns only the active provider thread's roster", () => {
+    expect(
+      pendingBackgroundRosterForActiveThread({
+        activeProviderThreadId: ProviderThreadId.make("active"),
+        providerThreads: [
+          {
+            id: ProviderThreadId.make("other"),
+            pendingBackgroundTasks: [{ taskId: "other", kind: "subagent" }],
+          },
+          {
+            id: ProviderThreadId.make("active"),
+            pendingBackgroundTasks: [{ taskId: "active", kind: "subagent" }],
+          },
+        ],
+      }),
+    ).toEqual([{ taskId: "active", kind: "subagent" }]);
+  });
+
+  it("returns no roster without an active provider thread", () => {
+    expect(
+      pendingBackgroundRosterForActiveThread({
+        activeProviderThreadId: null,
+        providerThreads: [
+          {
+            id: ProviderThreadId.make("provider-thread"),
+            pendingBackgroundTasks: [{ taskId: "active", kind: "subagent" }],
+          },
+        ],
+      }),
+    ).toEqual([]);
+  });
+});
 
 describe("backgroundWorkHoldsCompletion", () => {
   it.each([

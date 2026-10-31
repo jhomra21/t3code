@@ -153,6 +153,7 @@ export function backgroundWorkNowItem(input: {
   readonly threadId: ThreadId;
   readonly tasks: ReadonlyArray<OrchestrationV2PendingBackgroundTask>;
   readonly turnItems: ThreadStructure["turnItems"];
+  readonly canStop: boolean;
   readonly stopDisabled: boolean;
   readonly stopping: boolean;
   readonly onStop: () => Promise<void>;
@@ -218,9 +219,11 @@ export function backgroundWorkNowItem(input: {
             Open
           </InlineButton>
         )}
-        <InlineButton disabled={input.stopDisabled} onClick={() => void input.onStop()}>
-          {input.stopping ? "Stopping..." : "Stop"}
-        </InlineButton>
+        {input.canStop ? (
+          <InlineButton disabled={input.stopDisabled} onClick={() => void input.onStop()}>
+            {input.stopping ? "Stopping..." : "Stop"}
+          </InlineButton>
+        ) : null}
       </>
     ),
   };

@@ -78,6 +78,7 @@ function RestoreBranchHarness(props: {
     runtimeMode: "full-access" as never,
     isWorking: false,
     pendingBackgroundTasks: [],
+    activeBackgroundRoster: [],
     turnItems: [],
     activePendingApproval: null as never,
     activePendingUserInput: null as never,

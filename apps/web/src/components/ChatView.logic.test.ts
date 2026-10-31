@@ -24,6 +24,7 @@ import {
   ThreadId,
   RunId,
   TurnItemId,
+  type OrchestrationV2PendingBackgroundTask,
   type OrchestrationV2ProjectedTurnItem,
   type WorktreeSetupSnapshot,
 } from "@t3tools/contracts";
@@ -38,6 +39,7 @@ import type { Thread } from "../types";
 import { makeThreadFixture, makeThreadProjectionFixture } from "../test-fixtures";
 import {
   getAntigravitySendBlockReason,
+  resolveBackgroundWorkBanner,
   resolveComposerProviderSelection,
   resolveWorktreeSetupProgress,
   peekRememberedThreadTimeline,
@@ -1176,5 +1178,47 @@ describe("deriveWorkspaceMutationId", () => {
     expect(deriveWorkspaceMutationId([item("reply", "assistant_message", "completed")], null)).toBe(
       null,
     );
+  });
+});
+
+describe("background work banner", () => {
+  const activeRoster: ReadonlyArray<OrchestrationV2PendingBackgroundTask> = [
+    { taskId: "subagent", kind: "subagent" },
+  ];
+  const settledTasks: ReadonlyArray<OrchestrationV2PendingBackgroundTask> = [
+    { taskId: "command", kind: "command" },
+  ];
+
+  it("shows the active provider roster while working and withholds Stop", () => {
+    expect(
+      resolveBackgroundWorkBanner({
+        hasActiveThread: true,
+        isWorking: true,
+        activeRoster,
+        settledTasks,
+      }),
+    ).toEqual({ tasks: activeRoster, canStop: false });
+  });
+
+  it("shows settled work and enables Stop after the run ends", () => {
+    expect(
+      resolveBackgroundWorkBanner({
+        hasActiveThread: true,
+        isWorking: false,
+        activeRoster,
+        settledTasks,
+      }),
+    ).toEqual({ tasks: settledTasks, canStop: true });
+  });
+
+  it("shows no work without an active thread", () => {
+    expect(
+      resolveBackgroundWorkBanner({
+        hasActiveThread: false,
+        isWorking: true,
+        activeRoster,
+        settledTasks,
+      }),
+    ).toEqual({ tasks: [], canStop: false });
   });
 });

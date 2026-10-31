@@ -1,4 +1,8 @@
-import { type OrchestrationV2ProviderTurn, type RunAttemptId } from "@t3tools/contracts";
+import {
+  type OrchestrationV2PendingBackgroundTask,
+  type OrchestrationV2ProviderTurn,
+  type RunAttemptId,
+} from "@t3tools/contracts";
 import {
   deriveLatestThreadRun,
   deriveThreadRuntime,
@@ -1565,6 +1569,17 @@ export function deriveThreadPendingBackgroundTasks(projection: ThreadStructure |
       pullRequests: projection.thread.pullRequests,
     }),
   ];
+}
+
+export function resolveBackgroundWorkBanner(input: {
+  readonly hasActiveThread: boolean;
+  readonly isWorking: boolean;
+  readonly activeRoster: ReadonlyArray<OrchestrationV2PendingBackgroundTask>;
+  readonly settledTasks: ReadonlyArray<OrchestrationV2PendingBackgroundTask>;
+}): { tasks: ReadonlyArray<OrchestrationV2PendingBackgroundTask>; canStop: boolean } {
+  if (!input.hasActiveThread) return { tasks: [], canStop: false };
+  if (input.isWorking) return { tasks: input.activeRoster, canStop: false };
+  return { tasks: input.settledTasks, canStop: input.settledTasks.length > 0 };
 }
 
 /**
