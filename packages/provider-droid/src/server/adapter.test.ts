@@ -2409,54 +2409,75 @@ describe("Droid adapter", () => {
     assert.include(withoutMcp, "<sign_in_links>");
   });
 
-  it.effect("shows a completed compaction item and switches to the compacted session", () =>
-    provide(
-      Effect.gen(function* () {
-        const fake = yield* makeFakeDroid({
-          compactSessionResult: { newSessionId: "compacted-session", removedCount: 3 },
-        });
-        const { runtime, input } = yield* open(fake);
-        const events: Array<ProviderAdapter.ProviderAdapterV2Event> = [];
-        const terminalSeen = yield* Deferred.make<void>();
-        yield* runtime.events.pipe(
-          Stream.runForEach((event) => {
-            events.push(event);
-            return event.type === "turn.terminal"
-              ? Deferred.succeed(terminalSeen, undefined)
-              : Effect.void;
-          }),
-          Effect.forkChild,
-        );
-        assert.isDefined(runtime.compactThread);
-        yield* runtime.compactThread?.(input) ?? Effect.void;
-        yield* Deferred.await(terminalSeen);
-        yield* fake.takeRequest("droid.compact_session");
-        const loaded = yield* fake.takeRequest("droid.load_session");
-        assert.deepEqual(
-          typeof loaded.params === "object" && loaded.params !== null
-            ? Reflect.get(loaded.params, "sessionId")
-            : undefined,
-          "compacted-session",
-        );
-        const compaction = events.flatMap((event) =>
-          event.type === "turn_item.updated" && event.turnItem.type === "compaction"
-            ? [event.turnItem]
-            : [],
-        );
-        assert.lengthOf(compaction, 1);
-        assert.equal(compaction[0]?.status, "completed");
-        assert.equal(compaction[0]?.title, "Context compacted");
-        assert.isTrue(
-          events.some(
-            (event) =>
-              event.type === "provider_thread.updated" &&
-              event.providerThread.nativeThreadRef?.nativeId === "compacted-session",
-          ),
-        );
-        const terminal = events.find((event) => event.type === "turn.terminal");
-        assert.equal(terminal?.status, "completed");
-      }),
-    ),
+  it.effect.each(["compacted-session", "native-session"])(
+    "compacts into %s without losing session tools",
+    (newSessionId) =>
+      provide(
+        Effect.gen(function* () {
+          const fake = yield* makeFakeDroid({
+            compactSessionResult: { newSessionId, removedCount: 3 },
+          });
+          const config: McpProviderSessionConfig = {
+            environmentId: EnvironmentId.make("droid-adapter-test-environment"),
+            threadId,
+            providerSessionId: "droid-adapter-test-session",
+            providerInstanceId: instanceId,
+            endpoint: "http://127.0.0.1:9/mcp",
+            authorizationHeader: "Bearer dummy",
+            browserToolsAvailable: false,
+          };
+          const { runtime, input } = yield* open(fake, undefined, undefined, config);
+          const events: Array<ProviderAdapter.ProviderAdapterV2Event> = [];
+          const terminalSeen = yield* Deferred.make<void>();
+          yield* runtime.events.pipe(
+            Stream.runForEach((event) => {
+              events.push(event);
+              return event.type === "turn.terminal"
+                ? Deferred.succeed(terminalSeen, undefined)
+                : Effect.void;
+            }),
+            Effect.forkChild,
+          );
+          assert.isDefined(runtime.compactThread);
+          yield* runtime.compactThread?.(input) ?? Effect.void;
+          yield* Deferred.await(terminalSeen);
+          yield* fake.takeRequest("droid.compact_session");
+          if (newSessionId === "native-session") {
+            assert.notInclude(fake.requestedMethods, "droid.load_session");
+          } else {
+            const loaded = yield* fake.takeRequest("droid.load_session");
+            assert.deepEqual(loaded.params, {
+              sessionId: newSessionId,
+              mcpServers: [
+                {
+                  type: "http",
+                  name: "t3-code",
+                  url: config.endpoint,
+                  headers: [{ name: "Authorization", value: config.authorizationHeader }],
+                },
+              ],
+              autoRejectPermissionRequests: false,
+            });
+          }
+          const compaction = events.flatMap((event) =>
+            event.type === "turn_item.updated" && event.turnItem.type === "compaction"
+              ? [event.turnItem]
+              : [],
+          );
+          assert.lengthOf(compaction, 1);
+          assert.equal(compaction[0]?.status, "completed");
+          assert.equal(compaction[0]?.title, "Context compacted");
+          assert.isTrue(
+            events.some(
+              (event) =>
+                event.type === "provider_thread.updated" &&
+                event.providerThread.nativeThreadRef?.nativeId === newSessionId,
+            ),
+          );
+          const terminal = events.find((event) => event.type === "turn.terminal");
+          assert.equal(terminal?.status, "completed");
+        }),
+      ),
   );
 
   it.effect("persists compacted transcript usage after a manual compaction", () =>
@@ -4843,6 +4864,7 @@ describe("Droid adapter", () => {
         const load = yield* fake.takeRequest("droid.load_session");
         assert.deepEqual(load.params, {
           sessionId: "rewound-native-session",
+          mcpServers: [],
           autoRejectPermissionRequests: false,
         });
         assert.equal(result.providerThread.id, providerThread.id);
@@ -5029,6 +5051,7 @@ describe("Droid adapter", () => {
           const rewoundLoad = yield* freshFake.takeRequest("droid.load_session");
           assert.deepEqual(rewoundLoad.params, {
             sessionId: "rewound-session",
+            mcpServers: [],
             autoRejectPermissionRequests: false,
           });
           assert.equal(result.providerThread.id, persistedThread.id);
