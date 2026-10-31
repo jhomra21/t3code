@@ -603,7 +603,7 @@ describe("Droid adapter", () => {
   it.effect.each([
     { mode: "direct", frames: droid1289Direct },
     { mode: "script", frames: droid1289Script },
-  ])("replays captured 1.289.0 $mode tools and approvals without warnings", ({ frames }) => {
+  ])("replays captured 1.289.0 $mode tools and approvals without warnings", ({ frames, mode }) => {
     const warnings: unknown[] = [];
     const logger = Logger.make(({ logLevel, message }) => {
       if (logLevel === "Warn") warnings.push(message);
@@ -677,10 +677,103 @@ describe("Droid adapter", () => {
               event.type === "turn_item.updated" && event.turnItem.type === "approval_request",
           ),
         );
+        if (mode === "script") {
+          const script = events.find(
+            (event) =>
+              event.type === "turn_item.updated" &&
+              event.turnItem.type === "dynamic_tool" &&
+              event.turnItem.toolName === "Script",
+          );
+          assert.isDefined(script);
+          if (script?.type !== "turn_item.updated") return;
+          const nested = events.flatMap((event) =>
+            event.type === "turn_item.updated" &&
+            ["command_execution", "file_change"].includes(event.turnItem.type)
+              ? [event.turnItem]
+              : [],
+          );
+          assert.isNotEmpty(nested);
+          for (const item of nested) assert.equal(item.parentItemId, script.turnItem.id);
+        }
         assert.deepEqual(warnings, []);
       }).pipe(Effect.provide(Logger.layer([logger], { mergeWithExisting: false }))),
     );
   });
+
+  it.effect("keeps concurrent Script parents distinct and ignores invalid ancestry", () =>
+    provide(
+      Effect.gen(function* () {
+        const fake = yield* makeFakeDroid();
+        const { runtime, input } = yield* open(fake);
+        const terminal = yield* Deferred.make<void>();
+        const items: Array<
+          Extract<ProviderAdapter.ProviderAdapterV2Event, { type: "turn_item.updated" }>["turnItem"]
+        > = [];
+        yield* runtime.events.pipe(
+          Stream.runForEach((event) => {
+            if (event.type === "turn_item.updated") items.push(event.turnItem);
+            return event.type === "turn.terminal"
+              ? Deferred.succeed(terminal, undefined)
+              : Effect.void;
+          }),
+          Effect.forkChild,
+        );
+        yield* runtime.startTurn(input);
+        yield* fake.takeRequest("droid.add_user_message");
+        const tools = [
+          { id: "script-a", name: "Script", input: {} },
+          { id: "script-b", name: "Script", input: {} },
+          {
+            id: "nested-a",
+            name: "Execute",
+            input: {},
+            scriptExecution: { runId: "a", outerToolUseId: "script-a" },
+          },
+          {
+            id: "nested-b",
+            name: "Execute",
+            input: {},
+            scriptExecution: { runId: "b", outerToolUseId: "script-b" },
+          },
+          { id: "script-a-looks-nested", name: "Execute", input: {} },
+          {
+            id: "unknown-parent",
+            name: "Execute",
+            input: {},
+            scriptExecution: { outerToolUseId: "missing" },
+          },
+          {
+            id: "malformed-parent",
+            name: "Execute",
+            input: {},
+            scriptExecution: { outerToolUseId: 42 },
+          },
+        ];
+        for (const tool of tools)
+          yield* fake.emitNotification({
+            type: "create_message",
+            message: { id: tool.id, role: "assistant", content: [{ type: "tool_use", ...tool }] },
+          });
+        for (const tool of tools)
+          yield* fake.emitNotification({
+            type: "tool_result",
+            toolUseId: tool.id,
+            content: "done",
+          });
+        yield* fake.emitNotification({
+          type: "agent_turn_completed",
+          reason: "completed",
+          turnId: input.message.messageId,
+        });
+        yield* Deferred.await(terminal);
+        const itemFor = (id: string) => items.find((item) => item.nativeItemRef?.nativeId === id);
+        assert.equal(itemFor("nested-a")?.parentItemId, itemFor("script-a")?.id);
+        assert.equal(itemFor("nested-b")?.parentItemId, itemFor("script-b")?.id);
+        for (const id of ["script-a-looks-nested", "unknown-parent", "malformed-parent"])
+          assert.equal(itemFor(id)?.parentItemId, null);
+      }),
+    ),
+  );
 
   it.effect("replays captured 1.286.0 direct tools without unknown notification warnings", () => {
     const warnings: unknown[] = [];

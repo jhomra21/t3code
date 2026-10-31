@@ -202,6 +202,7 @@ const ToolUse = Schema.Struct({
   id: Schema.String,
   name: Schema.String,
   input: Schema.Unknown,
+  scriptExecution: Schema.optionalKey(Schema.Unknown),
 });
 const ApprovalFile = Schema.Struct({
   filePath: Schema.optionalKey(Schema.String),
@@ -246,6 +247,7 @@ const ToolProgressUpdate = Schema.Struct({
 });
 const decodeToolProgressUpdate = Schema.decodeUnknownOption(ToolProgressUpdate);
 const ContentPart = Schema.Struct({
+  scriptExecution: Schema.optionalKey(Schema.Unknown),
   type: Schema.String,
   text: Schema.optionalKey(Schema.String),
   thinking: Schema.optionalKey(Schema.String),
@@ -448,6 +450,7 @@ type ActiveTurn = {
   readonly itemStartedAt: Map<string, DateTime.Utc>;
   readonly blocks: Map<string, { text: string; reasoning: boolean }>;
   readonly tools: Map<string, typeof ToolUse.Type>;
+  readonly scriptToolIds: Set<string>;
   readonly toolProgress: Map<string, { timestamp: number; output: string }>;
   readonly malformedToolSearchFailureIds: Set<string>;
   readonly toolSearchCompletion: Deferred.Deferred<void>;
@@ -877,12 +880,27 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
           const toolName = tool.name.replace("___", ".");
           const key =
             child === undefined ? tool.id : `${child.task.nativeTaskRef?.nativeId}:${tool.id}`;
+          if (tool.name === "Script") context.scriptToolIds.add(key);
+          const outerToolUseId = stringField(tool.scriptExecution, "outerToolUseId");
+          const parentKey =
+            outerToolUseId === undefined
+              ? undefined
+              : child === undefined
+                ? outerToolUseId
+                : `${child.task.nativeTaskRef?.nativeId}:${outerToolUseId}`;
           const nodeId = ids.derive.nodeFromProviderItem({
             driver: DROID_PROVIDER,
             nativeItemId: key,
           });
           const base = {
             ...itemBase(context, key, updatedAt),
+            parentItemId:
+              parentKey !== undefined && parentKey !== key && context.scriptToolIds.has(parentKey)
+                ? ids.derive.turnItemFromProviderItem({
+                    driver: DROID_PROVIDER,
+                    nativeItemId: parentKey,
+                  })
+                : null,
             threadId: child?.task.childThreadId ?? context.input.threadId,
             runId: child === undefined ? context.input.runId : null,
             nodeId,
@@ -1039,7 +1057,14 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
             if (step.kind === "tool") {
               yield* emitTool(
                 child.context,
-                { id: step.id, name: step.name, input: step.input },
+                {
+                  id: step.id,
+                  name: step.name,
+                  input: step.input,
+                  ...(step.parentToolUseId === undefined
+                    ? {}
+                    : { scriptExecution: { outerToolUseId: step.parentToolUseId } }),
+                },
                 step.output === null ? "running" : step.isError ? "failed" : "completed",
                 step.output ?? undefined,
                 child,
@@ -2421,6 +2446,7 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
             itemStartedAt: new Map(),
             blocks: new Map(),
             tools: new Map(),
+            scriptToolIds: new Set(),
             toolProgress: new Map(),
             malformedToolSearchFailureIds: new Set(),
             toolSearchCompletion: yield* Deferred.make<void>(),
