@@ -73,7 +73,7 @@ import {
 
 export const DROID_PROVIDER = ProviderDriverKind.make("droid");
 // These versions have been verified in replay; accept compatible 1.x versions from 1.246.0 onward.
-const VERIFIED_PROTOCOLS = new Set(["1.246.0", "1.252.0", "1.257.0", "1.286.0"]);
+const VERIFIED_PROTOCOLS = new Set(["1.246.0", "1.252.0", "1.257.0", "1.286.0", "1.289.0"]);
 const SIGN_IN_LINK_INSTRUCTIONS = `\n\n<sign_in_links>
 When a tool result contains a sign-in or authorization link, such as one from ConnectApp, paste the full link in your reply to the user. Tool output is collapsed in T3 Code and the user may not see it.
 </sign_in_links>`;
