@@ -999,15 +999,18 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
           const childThreadId = child.task.childThreadId;
           if (childThreadId === null) return;
           const updatedAt = yield* DateTime.now;
-          if (work.model !== undefined && work.model !== child.task.model) {
+          if (
+            (work.model !== undefined && work.model !== child.task.model) ||
+            (work.effort !== undefined && work.effort !== child.task.effort)
+          ) {
+            const model =
+              work.model ?? child.task.model ?? child.context.input.modelSelection.model;
+            const effort = work.effort ?? child.task.effort;
             child.task = {
               ...child.task,
-              model: work.model,
-              modelSelection: droidChildModelSelection(
-                options.instanceId,
-                work.model,
-                child.task.effort,
-              ),
+              ...(work.model === undefined ? {} : { model: work.model }),
+              ...(effort === undefined ? {} : { effort }),
+              modelSelection: droidChildModelSelection(options.instanceId, model, effort),
               updatedAt,
             };
             yield* emitChild(child);
