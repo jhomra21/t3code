@@ -33,6 +33,50 @@ const installedDroid: ServerProvider = {
 };
 
 it.layer(NodeServices.layer)("droid maintenance", (it) => {
+  it.effect.each([
+    "C:\\Users\\user\\bin\\droid.exe",
+    "D:/Users/Some User/bin/DROID.EXE",
+    "C:\\tools\\droid.exe",
+  ])("uses native update for Windows standalone %s", (executable) =>
+    droidMaintenanceResolver.resolve({ ...context(executable), platform: "win32" }).pipe(
+      Effect.map((capabilities) =>
+        expect(capabilities.update).toMatchObject({
+          executable,
+          args: ["update"],
+          lockKey: "droid-native",
+        }),
+      ),
+    ),
+  );
+
+  it.effect.each([
+    { executable: "C:\\Users\\user\\bin\\droid.exe", native: true },
+    { executable: "D:/Users/Some User/bin/DROID.EXE", native: true },
+    { executable: "C:\\other\\bin\\droid.exe", native: false },
+    {
+      executable: "C:\\Users\\user\\node_modules\\@factory\\cli-win32-x64\\bin\\droid.exe",
+      native: false,
+    },
+  ])("distinguishes Windows installer ownership for $executable", ({ executable, native }) =>
+    droidMaintenanceResolver
+      .resolve({
+        ...context(executable),
+        platform: "win32",
+        realCommandPath: "C:\\work\\node_modules\\@factory\\cli-win32-x64\\bin\\droid.exe",
+      })
+      .pipe(
+        Effect.map((capabilities) => {
+          if (native)
+            expect(capabilities.update).toMatchObject({
+              executable,
+              args: ["update"],
+              lockKey: "droid-native",
+            });
+          else expect(capabilities.update).toBeNull();
+        }),
+      ),
+  );
+
   it.effect("uses Droid's native updater for its official binary path", () =>
     droidMaintenanceResolver.resolve(context("/home/user/.local/bin/droid")).pipe(
       Effect.map((capabilities) => {
