@@ -25,8 +25,6 @@ export function groupNestedToolItems<T>(
   }
   const parents = items.map((item) => {
     if (!item || !isTool(item.type) || item.parentItemId === null) return undefined;
-    // Without either turn identity, imported history cannot establish same-turn ancestry.
-    if (item.runId === null && item.providerTurnId === null) return undefined;
     const index = byId.get(key(item, item.parentItemId));
     const parent = index == null ? undefined : items[index];
     return parent && isTool(parent.type) && index != null ? index : undefined;

@@ -1,4 +1,5 @@
 import { TimelinePendingApprovalRow } from "./TimelinePendingApprovalRow";
+import { ExpandedWorkGroupEntries } from "./TimelineWorkGroupRows";
 import { WorkLogDetails, WorkLogRow } from "./WorkLog";
 import {
   getQuestionAnswerPreview,
@@ -521,17 +522,13 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
     >
       {expanded && workEntry.nestedToolEntries ? (
         <div className="ms-7" onClick={(event) => event.stopPropagation()}>
-          <WorkGroupViewCtx value={nestedGroupView}>
-            {workEntry.nestedToolEntries.map((child) => (
-              <div key={child.id} data-timeline-row-id={child.id}>
-                <SimpleWorkEntryRow
-                  workEntry={child}
-                  workspaceRoot={workspaceRoot}
-                  onToggleEntry={props.onToggleEntry}
-                />
-              </div>
-            ))}
-          </WorkGroupViewCtx>
+          <ExpandedWorkGroupEntries
+            anchorKey={workEntry.id}
+            disclosureAnchorKey={workEntry.id}
+            entries={workEntry.nestedToolEntries}
+            workspaceRoot={workspaceRoot}
+            onToggleEntry={nestedGroupView.onToggleEntry}
+          />
         </div>
       ) : null}
       {expanded && viewedImage && threadRef ? (

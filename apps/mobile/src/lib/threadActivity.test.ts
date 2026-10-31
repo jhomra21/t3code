@@ -416,8 +416,14 @@ describe("buildThreadFeed", () => {
         "2026-06-20T00:00:02.000Z",
       ).some((entry) => entry.type === "thinking"),
     ).toBe(false);
+    const unrelatedUpdate = buildThreadFeed(
+      [items[0]!, projected({ ...assistantMessage(), text: "Still working" }, 1), items[2]!],
+      { cache },
+    );
+    expect(unrelatedUpdate[0]).toBe(feed[0]);
     const completed = { ...child, status: "completed" as const };
     const updated = buildThreadFeed([...items.slice(0, 2), projected(completed, 2)], { cache });
+    expect(updated[0]).not.toBe(feed[0]);
     expect(updated[0]).toMatchObject({
       activities: [
         {
@@ -439,6 +445,36 @@ describe("buildThreadFeed", () => {
     buildThreadFeed(beforeLateChild, { cache });
     const withLateChild = [...beforeLateChild, projected(child, 3)];
     expect(buildThreadFeed(withLateChild, { cache })).toEqual(buildThreadFeed(withLateChild));
+    const answer = projected(
+      {
+        ...assistantMessage(),
+        id: TurnItemId.make("next-answer"),
+        messageId: MessageId.make("next-answer-message"),
+        runId: RunId.make("next-run"),
+      },
+      4,
+    );
+    const beforeUnrelatedUpdate = buildThreadFeed([...withLateChild, answer], { cache });
+    const afterUnrelatedUpdate = buildThreadFeed(
+      [
+        ...withLateChild,
+        {
+          ...answer,
+          item: { ...answer.item, updatedAt: DateTime.makeUnsafe("2026-06-20T00:00:09.000Z") },
+        },
+      ],
+      { cache },
+    );
+    expect(afterUnrelatedUpdate[0]).toBe(beforeUnrelatedUpdate[0]);
+    expect(afterUnrelatedUpdate[1]).toBe(beforeUnrelatedUpdate[1]);
+    const childBeforeParent = [items[2]!, items[1]!, items[0]!, nextPrompt, answer];
+    buildThreadFeed(childBeforeParent, { cache });
+    const changedParent = [
+      ...childBeforeParent.slice(0, 2),
+      projected({ ...parent, status: "running" }, 2),
+      ...childBeforeParent.slice(3),
+    ];
+    expect(buildThreadFeed(changedParent, { cache })).toEqual(buildThreadFeed(changedParent));
   });
   it("keeps async answers in question history instead of user bubbles", () => {
     const requestId = RuntimeRequestId.make("question");

@@ -165,6 +165,142 @@ function setup({ scheduledTasks = [] as ReadonlyArray<{ id: string; title: strin
 const TASK_ID = ScheduledTaskId.make("task-1");
 const AUTOMATION_PROMPT = "Triage the inbox\n\nLabel every new issue and close duplicates.";
 
+describe("MessagesTimeline work rows", () => {
+  it("discloses nested tools without replacing their normal rows", async () => {
+    setup();
+    const at = DateTime.makeUnsafe(CREATED_AT);
+    const entries = deriveTimelineEntriesFromVisibleTurnItems({
+      visibleTurnItems: [
+        v2Item("dynamic_tool", {
+          id: "script",
+          toolName: "Script",
+          input: {},
+          status: "completed",
+          updatedAt: at,
+        }),
+        v2Item("command_execution", {
+          id: "nested-command",
+          parentItemId: "script",
+          input: "bun test nested",
+          status: "running",
+          updatedAt: at,
+        }),
+        v2Item("file_change", {
+          id: "nested-edit",
+          parentItemId: "script",
+          fileName: "/project/src/nested.ts",
+          status: "completed",
+          updatedAt: at,
+        }),
+        ...Array.from({ length: 1_000 }, (_, index) =>
+          v2Item("command_execution", {
+            id: `nested-command-${index}`,
+            parentItemId: "script",
+            input: `echo child-${index}`,
+            status: "completed",
+            updatedAt: at,
+          }),
+        ),
+      ],
+      optimisticMessages: [],
+    });
+    await using screen = await renderTimeline(entries);
+    const header = () =>
+      screen.container.querySelector<HTMLElement>('[data-v2-item-type="dynamic_tool"]')!;
+    await expect.element(page.getByRole("status")).toHaveTextContent("Running");
+    expect(screen.container.querySelector('[data-v2-item-type="command_execution"]')).toBeNull();
+    await click(header());
+    await expect.element(page.getByRole("button", { name: /bun test nested/ })).toBeVisible();
+    await expect.element(page.getByRole("region", { name: "Tool calls" })).toBeVisible();
+    expect(screen.container.querySelectorAll("[data-v2-item-type]").length).toBeLessThan(100);
+    const list = screen.container.querySelector<HTMLElement>("[data-tool-group-scroll]")!;
+    await act(() => {
+      list.scrollTop = list.scrollHeight;
+      list.dispatchEvent(new Event("scroll"));
+    });
+    await expect.element(page.getByRole("button", { name: /echo child-999/ })).toBeVisible();
+    expect(screen.container.querySelectorAll("[data-v2-item-type]").length).toBeLessThan(100);
+    await click(header());
+    expect(screen.container.querySelector('[data-v2-item-type="command_execution"]')).toBeNull();
+    await click(header());
+    await expect.element(page.getByRole("button", { name: /echo child-999/ })).toBeVisible();
+  });
+  it.each(["delegated", "legacy", "missing"] as const)(
+    "uses the reported task for %s completion notifications",
+    async (source) => {
+      setup();
+      const now = DateTime.makeUnsafe(CREATED_AT);
+      const childThreadId = ThreadId.make("shared-child");
+      const task = (
+        id: string,
+        status: OrchestrationV2Subagent["status"],
+        result: string,
+      ): OrchestrationV2Subagent => ({
+        id: NodeId.make(id),
+        threadId: ThreadId.make("thread-1"),
+        runId: null,
+        parentNodeId: NodeId.make("parent-root"),
+        origin: "app_owned",
+        createdBy: "agent",
+        driver: ProviderDriverKind.make("claudeAgent"),
+        providerInstanceId: ProviderInstanceId.make("claudeAgent"),
+        providerThreadId: null,
+        childThreadId,
+        nativeTaskRef: null,
+        prompt: "Simplify delivery",
+        title: "Simplify delivery",
+        model: null,
+        status,
+        result,
+        startedAt: now,
+        completedAt: now,
+        updatedAt: now,
+      });
+      const tasks = [
+        task("original", "interrupted", "Old interrupted progress"),
+        task("continued", "completed", "Final implementation report"),
+        task("follow-up", "completed", "Follow-up explanation"),
+      ];
+      using _threadAtom = vi.spyOn(environmentThreadDetails, "threadAtom").mockReturnValue(
+        Atom.make({
+          projection: { subagents: tasks, turnItems: [], visibleTurnItems: [] },
+        }) as never,
+      );
+      const onOpenThread = vi.fn();
+      await using screen = await renderTimeline(
+        (source === "delegated" ? ["continued", "follow-up"] : [source]).map((id) =>
+          work(`notification-${id}`, {
+            label: "Notification fallback",
+            tone: "info",
+            itemType: "notification",
+            projectedItem: v2Item("notification", {
+              id: `notification-${id}`,
+              source:
+                source === "legacy"
+                  ? { kind: "subagent", childThreadId }
+                  : { kind: "delegated_task", childThreadId, taskIds: [NodeId.make(id)] },
+              outcome: "completed",
+              summary: "Notification fallback",
+            }),
+          }),
+        ),
+        { onOpenThread },
+      );
+      if (source === "delegated") {
+        expect(screen.text()).toContain("Final implementation report");
+        expect(screen.text()).toContain("Follow-up explanation");
+        expect(screen.text()).not.toContain("Old interrupted progress");
+        await click(screen.buttons("Open Simplify delivery")[0]!);
+        expect(onOpenThread).toHaveBeenCalledWith(childThreadId);
+      } else if (source === "legacy") {
+        expect(screen.text()).toContain("Old interrupted progress");
+      } else {
+        expect(screen.text()).toContain("Notification fallback");
+        expect(screen.text()).not.toContain("Old interrupted progress");
+      }
+    },
+  );
+});
 describe("MessagesTimeline messages", () => {
   it("settles when equally long messages have very different rendered heights", async () => {
     const props = baseProps();

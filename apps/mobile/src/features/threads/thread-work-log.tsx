@@ -510,7 +510,17 @@ export function ThreadWorkLog(props: ThreadWorkLogProps) {
       <View key={row.id}>
         {content}
         {props.expandedRows[row.id] ? (
-          <View className="ml-7">{row.nestedToolActivities.map(renderRow)}</View>
+          <View className="ml-7">
+            <ThreadWorkGroupList
+              activities={row.nestedToolActivities}
+              edgeFadeColor={props.edgeFadeColor}
+              expandedRows={props.expandedRows}
+              groupId={row.id}
+              rowSizing={props.rowSizing}
+              scrollPositions={props.scrollPositions}
+              renderRow={renderRow}
+            />
+          </View>
         ) : null}
       </View>
     );
