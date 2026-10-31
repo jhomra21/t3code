@@ -149,6 +149,7 @@ export const DroidDriver: ProviderDriver<DroidSettings, DroidDriverEnv> = {
       instanceId,
       environment: processEnvironment,
       binaryPath: effectiveConfig.binaryPath.trim() || "droid",
+      toolExecutionMode: effectiveConfig.toolExecutionMode,
       modelCatalog: snapshot.getSnapshot.pipe(Effect.map((current) => current.models)),
       continuationRequests,
     });

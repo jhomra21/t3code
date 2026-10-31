@@ -37,6 +37,12 @@ Models that report reasoning-effort choices show a **Reasoning** option. The
 selected model's supported efforts and default come from Droid.
 Available Droid skills can be invoked from the composer with `$`.
 
+In **Settings → Providers → Factory Droid**, **Tool execution mode** controls
+new sessions. **Default** lets Droid choose for the model. **Direct tools only**
+uses individual tool calls; **Script only** uses JavaScript tool batches.
+Changing this setting does not change an existing session or enable native
+subagents inside Scripts.
+
 T3 Code maps its [permission modes](./permission-modes.md) to Droid autonomy:
 **Supervised** uses `off`, **Auto-accept edits** uses `low`, **Auto** uses
 `medium`, and **Full access** uses `high`. Droid enforces the selected autonomy;
@@ -59,8 +65,10 @@ a subagent independently.
 ## Limits
 
 T3 Code has no flow for importing an existing Factory Droid session.
-Conversation rollback uses Droid's native rewind; forking a thread is not
-supported. Droid can finish
+Conversation rollback uses Droid's native rewind. You can fork a thread at its
+current end without changing the original session; forking from an earlier turn
+or a native subagent is not supported. Stop active and background work before
+forking. Droid can finish
 background tasks after a turn; T3 Code brings their completion back into the
 thread. The context meter shows Droid's context window and usage, and
 **Compact context** (or `/compact`) compacts the session. Droid also compacts
