@@ -12,7 +12,6 @@ import { useRemoteConnections } from "../../state/use-remote-environment-registr
 import { LocalEnvironmentList } from "./LocalEnvironmentList";
 import { LinkedEnvironmentsSection } from "./LinkedEnvironmentsSection";
 import { PullRequestRoutingSettings } from "./PullRequestRoutingSettings";
-import { LinkedEnvironmentsSection } from "./LinkedEnvironmentsSection";
 
 export function ConnectionsRouteScreen() {
   const {
