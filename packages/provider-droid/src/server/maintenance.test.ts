@@ -33,6 +33,102 @@ const installedDroid: ServerProvider = {
 };
 
 it.layer(NodeServices.layer)("droid maintenance", (it) => {
+  it.effect.each([
+    "C:\\Users\\user\\bin\\droid.exe",
+    "D:/Users/Some User/bin/DROID.EXE",
+    "C:\\tools\\droid.exe",
+  ])("uses native update for Windows standalone %s", (executable) =>
+    droidMaintenanceResolver.resolve({ ...context(executable), platform: "win32" }).pipe(
+      Effect.map((capabilities) =>
+        expect(capabilities.update).toMatchObject({
+          executable,
+          args: ["update"],
+          lockKey: "droid-native",
+        }),
+      ),
+    ),
+  );
+
+  it.effect.each([
+    {
+      realPath: "C:\\work\\node_modules\\@factory\\cli-win32-x64\\bin\\droid.exe",
+      lockKey: null,
+    },
+    {
+      realPath:
+        "C:\\Users\\user\\AppData\\Local\\Yarn\\Data\\global\\node_modules\\droid\\bin\\droid.exe",
+      lockKey: "yarn-global",
+    },
+    {
+      realPath:
+        "C:\\Users\\user\\AppData\\Local\\pnpm\\global\\5\\node_modules\\droid\\bin\\droid.exe",
+      lockKey: "pnpm-global",
+    },
+  ])(
+    "uses the package manager for a standalone launcher targeting $realPath",
+    ({ realPath, lockKey }) =>
+      droidMaintenanceResolver
+        .resolve({
+          ...context("C:\\Users\\user\\bin\\droid.exe"),
+          platform: "win32",
+          realCommandPath: realPath,
+        })
+        .pipe(
+          Effect.map((capabilities) => {
+            if (lockKey === null) expect(capabilities.update).toBeNull();
+            else expect(capabilities.update).toMatchObject({ lockKey });
+          }),
+        ),
+  );
+
+  it.effect.each([
+    {
+      executable: "C:\\Users\\user\\bin\\droid.exe",
+      realPath: "C:\\Users\\user\\bin\\droid.exe",
+      native: true,
+    },
+    {
+      executable: "D:/Users/Some User/bin/DROID.EXE",
+      realPath: "D:/Users/Some User/bin/DROID.EXE",
+      native: true,
+    },
+    {
+      executable: "C:\\other\\bin\\droid.exe",
+      realPath: "C:\\work\\node_modules\\@factory\\cli-win32-x64\\bin\\droid.exe",
+      native: false,
+    },
+    {
+      executable: "C:\\Users\\user\\node_modules\\@factory\\cli-win32-x64\\bin\\droid.exe",
+      realPath: "C:\\work\\node_modules\\@factory\\cli-win32-x64\\bin\\droid.exe",
+      native: false,
+    },
+    {
+      executable: "C:\\Users\\user\\bin\\droid.exe",
+      realPath: "C:\\work\\node_modules\\@factory\\cli-win32-x64\\bin\\droid.exe",
+      native: false,
+    },
+  ])(
+    "distinguishes Windows installer ownership for $executable",
+    ({ executable, realPath, native }) =>
+      droidMaintenanceResolver
+        .resolve({
+          ...context(executable),
+          platform: "win32",
+          realCommandPath: realPath,
+        })
+        .pipe(
+          Effect.map((capabilities) => {
+            if (native)
+              expect(capabilities.update).toMatchObject({
+                executable,
+                args: ["update"],
+                lockKey: "droid-native",
+              });
+            else expect(capabilities.update).toBeNull();
+          }),
+        ),
+  );
+
   it.effect("uses Droid's native updater for its official binary path", () =>
     droidMaintenanceResolver.resolve(context("/home/user/.local/bin/droid")).pipe(
       Effect.map((capabilities) => {
@@ -62,7 +158,7 @@ it.layer(NodeServices.layer)("droid maintenance", (it) => {
       ),
   );
 
-  it.effect("keeps native installer ownership ahead of npm realpath ownership", () =>
+  it.effect("uses npm ownership when a native-looking path resolves to npm", () =>
     droidMaintenanceResolver
       .resolve({
         ...context("/home/user/.local/bin/droid"),
@@ -71,9 +167,8 @@ it.layer(NodeServices.layer)("droid maintenance", (it) => {
       .pipe(
         Effect.map((capabilities) => {
           expect(capabilities.update).toMatchObject({
-            executable: "/home/user/.local/bin/droid",
-            args: ["update"],
-            lockKey: "droid-native",
+            executable: "npm",
+            lockKey: "npm-global:/usr/local",
           });
         }),
       ),

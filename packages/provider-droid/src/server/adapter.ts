@@ -73,7 +73,7 @@ import {
 
 export const DROID_PROVIDER = ProviderDriverKind.make("droid");
 // These versions have been verified in replay; accept compatible 1.x versions from 1.246.0 onward.
-const VERIFIED_PROTOCOLS = new Set(["1.246.0", "1.252.0", "1.257.0", "1.286.0"]);
+const VERIFIED_PROTOCOLS = new Set(["1.246.0", "1.252.0", "1.257.0", "1.286.0", "1.289.0"]);
 const SIGN_IN_LINK_INSTRUCTIONS = `\n\n<sign_in_links>
 When a tool result contains a sign-in or authorization link, such as one from ConnectApp, paste the full link in your reply to the user. Tool output is collapsed in T3 Code and the user may not see it.
 </sign_in_links>`;
@@ -117,7 +117,7 @@ const droidProviderCapabilitiesV2 = {
     canCreateEmptyThread: true,
     canReadThreadSnapshot: true,
     canRollbackThread: true,
-    canForkThread: false,
+    canForkThread: true,
     canForkFromTurn: false,
     canForkFromSubagentThread: false,
     exposesNativeThreadId: true,
@@ -202,6 +202,7 @@ const ToolUse = Schema.Struct({
   id: Schema.String,
   name: Schema.String,
   input: Schema.Unknown,
+  scriptExecution: Schema.optionalKey(Schema.Unknown),
 });
 const ApprovalFile = Schema.Struct({
   filePath: Schema.optionalKey(Schema.String),
@@ -246,6 +247,7 @@ const ToolProgressUpdate = Schema.Struct({
 });
 const decodeToolProgressUpdate = Schema.decodeUnknownOption(ToolProgressUpdate);
 const ContentPart = Schema.Struct({
+  scriptExecution: Schema.optionalKey(Schema.Unknown),
   type: Schema.String,
   text: Schema.optionalKey(Schema.String),
   thinking: Schema.optionalKey(Schema.String),
@@ -433,6 +435,7 @@ export type DroidAdapterV2Options = {
   readonly instanceId: ProviderInstanceId;
   readonly environment: NodeJS.ProcessEnv;
   readonly binaryPath: string;
+  readonly toolExecutionMode?: "default" | "direct_only" | "script_only" | undefined;
   readonly modelCatalog?: Effect.Effect<ReadonlyArray<ServerProviderModel>>;
   readonly continuationRequests?: Pick<
     Context.Service.Shape<typeof ProviderContinuationRequests.ProviderContinuationRequests>,
@@ -448,6 +451,7 @@ type ActiveTurn = {
   readonly itemStartedAt: Map<string, DateTime.Utc>;
   readonly blocks: Map<string, { text: string; reasoning: boolean }>;
   readonly tools: Map<string, typeof ToolUse.Type>;
+  readonly scriptToolIds: Set<string>;
   readonly toolProgress: Map<string, { timestamp: number; output: string }>;
   readonly malformedToolSearchFailureIds: Set<string>;
   readonly toolSearchCompletion: Deferred.Deferred<void>;
@@ -466,6 +470,7 @@ type ActiveTurn = {
 };
 type ChildState = {
   task: OrchestrationV2Subagent;
+  recordedEffort: string | undefined;
   background: boolean;
   readonly rootNodeId: NodeId;
   readonly parentRootNodeId: NodeId;
@@ -567,6 +572,25 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
         let lastContext: ActiveTurn | null = null;
         let providerThread: OrchestrationV2ProviderThread | null = null;
         let connection: DroidRpc.DroidRpcConnection | null = null;
+        const sessionLoadOptions = Effect.fn("DroidAdapter.sessionLoadOptions")(function* (
+          threadId = sessionInput.threadId,
+        ) {
+          const mcp = yield* mcpSessions.read(threadId);
+          return {
+            mcpServers:
+              mcp === undefined
+                ? []
+                : [
+                    {
+                      type: "http",
+                      name: "t3-code",
+                      url: mcp.endpoint,
+                      headers: [{ name: "Authorization", value: mcp.authorizationHeader }],
+                    },
+                  ],
+            autoRejectPermissionRequests: false,
+          };
+        });
         let nativeId: string | null = null;
         let connectionScope: Scope.Closeable | null = null;
         let wakePending = false;
@@ -860,12 +884,27 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
           const toolName = tool.name.replace("___", ".");
           const key =
             child === undefined ? tool.id : `${child.task.nativeTaskRef?.nativeId}:${tool.id}`;
+          if (tool.name === "Script") context.scriptToolIds.add(key);
+          const outerToolUseId = stringField(tool.scriptExecution, "outerToolUseId");
+          const parentKey =
+            outerToolUseId === undefined
+              ? undefined
+              : child === undefined
+                ? outerToolUseId
+                : `${child.task.nativeTaskRef?.nativeId}:${outerToolUseId}`;
           const nodeId = ids.derive.nodeFromProviderItem({
             driver: DROID_PROVIDER,
             nativeItemId: key,
           });
           const base = {
             ...itemBase(context, key, updatedAt),
+            parentItemId:
+              parentKey !== undefined && parentKey !== key && context.scriptToolIds.has(parentKey)
+                ? ids.derive.turnItemFromProviderItem({
+                    driver: DROID_PROVIDER,
+                    nativeItemId: parentKey,
+                  })
+                : null,
             threadId: child?.task.childThreadId ?? context.input.threadId,
             runId: child === undefined ? context.input.runId : null,
             nodeId,
@@ -999,15 +1038,19 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
           const childThreadId = child.task.childThreadId;
           if (childThreadId === null) return;
           const updatedAt = yield* DateTime.now;
-          if (work.model !== undefined && work.model !== child.task.model) {
+          if (work.effort !== undefined) child.recordedEffort = work.effort;
+          if (
+            (work.model !== undefined && work.model !== child.task.model) ||
+            (work.effort !== undefined && work.effort !== child.task.effort)
+          ) {
+            const model =
+              work.model ?? child.task.model ?? child.context.input.modelSelection.model;
+            const effort = work.effort ?? child.task.effort;
             child.task = {
               ...child.task,
-              model: work.model,
-              modelSelection: droidChildModelSelection(
-                options.instanceId,
-                work.model,
-                child.task.effort,
-              ),
+              ...(work.model === undefined ? {} : { model: work.model }),
+              ...(effort === undefined ? {} : { effort }),
+              modelSelection: droidChildModelSelection(options.instanceId, model, effort),
               updatedAt,
             };
             yield* emitChild(child);
@@ -1019,7 +1062,14 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
             if (step.kind === "tool") {
               yield* emitTool(
                 child.context,
-                { id: step.id, name: step.name, input: step.input },
+                {
+                  id: step.id,
+                  name: step.name,
+                  input: step.input,
+                  ...(step.parentToolUseId === undefined
+                    ? {}
+                    : { scriptExecution: { outerToolUseId: step.parentToolUseId } }),
+                },
                 step.output === null ? "running" : step.isError ? "failed" : "completed",
                 step.output ?? undefined,
                 child,
@@ -1221,6 +1271,7 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
           const tool = context.tools.get(notice.toolUseId);
           const complexity = stringField(tool?.input, "complexity");
           const effort =
+            existing?.recordedEffort ??
             (complexity === undefined ? undefined : DROID_EFFORT_BY_COMPLEXITY.get(complexity)) ??
             existing?.task.effort;
           const model =
@@ -1271,6 +1322,7 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
           };
           const child: ChildState = {
             task,
+            recordedEffort: existing?.recordedEffort,
             background: existing?.background ?? false,
             context,
             rootNodeId: ids.derive.nodeFromProviderItem({
@@ -2168,6 +2220,7 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
             selection: ModelSelection,
             policy: ProviderAdapter.ProviderAdapterV2RuntimePolicy,
             resumeId?: string,
+            restoreSettings = true,
           ) {
             if (connection !== null && nativeId === resumeId) return;
             if (connection !== null) yield* closeConnection();
@@ -2201,17 +2254,7 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
               Effect.provideService(Scope.Scope, childScope),
             );
             connection = rpc;
-            const mcpServers =
-              mcp === undefined
-                ? []
-                : [
-                    {
-                      type: "http",
-                      name: "t3-code",
-                      url: mcp.endpoint,
-                      headers: [{ name: "Authorization", value: mcp.authorizationHeader }],
-                    },
-                  ];
+            const loadOptions = yield* sessionLoadOptions();
             const settings = yield* resolveSettings(selection, policy);
             const response = yield* rpc.request(
               resumeId === undefined ? "droid.initialize_session" : "droid.load_session",
@@ -2220,15 +2263,18 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
                     machineId: "default",
                     cwd,
                     ...settings,
-                    mcpServers,
-                    autoRejectPermissionRequests: false,
+                    ...(options.toolExecutionMode === undefined ||
+                    options.toolExecutionMode === "default"
+                      ? {}
+                      : { toolExecutionMode: options.toolExecutionMode }),
+                    ...loadOptions,
                     systemPrompt: {
                       type: "preset",
                       preset: "droid",
                       append: droidSystemPromptAppend(mcp !== undefined),
                     },
                   }
-                : { sessionId: resumeId, mcpServers, autoRejectPermissionRequests: false },
+                : { sessionId: resumeId, ...loadOptions },
             );
             const protocolVersion = response.factoryProtocolVersion;
             if (protocolVersion === undefined || !isAcceptedDroidProtocolVersion(protocolVersion)) {
@@ -2245,7 +2291,7 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
             nativeId = resumeId ?? result.sessionId ?? null;
             if (nativeId === null)
               return yield* protocolError("Droid initialization did not return a session id");
-            if (resumeId !== undefined) {
+            if (resumeId !== undefined && restoreSettings) {
               yield* rpc.request("droid.update_session_settings", settings);
             }
             settingsModel = selection.model;
@@ -2412,6 +2458,7 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
             itemStartedAt: new Map(),
             blocks: new Map(),
             tools: new Map(),
+            scriptToolIds: new Set(),
             toolProgress: new Map(),
             malformedToolSearchFailureIds: new Set(),
             toolSearchCompletion: yield* Deferred.make<void>(),
@@ -2443,16 +2490,18 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
               Schema.Struct({ newSessionId: Schema.String }),
               response.result,
             );
+            if (result.newSessionId !== nativeId) {
+              yield* rpc.request("droid.load_session", {
+                sessionId: result.newSessionId,
+                ...(yield* sessionLoadOptions()),
+              });
+            }
             nativeId = result.newSessionId;
             providerThread = {
               ...providerThread,
               nativeThreadRef: nativeRef(nativeId),
               updatedAt: yield* DateTime.now,
             };
-            yield* rpc.request("droid.load_session", {
-              sessionId: nativeId,
-              autoRejectPermissionRequests: false,
-            });
             yield* emit({
               type: "provider_thread.updated",
               driver: DROID_PROVIDER,
@@ -2767,7 +2816,7 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
               );
               yield* rpc.request("droid.load_session", {
                 sessionId: result.newSessionId,
-                autoRejectPermissionRequests: false,
+                ...(yield* sessionLoadOptions()),
               });
 
               const rolledBackTurns = new Set(
@@ -2823,16 +2872,100 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
                 ),
               ),
           ),
-          forkThread: (input) =>
-            Effect.fail(
-              new ProviderAdapter.ProviderAdapterForkThreadError({
+          forkThread: Effect.fn("DroidAdapter.forkThread")(
+            function* (input: ProviderAdapter.ProviderAdapterV2ForkThreadInput) {
+              if (input.providerTurnId !== undefined) {
+                const head = (input.sourceProviderTurns ?? Array.from(turns.values())).reduce<
+                  OrchestrationV2ProviderTurn | undefined
+                >(
+                  (latest, turn) =>
+                    turn.providerThreadId === input.sourceProviderThread.id &&
+                    (latest === undefined || turn.ordinal > latest.ordinal)
+                      ? turn
+                      : latest,
+                  undefined,
+                );
+                if (
+                  head?.id !== input.providerTurnId ||
+                  head.status === "running" ||
+                  head.status === "pending"
+                )
+                  return yield* protocolError("Droid can only fork the current session head");
+              }
+              if (
+                active !== null ||
+                input.sourceProviderThread.status === "active" ||
+                pending.size > 0 ||
+                wakePending ||
+                children.values().some((child) => child.task.status === "running") ||
+                (input.sourceProviderThread.pendingBackgroundTasks?.length ?? 0) > 0
+              )
+                return yield* protocolError("Stop active and background work before forking Droid");
+              const sourceId = input.sourceProviderThread.nativeThreadRef?.nativeId;
+              if (sourceId === undefined || sourceId === null)
+                return yield* protocolError("Droid fork source has no native session id");
+              const selection = input.modelSelection ?? sessionInput.modelSelection;
+              const policy = input.runtimePolicy ?? sessionInput.runtimePolicy;
+              yield* openConnection(selection, policy, sourceId, false);
+              const rpc = yield* requireConnection();
+              const response = yield* rpc.request("droid.fork_session", {});
+              const result = yield* decode(
+                Schema.Struct({ newSessionId: Schema.String }),
+                response.result,
+              );
+              if (result.newSessionId.length === 0 || result.newSessionId === sourceId)
+                return yield* protocolError("Droid fork did not return a distinct session id");
+              yield* rpc.request("droid.load_session", {
+                sessionId: result.newSessionId,
+                ...(yield* sessionLoadOptions(input.targetThreadId)),
+              });
+              const cwd = yield* canonicalWorkspacePath(policy.cwd ?? providerHost.paths.cwd);
+              yield* rpc.request("droid.change_working_directory", {
+                workingDirectory: cwd,
+              });
+              nativeId = result.newSessionId;
+              yield* applySettings(selection, policy);
+              const now = yield* DateTime.now;
+              providerThread = {
+                id: ids.derive.providerThread({
+                  driver: DROID_PROVIDER,
+                  providerInstanceId: options.instanceId,
+                  nativeThreadId: nativeId,
+                }),
                 driver: DROID_PROVIDER,
-                providerThreadId: input.sourceProviderThread.id,
-                cause: protocolError(
-                  "Native Droid fork identity and history semantics have not been verified",
+                providerInstanceId: options.instanceId,
+                providerSessionId: session.id,
+                appThreadId: input.targetThreadId,
+                ownerNodeId: input.ownerNodeId ?? null,
+                nativeThreadRef: nativeRef(nativeId),
+                nativeConversationHeadRef: null,
+                status: "idle",
+                firstRunOrdinal: null,
+                lastRunOrdinal: null,
+                handoffIds: [],
+                forkedFrom: {
+                  providerThreadId: input.sourceProviderThread.id,
+                  ...(input.providerTurnId === undefined
+                    ? {}
+                    : { providerTurnId: input.providerTurnId }),
+                },
+                createdAt: now,
+                updatedAt: now,
+              };
+              return providerThread;
+            },
+            (effect, input) =>
+              effect.pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new ProviderAdapter.ProviderAdapterForkThreadError({
+                      driver: DROID_PROVIDER,
+                      providerThreadId: input.sourceProviderThread.id,
+                      cause,
+                    }),
                 ),
-              }),
-            ),
+              ),
+          ),
           compactThread: (input) =>
             startTurnWithFailureCleanup(input, true).pipe(
               Effect.mapError(

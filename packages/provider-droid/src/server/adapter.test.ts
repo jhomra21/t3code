@@ -46,7 +46,10 @@ import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter"
 import type * as ProviderContinuationRequests from "@t3tools/provider-core/server/ProviderContinuationRequests";
 import * as TestProviderHost from "@t3tools/provider-testing/TestProviderHost";
 import { DROID_PROVIDER, droidSystemPromptAppend, makeDroidAdapterV2 } from "./adapter.ts";
+import { DroidSettings } from "../settings.ts";
 import droid1286Direct from "./fixtures/1.286.0-direct.json" with { type: "json" };
+import droid1289Direct from "./fixtures/1.289.0-direct.json" with { type: "json" };
+import droid1289Script from "./fixtures/1.289.0-script.json" with { type: "json" };
 import {
   DroidSessionWatch,
   DroidSessionRead,
@@ -62,6 +65,7 @@ const policy = {
 } satisfies ProviderAdapter.ProviderAdapterV2RuntimePolicy;
 const threadId = ThreadId.make("droid-adapter-test-thread");
 const decodeAppThread = Schema.decodeUnknownEffect(OrchestrationV2AppThread);
+const decodeDroidSettings = Schema.decodeUnknownEffect(DroidSettings);
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 
 type RpcFrame = {
@@ -92,6 +96,8 @@ const makeFakeDroid = (
     readonly holdAddUserMessageResponse?: boolean;
     readonly nativeSessionId?: string;
     readonly rewindSessionId?: string;
+    readonly forkSessionId?: string;
+    readonly failChangeWorkingDirectory?: boolean;
     readonly failInterruptSession?: boolean;
     readonly holdInterruptSessionResponse?: boolean;
   } = {},
@@ -229,6 +235,8 @@ const responseFor = (
     };
     readonly nativeSessionId?: string;
     readonly rewindSessionId?: string;
+    readonly forkSessionId?: string;
+    readonly failChangeWorkingDirectory?: boolean;
     readonly failInterruptSession?: boolean;
     readonly holdInterruptSessionResponse?: boolean;
   },
@@ -239,23 +247,27 @@ const responseFor = (
   factoryProtocolVersion: options.protocolVersion ?? "1.257.0",
   ...(frame.method === "droid.interrupt_session" && options.failInterruptSession
     ? { error: { code: -32000, message: "Synthetic interrupt failure" } }
-    : {
-        result:
-          frame.method === "droid.initialize_session"
-            ? {
-                sessionId: options.nativeSessionId ?? "native-session",
-                session: { messages: [] },
-              }
-            : frame.method === "droid.load_session"
-              ? { session: { messages: [] } }
-              : frame.method === "droid.get_context_breakdown"
-                ? (options.contextBreakdown ?? {})
-                : frame.method === "droid.compact_session"
-                  ? (options.compactSessionResult ?? {})
-                  : frame.method === "droid.execute_rewind"
-                    ? { newSessionId: options.rewindSessionId ?? "rewound-session" }
-                    : {},
-      }),
+    : frame.method === "droid.change_working_directory" && options.failChangeWorkingDirectory
+      ? { error: { code: -32000, message: "Synthetic cwd change failure" } }
+      : {
+          result:
+            frame.method === "droid.initialize_session"
+              ? {
+                  sessionId: options.nativeSessionId ?? "native-session",
+                  session: { messages: [] },
+                }
+              : frame.method === "droid.load_session"
+                ? { session: { messages: [] } }
+                : frame.method === "droid.get_context_breakdown"
+                  ? (options.contextBreakdown ?? {})
+                  : frame.method === "droid.compact_session"
+                    ? (options.compactSessionResult ?? {})
+                    : frame.method === "droid.execute_rewind"
+                      ? { newSessionId: options.rewindSessionId ?? "rewound-session" }
+                      : frame.method === "droid.fork_session"
+                        ? { newSessionId: options.forkSessionId ?? "forked-session" }
+                        : {},
+        }),
 });
 
 const RpcFrameSchema = Schema.Struct({
@@ -278,6 +290,7 @@ const open = Effect.fnUntraced(function* (
   existingProviderThread?: ProviderAdapter.ProviderAdapterV2EnsureThreadInput["existingProviderThread"],
   skipEnsureThread = false,
   environment: NodeJS.ProcessEnv = {},
+  adapterOptions: Pick<Parameters<typeof makeDroidAdapterV2>[0], "toolExecutionMode"> = {},
 ) {
   const providerHost = yield* ProviderHost.ProviderHost;
   if (mcpSession !== undefined)
@@ -288,6 +301,7 @@ const open = Effect.fnUntraced(function* (
     instanceId,
     environment,
     binaryPath: "droid",
+    ...adapterOptions,
     ...(continuationRequests === undefined ? {} : { continuationRequests }),
   }).pipe(
     Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, fake.spawner),
@@ -598,6 +612,392 @@ const lifecycleFixture = Effect.fnUntraced(function* (
 });
 
 describe("Droid adapter", () => {
+  it.effect.each([undefined, "default", "direct_only", "script_only"])(
+    "initializes tool execution mode %s without sending it in updates or reloads",
+    (mode) =>
+      provide(
+        Effect.gen(function* () {
+          const settings = yield* decodeDroidSettings(
+            mode === undefined ? {} : { toolExecutionMode: mode },
+          );
+          const fake = yield* makeFakeDroid();
+          const options = { toolExecutionMode: settings.toolExecutionMode };
+          const fresh = yield* open(
+            fake,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            false,
+            {},
+            options,
+          );
+          yield* fresh.runtime.startTurn(fresh.input);
+          const init = yield* fake.takeRequest("droid.initialize_session");
+          assert.equal(
+            Reflect.get(init.params ?? {}, "toolExecutionMode"),
+            mode === "default" ? undefined : mode,
+          );
+          assert.isFalse(Object.hasOwn(init.params ?? {}, "allowSubagentsInScripts"));
+          const update = yield* fake.takeRequest("droid.update_session_settings");
+          assert.isFalse(Object.hasOwn(update.params ?? {}, "toolExecutionMode"));
+          assert.isFalse(Object.hasOwn(update.params ?? {}, "allowSubagentsInScripts"));
+          const resumedFake = yield* makeFakeDroid();
+          yield* open(
+            resumedFake,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            fresh.providerThread,
+            false,
+            {},
+            options,
+          );
+          const load = yield* resumedFake.takeRequest("droid.load_session");
+          assert.isFalse(Object.hasOwn(load.params ?? {}, "toolExecutionMode"));
+          const restored = yield* resumedFake.takeRequest("droid.update_session_settings");
+          assert.isFalse(Object.hasOwn(restored.params ?? {}, "toolExecutionMode"));
+        }),
+      ),
+  );
+
+  it.effect.each([false, true])(
+    "forks the session head with explicit boundary %s into a distinct thread with target MCP tools",
+    (explicitBoundary) =>
+      provide(
+        Effect.gen(function* () {
+          const sourceFake = yield* makeFakeDroid();
+          const source = yield* open(sourceFake);
+          const completed = yield* Deferred.make<void>();
+          yield* source.runtime.events.pipe(
+            Stream.runForEach((event) =>
+              event.type === "turn.terminal" ? Deferred.succeed(completed, undefined) : Effect.void,
+            ),
+            Effect.forkChild,
+          );
+          yield* source.runtime.startTurn(source.input);
+          yield* sourceFake.takeRequest("droid.add_user_message");
+          yield* sourceFake.emitNotification({
+            type: "agent_turn_completed",
+            reason: "completed",
+            turnId: source.input.message.messageId,
+          });
+          yield* Deferred.await(completed);
+          const sourceTurns = (yield* source.runtime.readThreadSnapshot({
+            providerThread: source.providerThread,
+          })).providerTurns;
+          const fake = yield* makeFakeDroid();
+          const targetThreadId = ThreadId.make("droid-fork-target");
+          const targetCwd = "C:\\scratch\\droid-fork-target";
+          const config: McpProviderSessionConfig = {
+            environmentId: EnvironmentId.make("droid-adapter-test-environment"),
+            threadId: targetThreadId,
+            providerSessionId: "droid-adapter-test-session",
+            providerInstanceId: instanceId,
+            endpoint: "http://127.0.0.1:9/mcp",
+            authorizationHeader: "Bearer dummy",
+            browserToolsAvailable: false,
+          };
+          const target = yield* open(
+            fake,
+            undefined,
+            targetCwd,
+            config,
+            undefined,
+            source.providerThread,
+            true,
+          );
+          const forked = yield* target.runtime.forkThread({
+            sourceProviderThread: source.providerThread,
+            targetThreadId,
+            ...(explicitBoundary
+              ? { sourceProviderTurns: sourceTurns, providerTurnId: sourceTurns[0]!.id }
+              : {}),
+          });
+          assert.notEqual(forked.id, source.providerThread.id);
+          assert.equal(forked.nativeThreadRef?.nativeId, "forked-session");
+          assert.equal(source.providerThread.nativeThreadRef?.nativeId, "native-session");
+          assert.equal(forked.appThreadId, targetThreadId);
+          assert.deepEqual(forked.forkedFrom, {
+            providerThreadId: source.providerThread.id,
+            ...(explicitBoundary ? { providerTurnId: sourceTurns.at(-1)?.id } : {}),
+          });
+          assert.isBelow(
+            fake.requestedMethods.indexOf("droid.fork_session"),
+            fake.requestedMethods.indexOf("droid.update_session_settings"),
+          );
+          const sourceLoad = yield* fake.takeRequest("droid.load_session");
+          assert.equal(Reflect.get(sourceLoad.params ?? {}, "sessionId"), "native-session");
+          yield* fake.takeRequest("droid.fork_session");
+          const forkLoad = yield* fake.takeRequest("droid.load_session");
+          assert.equal(Reflect.get(forkLoad.params ?? {}, "sessionId"), "forked-session");
+          const changeDirectory = yield* fake.takeRequest("droid.change_working_directory");
+          assert.equal(Reflect.get(changeDirectory.params ?? {}, "workingDirectory"), targetCwd);
+          assert.deepEqual(Reflect.get(forkLoad.params ?? {}, "mcpServers"), [
+            {
+              type: "http",
+              name: "t3-code",
+              url: config.endpoint,
+              headers: [{ name: "Authorization", value: config.authorizationHeader }],
+            },
+          ]);
+          assert.notInclude(fake.requestedMethods, "droid.execute_rewind");
+        }),
+      ),
+  );
+
+  it.effect("fails a fork when restoring the target working directory fails", () =>
+    provide(
+      Effect.gen(function* () {
+        const source = yield* open(yield* makeFakeDroid());
+        const targetThreadId = ThreadId.make("droid-fork-target");
+        const fake = yield* makeFakeDroid({ failChangeWorkingDirectory: true });
+        const config: McpProviderSessionConfig = {
+          environmentId: EnvironmentId.make("droid-adapter-test-environment"),
+          threadId: targetThreadId,
+          providerSessionId: "droid-adapter-test-session",
+          providerInstanceId: instanceId,
+          endpoint: "http://127.0.0.1:9/mcp",
+          authorizationHeader: "Bearer dummy",
+          browserToolsAvailable: false,
+        };
+        const target = yield* open(
+          fake,
+          undefined,
+          "C:\\scratch\\droid-fork-target",
+          config,
+          undefined,
+          source.providerThread,
+          true,
+        );
+        const error = yield* Effect.flip(
+          target.runtime.forkThread({
+            sourceProviderThread: source.providerThread,
+            targetThreadId,
+          }),
+        );
+        assert.instanceOf(error, ProviderAdapter.ProviderAdapterForkThreadError);
+        assert.notInclude(fake.requestedMethods, "droid.update_session_settings");
+      }),
+    ),
+  );
+
+  it.effect.each(["historical", "same-id", "active", "source-active", "background"])(
+    "rejects unsafe %s forks",
+    (reason) =>
+      provide(
+        Effect.gen(function* () {
+          const fake = yield* makeFakeDroid({
+            forkSessionId: reason === "same-id" ? "native-session" : "forked-session",
+          });
+          const { runtime, input, providerThread } = yield* open(fake);
+          if (reason === "active") {
+            yield* runtime.startTurn(input);
+            yield* fake.takeRequest("droid.add_user_message");
+          }
+          const error = yield* Effect.flip(
+            runtime.forkThread({
+              sourceProviderThread:
+                reason === "background"
+                  ? {
+                      ...providerThread,
+                      pendingBackgroundTasks: [
+                        { taskId: "child", kind: "subagent", description: "running" },
+                      ],
+                    }
+                  : reason === "source-active"
+                    ? { ...providerThread, status: "active" }
+                    : providerThread,
+              targetThreadId: ThreadId.make("droid-fork-target"),
+              ...(reason === "historical"
+                ? { providerTurnId: ProviderTurnId.make("old-turn") }
+                : {}),
+            }),
+          );
+          assert.instanceOf(error, ProviderAdapter.ProviderAdapterForkThreadError);
+          if (reason !== "same-id") assert.notInclude(fake.requestedMethods, "droid.fork_session");
+          assert.notInclude(fake.requestedMethods, "droid.execute_rewind");
+        }),
+      ),
+  );
+
+  it.effect.each([
+    { mode: "direct", frames: droid1289Direct },
+    { mode: "script", frames: droid1289Script },
+  ])("replays captured 1.289.0 $mode tools and approvals without warnings", ({ frames, mode }) => {
+    const warnings: unknown[] = [];
+    const logger = Logger.make(({ logLevel, message }) => {
+      if (logLevel === "Warn") warnings.push(message);
+    });
+    return provide(
+      Effect.gen(function* () {
+        const fake = yield* makeFakeDroid({ protocolVersion: "1.289.0" });
+        const { runtime, input } = yield* open(fake);
+        const terminal = yield* Deferred.make<void>();
+        const events: ProviderAdapter.ProviderAdapterV2Event[] = [];
+        yield* runtime.events.pipe(
+          Stream.runForEach((event) => {
+            events.push(event);
+            if (event.type === "turn.terminal") return Deferred.succeed(terminal, undefined);
+            if (
+              event.type === "runtime_request.updated" &&
+              event.runtimeRequest.status === "pending"
+            )
+              return runtime.respondToRuntimeRequest({
+                requestId: event.runtimeRequest.id,
+                decision: "accept",
+              });
+            return Effect.void;
+          }),
+          Effect.forkChild,
+        );
+        yield* runtime.startTurn(input);
+        yield* fake.takeRequest("droid.add_user_message");
+        for (const frame of frames) {
+          if ("notification" in frame && frame.notification !== undefined) {
+            const notification = frame.notification;
+            yield* fake.emitNotification({
+              ...notification,
+              ...("turnId" in notification ? { turnId: input.message.messageId } : {}),
+            });
+          } else if (
+            "params" in frame &&
+            frame.params !== undefined &&
+            "id" in frame &&
+            typeof frame.id === "string"
+          ) {
+            yield* fake.emitRequest(frame.id, "droid.request_permission", frame.params);
+            const reply = yield* fake.takeReply;
+            assert.deepEqual(reply.result, { selectedOption: "proceed_once" });
+          }
+        }
+        yield* Deferred.await(terminal);
+        assert.isTrue(
+          events.some(
+            (event) =>
+              event.type === "turn_item.updated" &&
+              event.turnItem.type === "command_execution" &&
+              event.turnItem.status === "completed" &&
+              event.turnItem.input === "git --version",
+          ),
+        );
+        assert.isTrue(
+          events.some(
+            (event) =>
+              event.type === "turn_item.updated" &&
+              event.turnItem.type === "file_change" &&
+              event.turnItem.status === "completed" &&
+              event.turnItem.changes?.some(
+                (change) => change.operation === "create" && change.path === "/workspace/probe.txt",
+              ),
+          ),
+        );
+        assert.isTrue(
+          events.some(
+            (event) =>
+              event.type === "turn_item.updated" && event.turnItem.type === "approval_request",
+          ),
+        );
+        if (mode === "script") {
+          const script = events.find(
+            (event) =>
+              event.type === "turn_item.updated" &&
+              event.turnItem.type === "dynamic_tool" &&
+              event.turnItem.toolName === "Script",
+          );
+          assert.isDefined(script);
+          if (script?.type !== "turn_item.updated") return;
+          const nested = events.flatMap((event) =>
+            event.type === "turn_item.updated" &&
+            ["command_execution", "file_change"].includes(event.turnItem.type)
+              ? [event.turnItem]
+              : [],
+          );
+          assert.isNotEmpty(nested);
+          for (const item of nested) assert.equal(item.parentItemId, script.turnItem.id);
+        }
+        assert.deepEqual(warnings, []);
+      }).pipe(Effect.provide(Logger.layer([logger], { mergeWithExisting: false }))),
+    );
+  });
+
+  it.effect("keeps concurrent Script parents distinct and ignores invalid ancestry", () =>
+    provide(
+      Effect.gen(function* () {
+        const fake = yield* makeFakeDroid();
+        const { runtime, input } = yield* open(fake);
+        const terminal = yield* Deferred.make<void>();
+        const items: Array<
+          Extract<ProviderAdapter.ProviderAdapterV2Event, { type: "turn_item.updated" }>["turnItem"]
+        > = [];
+        yield* runtime.events.pipe(
+          Stream.runForEach((event) => {
+            if (event.type === "turn_item.updated") items.push(event.turnItem);
+            return event.type === "turn.terminal"
+              ? Deferred.succeed(terminal, undefined)
+              : Effect.void;
+          }),
+          Effect.forkChild,
+        );
+        yield* runtime.startTurn(input);
+        yield* fake.takeRequest("droid.add_user_message");
+        const tools = [
+          { id: "script-a", name: "Script", input: {} },
+          { id: "script-b", name: "Script", input: {} },
+          {
+            id: "nested-a",
+            name: "Execute",
+            input: {},
+            scriptExecution: { runId: "a", outerToolUseId: "script-a" },
+          },
+          {
+            id: "nested-b",
+            name: "Execute",
+            input: {},
+            scriptExecution: { runId: "b", outerToolUseId: "script-b" },
+          },
+          { id: "script-a-looks-nested", name: "Execute", input: {} },
+          {
+            id: "unknown-parent",
+            name: "Execute",
+            input: {},
+            scriptExecution: { outerToolUseId: "missing" },
+          },
+          {
+            id: "malformed-parent",
+            name: "Execute",
+            input: {},
+            scriptExecution: { outerToolUseId: 42 },
+          },
+        ];
+        for (const tool of tools)
+          yield* fake.emitNotification({
+            type: "create_message",
+            message: { id: tool.id, role: "assistant", content: [{ type: "tool_use", ...tool }] },
+          });
+        for (const tool of tools)
+          yield* fake.emitNotification({
+            type: "tool_result",
+            toolUseId: tool.id,
+            content: "done",
+          });
+        yield* fake.emitNotification({
+          type: "agent_turn_completed",
+          reason: "completed",
+          turnId: input.message.messageId,
+        });
+        yield* Deferred.await(terminal);
+        const itemFor = (id: string) => items.find((item) => item.nativeItemRef?.nativeId === id);
+        assert.equal(itemFor("nested-a")?.parentItemId, itemFor("script-a")?.id);
+        assert.equal(itemFor("nested-b")?.parentItemId, itemFor("script-b")?.id);
+        for (const id of ["script-a-looks-nested", "unknown-parent", "malformed-parent"])
+          assert.equal(itemFor(id)?.parentItemId, null);
+      }),
+    ),
+  );
+
   it.effect("replays captured 1.286.0 direct tools without unknown notification warnings", () => {
     const warnings: unknown[] = [];
     const logger = Logger.make(({ logLevel, message }) => {
@@ -685,7 +1085,7 @@ describe("Droid adapter", () => {
         yield* Effect.promise(() =>
           NodeFSP.writeFile(
             f.file.replace(/\.jsonl$/u, ".settings.json"),
-            '{"model":"custom:GPT-6 Luna-12"}',
+            '{"model":"custom:GPT-6 Luna-12","reasoningEffort":"low"}',
           ),
         );
         f.listeners[0]!("change", NodePath.basename(f.file.replace(/\.jsonl$/u, ".settings.json")));
@@ -694,10 +1094,13 @@ describe("Droid adapter", () => {
         const task = f.status();
         assert.isDefined(task);
         assert.equal(task.model, "GPT-6 Luna");
-        assert.equal(task.effort, "medium");
+        assert.equal(task.effort, "low");
         assert.equal(task.modelSelection?.model, "GPT-6 Luna");
-        assert.deepEqual(task.modelSelection?.options, [
-          { id: "reasoning_effort", value: "medium" },
+        assert.deepEqual(task.modelSelection?.options, [{ id: "reasoning_effort", value: "low" }]);
+        yield* f.register();
+        assert.equal(f.status()?.effort, "low");
+        assert.deepEqual(f.status()?.modelSelection?.options, [
+          { id: "reasoning_effort", value: "low" },
         ]);
       }),
     ),
@@ -2411,54 +2814,75 @@ describe("Droid adapter", () => {
     assert.include(withoutMcp, "<sign_in_links>");
   });
 
-  it.effect("shows a completed compaction item and switches to the compacted session", () =>
-    provide(
-      Effect.gen(function* () {
-        const fake = yield* makeFakeDroid({
-          compactSessionResult: { newSessionId: "compacted-session", removedCount: 3 },
-        });
-        const { runtime, input } = yield* open(fake);
-        const events: Array<ProviderAdapter.ProviderAdapterV2Event> = [];
-        const terminalSeen = yield* Deferred.make<void>();
-        yield* runtime.events.pipe(
-          Stream.runForEach((event) => {
-            events.push(event);
-            return event.type === "turn.terminal"
-              ? Deferred.succeed(terminalSeen, undefined)
-              : Effect.void;
-          }),
-          Effect.forkChild,
-        );
-        assert.isDefined(runtime.compactThread);
-        yield* runtime.compactThread?.(input) ?? Effect.void;
-        yield* Deferred.await(terminalSeen);
-        yield* fake.takeRequest("droid.compact_session");
-        const loaded = yield* fake.takeRequest("droid.load_session");
-        assert.deepEqual(
-          typeof loaded.params === "object" && loaded.params !== null
-            ? Reflect.get(loaded.params, "sessionId")
-            : undefined,
-          "compacted-session",
-        );
-        const compaction = events.flatMap((event) =>
-          event.type === "turn_item.updated" && event.turnItem.type === "compaction"
-            ? [event.turnItem]
-            : [],
-        );
-        assert.lengthOf(compaction, 1);
-        assert.equal(compaction[0]?.status, "completed");
-        assert.equal(compaction[0]?.title, "Context compacted");
-        assert.isTrue(
-          events.some(
-            (event) =>
-              event.type === "provider_thread.updated" &&
-              event.providerThread.nativeThreadRef?.nativeId === "compacted-session",
-          ),
-        );
-        const terminal = events.find((event) => event.type === "turn.terminal");
-        assert.equal(terminal?.status, "completed");
-      }),
-    ),
+  it.effect.each(["compacted-session", "native-session"])(
+    "compacts into %s without losing session tools",
+    (newSessionId) =>
+      provide(
+        Effect.gen(function* () {
+          const fake = yield* makeFakeDroid({
+            compactSessionResult: { newSessionId, removedCount: 3 },
+          });
+          const config: McpProviderSessionConfig = {
+            environmentId: EnvironmentId.make("droid-adapter-test-environment"),
+            threadId,
+            providerSessionId: "droid-adapter-test-session",
+            providerInstanceId: instanceId,
+            endpoint: "http://127.0.0.1:9/mcp",
+            authorizationHeader: "Bearer dummy",
+            browserToolsAvailable: false,
+          };
+          const { runtime, input } = yield* open(fake, undefined, undefined, config);
+          const events: Array<ProviderAdapter.ProviderAdapterV2Event> = [];
+          const terminalSeen = yield* Deferred.make<void>();
+          yield* runtime.events.pipe(
+            Stream.runForEach((event) => {
+              events.push(event);
+              return event.type === "turn.terminal"
+                ? Deferred.succeed(terminalSeen, undefined)
+                : Effect.void;
+            }),
+            Effect.forkChild,
+          );
+          assert.isDefined(runtime.compactThread);
+          yield* runtime.compactThread?.(input) ?? Effect.void;
+          yield* Deferred.await(terminalSeen);
+          yield* fake.takeRequest("droid.compact_session");
+          if (newSessionId === "native-session") {
+            assert.notInclude(fake.requestedMethods, "droid.load_session");
+          } else {
+            const loaded = yield* fake.takeRequest("droid.load_session");
+            assert.deepEqual(loaded.params, {
+              sessionId: newSessionId,
+              mcpServers: [
+                {
+                  type: "http",
+                  name: "t3-code",
+                  url: config.endpoint,
+                  headers: [{ name: "Authorization", value: config.authorizationHeader }],
+                },
+              ],
+              autoRejectPermissionRequests: false,
+            });
+          }
+          const compaction = events.flatMap((event) =>
+            event.type === "turn_item.updated" && event.turnItem.type === "compaction"
+              ? [event.turnItem]
+              : [],
+          );
+          assert.lengthOf(compaction, 1);
+          assert.equal(compaction[0]?.status, "completed");
+          assert.equal(compaction[0]?.title, "Context compacted");
+          assert.isTrue(
+            events.some(
+              (event) =>
+                event.type === "provider_thread.updated" &&
+                event.providerThread.nativeThreadRef?.nativeId === newSessionId,
+            ),
+          );
+          const terminal = events.find((event) => event.type === "turn.terminal");
+          assert.equal(terminal?.status, "completed");
+        }),
+      ),
   );
 
   it.effect("persists compacted transcript usage after a manual compaction", () =>
@@ -4845,6 +5269,7 @@ describe("Droid adapter", () => {
         const load = yield* fake.takeRequest("droid.load_session");
         assert.deepEqual(load.params, {
           sessionId: "rewound-native-session",
+          mcpServers: [],
           autoRejectPermissionRequests: false,
         });
         assert.equal(result.providerThread.id, providerThread.id);
@@ -5031,6 +5456,7 @@ describe("Droid adapter", () => {
           const rewoundLoad = yield* freshFake.takeRequest("droid.load_session");
           assert.deepEqual(rewoundLoad.params, {
             sessionId: "rewound-session",
+            mcpServers: [],
             autoRejectPermissionRequests: false,
           });
           assert.equal(result.providerThread.id, persistedThread.id);
