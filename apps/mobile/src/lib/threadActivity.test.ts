@@ -369,6 +369,77 @@ function assistantMessage(updatedAt = "2026-06-20T00:00:03.000Z") {
 }
 
 describe("buildThreadFeed", () => {
+  it("keeps nested tools together across messages and shows a running child after the parent finishes", () => {
+    const parent: OrchestrationV2TurnItem = {
+      ...base("outer", "2026-06-20T00:00:02.000Z", 1),
+      type: "dynamic_tool",
+      toolName: "Script",
+      input: {},
+    };
+    const child = {
+      ...command(),
+      id: TurnItemId.make("nested"),
+      parentItemId: parent.id,
+      status: "running" as const,
+    };
+    const items = [projected(parent, 0), projected(assistantMessage(), 1), projected(child, 2)];
+    const cache = createThreadFeedCache();
+    const feed = buildThreadFeed(items, { cache });
+    expect(feed).toMatchObject([
+      {
+        type: "activity-group",
+        activities: [
+          {
+            lifecycleStatus: "inProgress",
+            nestedToolActivities: [{ projectedItem: { item: { id: child.id } } }],
+          },
+        ],
+      },
+      { type: "message" },
+    ]);
+    const presented = deriveThreadFeedPresentation(feed, null, new Set());
+    expect(presented[0]).toMatchObject({
+      type: "activity-group",
+      activities: [{ lifecycleStatus: "inProgress" }],
+    });
+    expect(
+      deriveThreadFeedPresentation(
+        feed,
+        {
+          runId,
+          status: "running",
+          startedAt: "2026-06-20T00:00:02.000Z",
+          completedAt: null,
+        },
+        new Set(),
+        new Set(),
+        "2026-06-20T00:00:02.000Z",
+      ).some((entry) => entry.type === "thinking"),
+    ).toBe(false);
+    const completed = { ...child, status: "completed" as const };
+    const updated = buildThreadFeed([...items.slice(0, 2), projected(completed, 2)], { cache });
+    expect(updated[0]).toMatchObject({
+      activities: [
+        {
+          lifecycleStatus: "completed",
+          nestedToolActivities: [{ projectedItem: { item: { status: "completed" } } }],
+        },
+      ],
+    });
+    const nextPrompt = projected(
+      {
+        ...userMessage(),
+        id: TurnItemId.make("next-prompt"),
+        runId: RunId.make("next-run"),
+        messageId: MessageId.make("next-message"),
+      },
+      2,
+    );
+    const beforeLateChild = [...items.slice(0, 2), nextPrompt];
+    buildThreadFeed(beforeLateChild, { cache });
+    const withLateChild = [...beforeLateChild, projected(child, 3)];
+    expect(buildThreadFeed(withLateChild, { cache })).toEqual(buildThreadFeed(withLateChild));
+  });
   it("keeps async answers in question history instead of user bubbles", () => {
     const requestId = RuntimeRequestId.make("question");
     const question: OrchestrationV2TurnItem = {

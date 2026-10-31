@@ -27,6 +27,7 @@ import {
   computeStableMessagesTimelineRows,
   deriveMessagesTimelineRows,
   timelineTurnFoldRunIdsByEntryId,
+  timelineRowContainsWorkEntry,
   deriveMessagesTimelineRowsWithState,
   shouldCollapseUserMessage,
   resolveAssistantMessageCopyState,
@@ -54,6 +55,112 @@ describe("resolveAssistantMessageCopyState", () => {
 });
 
 describe("deriveMessagesTimelineRows", () => {
+  it("keeps a nested tool group separate from interleaved messages and reachable approvals", () => {
+    const at = DateTime.makeUnsafe("2026-10-01T06:19:10Z");
+    const base = {
+      threadId: ThreadId.make("nested-thread"),
+      runId: RunId.make("nested-run"),
+      nodeId: null,
+      providerThreadId: null,
+      providerTurnId: null,
+      nativeItemRef: null,
+      parentItemId: null,
+      ordinal: 0,
+      title: null,
+      startedAt: at,
+      completedAt: null,
+      updatedAt: at,
+    };
+    const parent: OrchestrationV2TurnItem = {
+      ...base,
+      id: TurnItemId.make("outer"),
+      type: "dynamic_tool",
+      status: "completed",
+      toolName: "Script",
+      input: {},
+    };
+    const child: OrchestrationV2TurnItem = {
+      ...base,
+      id: TurnItemId.make("child"),
+      parentItemId: parent.id,
+      type: "command_execution",
+      status: "running",
+      input: "bun test",
+    };
+    const approval: OrchestrationV2TurnItem = {
+      ...base,
+      id: TurnItemId.make("approval"),
+      parentItemId: child.id,
+      type: "approval_request",
+      status: "pending",
+      requestId: RuntimeRequestId.make("nested-approval"),
+      requestKind: "command",
+      prompt: "Allow tests?",
+    };
+    const projected: OrchestrationV2ProjectedTurnItem[] = [parent, child, approval].map(
+      (item, position) => ({
+        item,
+        position,
+        visibility: "local",
+        sourceThreadId: item.threadId,
+        sourceItemId: item.id,
+      }),
+    );
+    const timelineEntries = deriveTimelineEntriesFromVisibleTurnItems({
+      visibleTurnItems: projected,
+      optimisticMessages: [],
+    });
+    const rows = deriveMessagesTimelineRows({
+      timelineEntries,
+      isWorking: false,
+      turnDiffSummaries: [],
+      supportsConversationRollback: false,
+      pendingApprovalRequestIds: new Set([approval.requestId]),
+    });
+    expect(rows.filter((row) => row.kind === "work")).toMatchObject([
+      {
+        groupedEntries: [
+          {
+            projectedItem: { item: { id: parent.id } },
+            toolLifecycleStatus: "inProgress",
+            nestedToolEntries: [{ projectedItem: { item: { id: child.id } } }],
+          },
+        ],
+      },
+      { groupedEntries: [{ projectedItem: { item: { id: approval.id } } }] },
+    ]);
+    const revealed = deriveMessagesTimelineRows({
+      timelineEntries,
+      revealedWorkEntryId: child.id,
+      isWorking: false,
+      turnDiffSummaries: [],
+      supportsConversationRollback: false,
+    });
+    const target = revealed.find((row) => timelineRowContainsWorkEntry(row, child.id));
+    expect(target).toMatchObject({
+      kind: "work",
+      groupedEntries: [
+        {
+          revealNestedTools: true,
+          nestedToolEntries: [{ revealNestedTools: true }],
+        },
+      ],
+    });
+    const settledItems = projected.map((row): OrchestrationV2ProjectedTurnItem => ({
+      ...row,
+      item: { ...row.item, status: "completed" },
+    }));
+    const settledEntries = deriveTimelineEntriesFromVisibleTurnItems({
+      visibleTurnItems: settledItems,
+      optimisticMessages: [],
+    });
+    expect(
+      timelineTurnFoldRunIdsByEntryId({
+        timelineEntries: settledEntries,
+        isWorking: false,
+      }).get(child.id),
+    ).toBe(base.runId);
+  });
   it("stops stranded thinking after a steer and follows the next thought or tool", () => {
     const runId = RunId.make("steered-run");
     const at = "2026-10-01T06:19:10Z";
