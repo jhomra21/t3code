@@ -1731,6 +1731,27 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
           const type = notification["type"];
           if (notice.sessionId !== undefined && nativeId !== null && notice.sessionId !== nativeId)
             return;
+          if (type === "mcp_status_changed") {
+            const servers = notification["servers"];
+            const t3Server = Array.isArray(servers)
+              ? servers.find(
+                  (server) =>
+                    typeof server === "object" &&
+                    server !== null &&
+                    "name" in server &&
+                    server.name === "t3-code",
+                )
+              : undefined;
+            const status =
+              typeof t3Server === "object" && t3Server !== null && "status" in t3Server
+                ? t3Server.status
+                : undefined;
+            if (active !== null && (status === "failed" || status === "disconnected"))
+              yield* Effect.logWarning("Droid's injected t3-code MCP server is unavailable.", {
+                status,
+              });
+            return;
+          }
           const explicitTurnId = stringField(notification, "turnId");
           const isTaskCompletionNotice =
             type === "create_message" &&
@@ -2151,7 +2172,6 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
               "session_token_usage_changed",
               "settings_updated",
               "session_title_updated",
-              "mcp_status_changed",
               "hook_execution_started",
               "hook_execution_completed",
               "context_usage_changed",
