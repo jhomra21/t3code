@@ -224,7 +224,14 @@ function shellRuntime(thread: OrchestrationV2ThreadShell): ThreadRuntimeSummary 
   const parkAtIdle =
     backgroundWorkHoldsCompletion(thread.pendingBackgroundTasks ?? []) &&
     thread.status !== "failed";
-  if (thread.latestRunId === null && thread.activeProviderThreadId === null && !parkAtIdle) {
+  // A pull request watch can hold a thread that never ran. Run-less subagent
+  // threads stay active through activityRunStatus until their provider thread appears.
+  if (
+    thread.latestRunId === null &&
+    thread.activeProviderThreadId === null &&
+    (thread.activityRunStatus ?? null) === null &&
+    !parkAtIdle
+  ) {
     return null;
   }
   const status = parkAtIdle ? "idle" : (thread.activityRunStatus ?? thread.status);

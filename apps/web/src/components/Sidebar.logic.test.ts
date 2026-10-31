@@ -1,4 +1,5 @@
 import { presentThreadShell } from "@t3tools/client-runtime/state/models";
+import { threadKey } from "@t3tools/client-runtime/state/entities";
 import { isThreadWorking as isSidebarThreadWorking } from "@t3tools/client-runtime/state/thread-inbox";
 import * as DateTime from "effect/DateTime";
 import { deriveActiveWorkStartedAt } from "../session-logic.ts";
@@ -11,6 +12,7 @@ import {
   getFallbackThreadIdAfterDelete,
   hasUnseenCompletion,
   resolveSidebarRowThreadId,
+  filterSidebarV2VisibleThreads,
   orderItemsByPreferredIds,
   pinOrderKeyBetween,
   resolveProjectStatusIndicator,
@@ -205,6 +207,52 @@ describe("sidebar thread lineage helpers", () => {
     const elsewhere = subagentOf("thread-elsewhere", root.id, otherEnvironmentId);
     const threads = [root, fork, child, grandchild, forkChild, orphan, elsewhere];
 
+    const droidChild = {
+      ...child,
+      providerInstanceId: ProviderInstanceId.make("work-agent"),
+      runtime: { ...root.runtime!, status: "running" as const },
+    };
+    const idleDroidChild = {
+      ...droidChild,
+      runtime: { ...droidChild.runtime, status: "idle" as const },
+    };
+    const providers = new Map([
+      [
+        environmentId,
+        [
+          { instanceId: ProviderInstanceId.make("work-agent"), driver: "droid" as const },
+          { instanceId: ProviderInstanceId.make("android-codex"), driver: "codex" as const },
+        ],
+      ],
+    ]);
+    const misleadingChild = {
+      ...droidChild,
+      providerInstanceId: ProviderInstanceId.make("android-codex"),
+    };
+    expect(
+      filterSidebarV2VisibleThreads(
+        [root, droidChild, misleadingChild],
+        null,
+        new Set(),
+        providers,
+      ),
+    ).toEqual([root, droidChild]);
+    expect(filterSidebarV2VisibleThreads([root, idleDroidChild, child], null)).toEqual([root]);
+    expect(
+      filterSidebarV2VisibleThreads(
+        [root, droidChild],
+        null,
+        new Set([threadKey({ environmentId, threadId: droidChild.id })]),
+        providers,
+      ),
+    ).toEqual([root]);
+    expect(filterSidebarV2VisibleThreads([droidChild], new Set())).toEqual([]);
+    expect(
+      filterSidebarV2VisibleThreads([{ ...droidChild, archivedAt: root.createdAt }], null),
+    ).toEqual([]);
+    expect(
+      resolveSidebarRowThreadId(droidChild.id, environmentId, [root, droidChild], providers),
+    ).toBe(droidChild.id);
     expect(resolveSidebarRowThreadId(child.id, environmentId, threads)).toBe(root.id);
     expect(resolveSidebarRowThreadId(grandchild.id, environmentId, threads)).toBe(root.id);
     expect(resolveSidebarRowThreadId(forkChild.id, environmentId, threads)).toBe(fork.id);

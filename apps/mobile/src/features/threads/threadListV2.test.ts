@@ -1216,32 +1216,74 @@ describe("cross-section thread drops", () => {
   });
 });
 
-it("excludes subagents from navigation, search and ordering while retaining user forks", () => {
+it("lists only working Droid subagents and retains user forks", () => {
+  const runningRuntime = () => ({
+    status: "running" as const,
+    activeRunId: null,
+    providerInstanceId: ProviderInstanceId.make("work-agent"),
+    providerName: "Droid",
+    lastError: null,
+    updatedAt: NOW,
+  });
   const root = makeThread({ id: ThreadId.make("root"), title: "Root" });
   const child = makeThread({
     id: ThreadId.make("child"),
     title: "Child",
+    providerInstanceId: ProviderInstanceId.make("work-agent"),
+    runtime: runningRuntime(),
     lineage: { parentThreadId: root.id, rootThreadId: root.id, relationshipToParent: "subagent" },
+  });
+  const settledChild = makeThread({
+    ...child,
+    id: ThreadId.make("settled-child"),
+    runtime: { ...runningRuntime(), status: "completed" },
+  });
+  const otherProviderChild = makeThread({
+    ...child,
+    id: ThreadId.make("codex-child"),
+    providerInstanceId: ProviderInstanceId.make("android-codex"),
   });
   const fork = makeThread({
     id: ThreadId.make("fork"),
     title: "Fork",
     lineage: { parentThreadId: root.id, rootThreadId: root.id, relationshipToParent: "fork" },
   });
-  const threads = [root, child, fork];
+  const threads = [root, child, settledChild, otherProviderChild, fork];
+  const providersByEnvironment = new Map([
+    [
+      root.environmentId,
+      [
+        { instanceId: ProviderInstanceId.make("work-agent"), driver: "droid" as const },
+        { instanceId: ProviderInstanceId.make("android-codex"), driver: "codex" as const },
+      ],
+    ],
+  ]);
   expect(
-    buildThreadListV2Items({ threads, environmentId: null, searchQuery: "", now: NOW }).items.map(
-      (item) => item.thread.id,
-    ),
-  ).toEqual([fork.id, root.id]);
+    buildThreadListV2Items({
+      threads,
+      providersByEnvironment,
+      environmentId: null,
+      searchQuery: "",
+      now: NOW,
+    }).items.map((item) => item.thread.id),
+  ).toEqual([child.id, fork.id, root.id]);
   expect(
-    buildThreadListV2Items({ threads, environmentId: null, searchQuery: "Child", now: NOW }).items,
-  ).toEqual([]);
+    buildThreadListV2Items({
+      threads,
+      providersByEnvironment,
+      environmentId: null,
+      searchQuery: "Child",
+      now: NOW,
+    }).items.map((item) => item.thread.id),
+  ).toEqual([child.id]);
   expect(
-    getThreadListV2OrderedSection({ threads, section: "active", now: NOW }).map(
-      (thread) => thread.id,
-    ),
-  ).toEqual([fork.id, root.id]);
+    getThreadListV2OrderedSection({
+      threads,
+      providersByEnvironment,
+      section: "active",
+      now: NOW,
+    }).map((thread) => thread.id),
+  ).toEqual([child.id, fork.id, root.id]);
 });
 
 const BASE_MS = Date.parse(NOW);

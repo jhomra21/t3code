@@ -15,6 +15,7 @@ import { refreshArchivedThreadsForEnvironment } from "../archive/useArchivedThre
 import { pinOrderKeyBetween } from "@t3tools/client-runtime/state/thread-sort";
 import { appAtomRegistry } from "../../state/atom-registry";
 import { environmentServerConfigsAtom } from "../../state/server";
+import { threadListEnvironmentsAtom } from "../../state/presentation";
 import { connectedEnvironmentIdsAtom } from "../../state/presentation";
 import { readEnvironmentScope } from "../../state/session";
 import { environmentThreadShells, threadEnvironment } from "../../state/threads";
@@ -605,6 +606,8 @@ export function useThreadListActions(): {
     }
     const ordered = getThreadListV2OrderedSection({
       threads: shells,
+      providersByEnvironment: appAtomRegistry.get(threadListEnvironmentsAtom)
+        .providersByEnvironmentId,
       section,
       now: new Date().toISOString(),
       queuedThreadKeys: appAtomRegistry.get(queuedThreadKeysAtom),
