@@ -1,8 +1,10 @@
 import { expect, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as NodePath from "@effect/platform-node/NodePath";
 import { ProviderDriverKind, ProviderInstanceId, type ServerProvider } from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientResponse from "effect/http/HttpClientResponse";
 import * as ProviderLatestVersions from "@t3tools/provider-core/server/ProviderLatestVersions";
@@ -33,6 +35,55 @@ const installedDroid: ServerProvider = {
 };
 
 it.layer(NodeServices.layer)("droid maintenance", (it) => {
+  it.effect.each([
+    { platform: "win32", path: "C:\\sandbox\\bin\\droid.exe", fails: false, removes: true },
+    { platform: "win32", path: "C:\\sandbox\\bin\\droid.exe", fails: true, removes: true },
+    { platform: "linux", path: "/home/user/.local/bin/droid", fails: false, removes: false },
+    { platform: "darwin", path: "/home/user/.local/bin/droid", fails: false, removes: false },
+  ] satisfies ReadonlyArray<{
+    platform: NodeJS.Platform;
+    path: string;
+    fails: boolean;
+    removes: boolean;
+  }>)(
+    "cleans only the Windows backup after a verified update: $platform, deletion fails=$fails",
+    ({ platform, path, fails, removes }) => {
+      const deleted: string[] = [];
+      const files = new Set([
+        "C:\\sandbox\\bin\\droid.exe.old",
+        path,
+        "C:\\sandbox\\bin\\other.exe.old",
+      ]);
+      const fileSystem = FileSystem.makeNoop({
+        remove: (target, options) =>
+          Effect.suspend(() => {
+            deleted.push(target);
+            expect(options?.recursive).not.toBe(true);
+            if (fails) return FileSystem.makeNoop({}).remove(target);
+            return Effect.sync(() => {
+              files.delete(target);
+            });
+          }),
+      });
+      return Effect.gen(function* () {
+        const capabilities = yield* droidMaintenanceResolver.resolve({
+          ...context(path),
+          platform,
+        });
+        expect(deleted).toEqual([]);
+        if (removes) expect(capabilities.onUpdated).toBeDefined();
+        yield* capabilities.onUpdated ?? Effect.void;
+        expect(deleted).toEqual(removes ? ["C:\\sandbox\\bin\\droid.exe.old"] : []);
+        expect(files.has("C:\\sandbox\\bin\\droid.exe.old")).toBe(!removes || fails);
+        expect(files.has(path)).toBe(true);
+        expect(files.has("C:\\sandbox\\bin\\other.exe.old")).toBe(true);
+      }).pipe(
+        Effect.provideService(FileSystem.FileSystem, fileSystem),
+        Effect.provide(NodePath.layerWin32),
+      );
+    },
+  );
+
   it.effect.each([
     "C:\\Users\\user\\bin\\droid.exe",
     "D:/Users/Some User/bin/DROID.EXE",
