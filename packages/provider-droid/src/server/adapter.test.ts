@@ -663,7 +663,7 @@ describe("Droid adapter", () => {
       ),
   );
 
-  it.effect.each(["implicit-head", "head", "middle"])(
+  it.effect.each(["implicit-head", "head", "middle", "before-wake"])(
     "forks the %s into a distinct thread with target MCP tools",
     (boundary) =>
       provide(
@@ -693,9 +693,13 @@ describe("Droid adapter", () => {
             ...firstTurn,
             id: ProviderTurnId.make("later-turn"),
             ordinal: firstTurn.ordinal + 1,
-            nativeTurnRef: { ...firstTurn.nativeTurnRef!, nativeId: "later-user-message" },
+            nativeTurnRef: {
+              ...firstTurn.nativeTurnRef!,
+              nativeId: boundary === "before-wake" ? "task-completion:child" : "later-user-message",
+            },
           };
           const explicitBoundary = boundary !== "implicit-head";
+          const rewinds = boundary === "middle" || boundary === "before-wake";
           const fake = yield* makeFakeDroid();
           const targetThreadId = ThreadId.make("droid-fork-target");
           const targetCwd = "C:\\scratch\\droid-fork-target";
@@ -722,7 +726,7 @@ describe("Droid adapter", () => {
             targetThreadId,
             ...(explicitBoundary
               ? {
-                  sourceProviderTurns: boundary === "middle" ? [laterTurn, firstTurn] : sourceTurns,
+                  sourceProviderTurns: rewinds ? [laterTurn, firstTurn] : sourceTurns,
                   providerTurnId: firstTurn.id,
                 }
               : {}),
@@ -730,7 +734,7 @@ describe("Droid adapter", () => {
           assert.notEqual(forked.id, source.providerThread.id);
           assert.equal(
             forked.nativeThreadRef?.nativeId,
-            boundary === "middle" ? "rewound-session" : "forked-session",
+            rewinds ? "rewound-session" : "forked-session",
           );
           assert.equal(source.providerThread.nativeThreadRef?.nativeId, "native-session");
           assert.equal(forked.appThreadId, targetThreadId);
@@ -757,11 +761,11 @@ describe("Droid adapter", () => {
               headers: [{ name: "Authorization", value: config.authorizationHeader }],
             },
           ]);
-          if (boundary === "middle") {
+          if (rewinds) {
             const rewind = yield* fake.takeRequest("droid.execute_rewind");
             assert.deepEqual(rewind.params, {
               sessionId: "forked-session",
-              messageId: "later-user-message",
+              messageId: laterTurn.nativeTurnRef.nativeId,
               filesToRestore: [],
               filesToDelete: [],
               forkTitle: `Fork ${source.providerThread.id}`,
@@ -837,7 +841,6 @@ describe("Droid adapter", () => {
   it.effect.each([
     "unmapped",
     "missing-boundary",
-    "task-boundary",
     "same-id",
     "active",
     "source-active",
@@ -853,7 +856,7 @@ describe("Droid adapter", () => {
           yield* runtime.startTurn(input);
           yield* fake.takeRequest("droid.add_user_message");
         }
-        const unmappableBoundary = reason === "missing-boundary" || reason === "task-boundary";
+        const unmappableBoundary = reason === "missing-boundary";
         let sourceProviderTurns: ProviderAdapter.ProviderAdapterV2ForkThreadInput["sourceProviderTurns"];
         if (unmappableBoundary) {
           const completed = yield* Deferred.make<void>();
@@ -883,14 +886,7 @@ describe("Droid adapter", () => {
               ...persistedTurn,
               id: ProviderTurnId.make("later-turn"),
               ordinal: persistedTurn.ordinal + 1,
-              nativeTurnRef:
-                reason === "missing-boundary"
-                  ? null
-                  : {
-                      driver: DROID_PROVIDER,
-                      nativeId: "task-completion:child",
-                      strength: "strong",
-                    },
+              nativeTurnRef: null,
             },
           ];
         }
@@ -5680,14 +5676,10 @@ describe("Droid adapter", () => {
         const firstTurn = (yield* runtime.readThreadSnapshot({ providerThread })).providerTurns[0];
         assert.isDefined(firstTurn);
         if (firstTurn === undefined) return;
-        const wakeTurn = {
+        const unmappedTurn = {
           ...firstTurn,
           ordinal: firstTurn.ordinal + 1,
-          nativeTurnRef: {
-            driver: firstTurn.nativeTurnRef?.driver ?? DROID_PROVIDER,
-            nativeId: "task-completion:rollback-child",
-            strength: "strong",
-          },
+          nativeTurnRef: null,
         } satisfies NonNullable<typeof firstTurn>;
         const error = yield* Effect.flip(
           runtime.rollbackThread({
@@ -5698,7 +5690,7 @@ describe("Droid adapter", () => {
               appRunOrdinal: 1,
               providerTurn: firstTurn,
             },
-            providerThreadTurns: [firstTurn, wakeTurn],
+            providerThreadTurns: [firstTurn, unmappedTurn],
           }),
         );
         assert.instanceOf(error, ProviderAdapter.ProviderAdapterRollbackThreadError);
