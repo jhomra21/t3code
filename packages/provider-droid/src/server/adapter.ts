@@ -19,6 +19,7 @@ import {
   type ServerProviderModel,
   type ProviderApprovalOption,
   type RuntimeRequestId,
+  type ThreadId,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import type * as Context from "effect/Context";
@@ -442,6 +443,7 @@ const nativeRef = (nativeId: string): OrchestrationV2ProviderRef => ({
 function droidSessionSettings(
   selection: ModelSelection,
   policy: ProviderAdapter.ProviderAdapterV2RuntimePolicy,
+  hasT3Mcp: boolean,
   defaultModel?: string,
   supportedEfforts: ReadonlyArray<string> = [],
 ) {
@@ -463,6 +465,7 @@ function droidSessionSettings(
     autonomyLevel,
     interactionMode: "auto",
     ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
+    disabledToolIds: hasT3Mcp ? ["Task"] : [],
   };
 }
 
@@ -548,6 +551,7 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
   const resolveSettings = Effect.fnUntraced(function* (
     selection: ModelSelection,
     policy: ProviderAdapter.ProviderAdapterV2RuntimePolicy,
+    threadId: ThreadId,
   ) {
     const catalog = options.modelCatalog === undefined ? [] : yield* options.modelCatalog;
     const defaultModel = catalog.find((model) => model.isDefault && !model.isCustom)?.slug;
@@ -557,7 +561,8 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
       ?.capabilities?.optionDescriptors?.find((candidate) => candidate.id === "reasoning_effort");
     const efforts =
       descriptor?.type === "select" ? descriptor.options.map((option) => option.id) : [];
-    return droidSessionSettings(selection, policy, defaultModel, efforts);
+    const mcp = yield* mcpSessions.read(threadId);
+    return droidSessionSettings(selection, policy, mcp !== undefined, defaultModel, efforts);
   });
   const canonicalWorkspacePath = (requestedPath: string) =>
     fileSystem.realPath(requestedPath).pipe(Effect.orElseSucceed(() => requestedPath));
@@ -2244,11 +2249,12 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
         const applySettings = Effect.fnUntraced(function* (
           selection: ModelSelection,
           policy: ProviderAdapter.ProviderAdapterV2RuntimePolicy,
+          threadId = sessionInput.threadId,
         ) {
           const rpc = yield* requireConnection();
           yield* rpc.request(
             "droid.update_session_settings",
-            yield* resolveSettings(selection, policy),
+            yield* resolveSettings(selection, policy, threadId),
           );
           settingsModel = selection.model;
           yield* readContextStats();
@@ -2310,7 +2316,7 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
             );
             connection = rpc;
             const loadOptions = yield* sessionLoadOptions();
-            const settings = yield* resolveSettings(selection, policy);
+            const settings = yield* resolveSettings(selection, policy, sessionInput.threadId);
             const response = yield* rpc.request(
               resumeId === undefined ? "droid.initialize_session" : "droid.load_session",
               resumeId === undefined
@@ -2974,7 +2980,7 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
                 });
                 nativeId = rewound.newSessionId;
               }
-              yield* applySettings(selection, policy);
+              yield* applySettings(selection, policy, input.targetThreadId);
               const now = yield* DateTime.now;
               providerThread = {
                 id: ids.derive.providerThread({
