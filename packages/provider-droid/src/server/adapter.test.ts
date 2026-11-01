@@ -643,6 +643,8 @@ describe("Droid adapter", () => {
           const update = yield* fake.takeRequest("droid.update_session_settings");
           assert.isFalse(Object.hasOwn(update.params ?? {}, "toolExecutionMode"));
           assert.isFalse(Object.hasOwn(update.params ?? {}, "allowSubagentsInScripts"));
+          assert.deepEqual(Reflect.get(init.params ?? {}, "disabledToolIds"), []);
+          assert.deepEqual(Reflect.get(update.params ?? {}, "disabledToolIds"), []);
           const resumedFake = yield* makeFakeDroid();
           yield* open(
             resumedFake,
@@ -659,6 +661,50 @@ describe("Droid adapter", () => {
           assert.isFalse(Object.hasOwn(load.params ?? {}, "toolExecutionMode"));
           const restored = yield* resumedFake.takeRequest("droid.update_session_settings");
           assert.isFalse(Object.hasOwn(restored.params ?? {}, "toolExecutionMode"));
+          assert.deepEqual(Reflect.get(restored.params ?? {}, "disabledToolIds"), []);
+
+          const mcpConfig: McpProviderSessionConfig = {
+            environmentId: EnvironmentId.make("droid-adapter-test-environment"),
+            threadId,
+            providerSessionId: "droid-adapter-test-session",
+            providerInstanceId: instanceId,
+            endpoint: "http://127.0.0.1:9/mcp",
+            authorizationHeader: "Bearer dummy",
+            browserToolsAvailable: false,
+          };
+          const mcpFake = yield* makeFakeDroid();
+          const withMcp = yield* open(
+            mcpFake,
+            undefined,
+            undefined,
+            mcpConfig,
+            undefined,
+            undefined,
+            false,
+            {},
+            options,
+          );
+          yield* withMcp.runtime.startTurn(withMcp.input);
+          const mcpInit = yield* mcpFake.takeRequest("droid.initialize_session");
+          assert.deepEqual(Reflect.get(mcpInit.params ?? {}, "disabledToolIds"), ["Task"]);
+          const mcpUpdate = yield* mcpFake.takeRequest("droid.update_session_settings");
+          assert.deepEqual(Reflect.get(mcpUpdate.params ?? {}, "disabledToolIds"), ["Task"]);
+
+          const resumedMcpFake = yield* makeFakeDroid();
+          yield* open(
+            resumedMcpFake,
+            undefined,
+            undefined,
+            mcpConfig,
+            undefined,
+            withMcp.providerThread,
+            false,
+            {},
+            options,
+          );
+          yield* resumedMcpFake.takeRequest("droid.load_session");
+          const restoredMcp = yield* resumedMcpFake.takeRequest("droid.update_session_settings");
+          assert.deepEqual(Reflect.get(restoredMcp.params ?? {}, "disabledToolIds"), ["Task"]);
         }),
       ),
   );
@@ -791,6 +837,8 @@ describe("Droid adapter", () => {
           } else {
             assert.notInclude(fake.requestedMethods, "droid.execute_rewind");
           }
+          const forkSettings = yield* fake.takeRequest("droid.update_session_settings");
+          assert.deepEqual(Reflect.get(forkSettings.params ?? {}, "disabledToolIds"), ["Task"]);
           assert.deepEqual(
             (yield* source.runtime.readThreadSnapshot({
               providerThread: source.providerThread,
