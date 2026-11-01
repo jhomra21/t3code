@@ -118,7 +118,7 @@ const droidProviderCapabilitiesV2 = {
     canReadThreadSnapshot: true,
     canRollbackThread: true,
     canForkThread: true,
-    canForkFromTurn: false,
+    canForkFromTurn: true,
     canForkFromSubagentThread: false,
     exposesNativeThreadId: true,
   },
@@ -380,6 +380,41 @@ const decode = <A, I>(schema: Schema.Codec<A, I>, value: unknown) =>
   Schema.decodeUnknownEffect(schema)(value).pipe(
     Effect.mapError((cause) => protocolError("Invalid native Droid payload", cause)),
   );
+const resolveDroidRewindBoundary = Effect.fn("DroidAdapter.resolveRewindBoundary")(function* (
+  providerThreadId: OrchestrationV2ProviderThread["id"],
+  providerTurns: ReadonlyArray<OrchestrationV2ProviderTurn>,
+  providerTurnId?: OrchestrationV2ProviderTurn["id"],
+) {
+  const orderedTurns = providerTurns
+    .filter((turn) => turn.providerThreadId === providerThreadId)
+    .toSorted((left, right) => left.ordinal - right.ordinal);
+  const targetIndex =
+    providerTurnId === undefined
+      ? -1
+      : orderedTurns.findIndex((turn) => turn.id === providerTurnId);
+  if (providerTurnId !== undefined && targetIndex < 0)
+    return yield* protocolError("Target was not found in Droid provider turn history");
+  const nextTurn = orderedTurns[targetIndex + 1];
+  const messageId = nextTurn?.nativeTurnRef?.nativeId;
+  if (nextTurn !== undefined && (messageId == null || messageId.length === 0))
+    return yield* protocolError("The next Droid turn has no rewindable user message id");
+  return { targetTurn: orderedTurns[targetIndex], messageId };
+});
+const executeDroidRewind = Effect.fn("DroidAdapter.executeRewind")(function* (
+  rpc: DroidRpc.DroidRpcConnection,
+  sessionId: string,
+  messageId: string,
+  forkTitle: string,
+) {
+  const rewind = yield* rpc.request("droid.execute_rewind", {
+    sessionId,
+    messageId,
+    filesToRestore: [],
+    filesToDelete: [],
+    forkTitle,
+  });
+  return yield* decode(Schema.Struct({ newSessionId: Schema.String }), rewind.result);
+});
 const isRollbackThreadError = Schema.is(ProviderAdapter.ProviderAdapterRollbackThreadError);
 /**
  * `contextBudget` is the window Droid compacts against. `lastCallCompactionTokens` is the size
@@ -2788,31 +2823,20 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
                 return yield* fail(
                   "Stop background work before rewinding the native Droid session",
                 );
-              const orderedTurns = [...input.providerThreadTurns].sort(
-                (left, right) => left.ordinal - right.ordinal,
-              );
               const targetTurn =
                 input.target.type === "provider_turn" ? input.target.providerTurn : undefined;
-              let boundaryOrdinal = 0;
-              let nextTurn: OrchestrationV2ProviderTurn | undefined;
-              if (targetTurn !== undefined) {
-                if (targetTurn.providerThreadId !== input.providerThread.id)
-                  return yield* fail(
-                    "Rollback target belongs to a different Droid provider thread",
-                  );
-                const targetIndex = orderedTurns.findIndex((turn) => turn.id === targetTurn.id);
-                if (targetIndex < 0)
-                  return yield* fail(
-                    "Rollback target was not found in Droid provider turn history",
-                  );
-                boundaryOrdinal = targetTurn.ordinal;
-                nextTurn = orderedTurns[targetIndex + 1];
-              } else {
-                nextTurn = orderedTurns[0];
-              }
-
-              const messageId = nextTurn?.nativeTurnRef?.nativeId;
-              if (messageId == null || messageId.startsWith("task-completion:"))
+              if (
+                targetTurn !== undefined &&
+                targetTurn.providerThreadId !== input.providerThread.id
+              )
+                return yield* fail("Rollback target belongs to a different Droid provider thread");
+              const { targetTurn: boundaryTurn, messageId } = yield* resolveDroidRewindBoundary(
+                input.providerThread.id,
+                input.providerThreadTurns,
+                targetTurn?.id,
+              );
+              const boundaryOrdinal = boundaryTurn?.ordinal ?? 0;
+              if (messageId == null)
                 return yield* fail("The next Droid turn has no rewindable user message id");
               yield* makeThread({
                 threadId: input.providerThread.appThreadId ?? sessionInput.threadId,
@@ -2823,16 +2847,11 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
               if (nativeId === null)
                 return yield* fail("Droid provider thread has no native session id");
               const rpc = yield* requireConnection();
-              const rewind = yield* rpc.request("droid.execute_rewind", {
-                sessionId: nativeId,
+              const result = yield* executeDroidRewind(
+                rpc,
+                nativeId,
                 messageId,
-                filesToRestore: [],
-                filesToDelete: [],
-                forkTitle: `Rollback ${input.providerThread.id}`,
-              });
-              const result = yield* decode(
-                Schema.Struct({ newSessionId: Schema.String }),
-                rewind.result,
+                `Rollback ${input.providerThread.id}`,
               );
               yield* rpc.request("droid.load_session", {
                 sessionId: result.newSessionId,
@@ -2894,23 +2913,19 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
           ),
           forkThread: Effect.fn("DroidAdapter.forkThread")(
             function* (input: ProviderAdapter.ProviderAdapterV2ForkThreadInput) {
+              let rewindMessageId: string | null | undefined;
               if (input.providerTurnId !== undefined) {
-                const head = (input.sourceProviderTurns ?? Array.from(turns.values())).reduce<
-                  OrchestrationV2ProviderTurn | undefined
-                >(
-                  (latest, turn) =>
-                    turn.providerThreadId === input.sourceProviderThread.id &&
-                    (latest === undefined || turn.ordinal > latest.ordinal)
-                      ? turn
-                      : latest,
-                  undefined,
+                const boundary = yield* resolveDroidRewindBoundary(
+                  input.sourceProviderThread.id,
+                  input.sourceProviderTurns ?? Array.from(turns.values()),
+                  input.providerTurnId,
                 );
                 if (
-                  head?.id !== input.providerTurnId ||
-                  head.status === "running" ||
-                  head.status === "pending"
+                  boundary.targetTurn?.status === "running" ||
+                  boundary.targetTurn?.status === "pending"
                 )
-                  return yield* protocolError("Droid can only fork the current session head");
+                  return yield* protocolError("Cannot fork Droid from an unfinished provider turn");
+                rewindMessageId = boundary.messageId;
               }
               if (
                 active !== null ||
@@ -2944,6 +2959,21 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
                 workingDirectory: cwd,
               });
               nativeId = result.newSessionId;
+              if (rewindMessageId != null) {
+                const rewound = yield* executeDroidRewind(
+                  rpc,
+                  nativeId,
+                  rewindMessageId,
+                  `Fork ${input.sourceProviderThread.id}`,
+                );
+                if (rewound.newSessionId.length === 0 || rewound.newSessionId === sourceId)
+                  return yield* protocolError("Droid rewind did not return a fork session id");
+                yield* rpc.request("droid.load_session", {
+                  sessionId: rewound.newSessionId,
+                  ...(yield* sessionLoadOptions(input.targetThreadId)),
+                });
+                nativeId = rewound.newSessionId;
+              }
               yield* applySettings(selection, policy);
               const now = yield* DateTime.now;
               providerThread = {
