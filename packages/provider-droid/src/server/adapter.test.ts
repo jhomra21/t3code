@@ -663,9 +663,9 @@ describe("Droid adapter", () => {
       ),
   );
 
-  it.effect.each([false, true])(
-    "forks the session head with explicit boundary %s into a distinct thread with target MCP tools",
-    (explicitBoundary) =>
+  it.effect.each(["implicit-head", "head", "middle"])(
+    "forks the %s into a distinct thread with target MCP tools",
+    (boundary) =>
       provide(
         Effect.gen(function* () {
           const sourceFake = yield* makeFakeDroid();
@@ -688,6 +688,14 @@ describe("Droid adapter", () => {
           const sourceTurns = (yield* source.runtime.readThreadSnapshot({
             providerThread: source.providerThread,
           })).providerTurns;
+          const firstTurn = sourceTurns[0]!;
+          const laterTurn = {
+            ...firstTurn,
+            id: ProviderTurnId.make("later-turn"),
+            ordinal: firstTurn.ordinal + 1,
+            nativeTurnRef: { ...firstTurn.nativeTurnRef!, nativeId: "later-user-message" },
+          };
+          const explicitBoundary = boundary !== "implicit-head";
           const fake = yield* makeFakeDroid();
           const targetThreadId = ThreadId.make("droid-fork-target");
           const targetCwd = "C:\\scratch\\droid-fork-target";
@@ -713,11 +721,17 @@ describe("Droid adapter", () => {
             sourceProviderThread: source.providerThread,
             targetThreadId,
             ...(explicitBoundary
-              ? { sourceProviderTurns: sourceTurns, providerTurnId: sourceTurns[0]!.id }
+              ? {
+                  sourceProviderTurns: boundary === "middle" ? [laterTurn, firstTurn] : sourceTurns,
+                  providerTurnId: firstTurn.id,
+                }
               : {}),
           });
           assert.notEqual(forked.id, source.providerThread.id);
-          assert.equal(forked.nativeThreadRef?.nativeId, "forked-session");
+          assert.equal(
+            forked.nativeThreadRef?.nativeId,
+            boundary === "middle" ? "rewound-session" : "forked-session",
+          );
           assert.equal(source.providerThread.nativeThreadRef?.nativeId, "native-session");
           assert.equal(forked.appThreadId, targetThreadId);
           assert.deepEqual(forked.forkedFrom, {
@@ -743,7 +757,43 @@ describe("Droid adapter", () => {
               headers: [{ name: "Authorization", value: config.authorizationHeader }],
             },
           ]);
-          assert.notInclude(fake.requestedMethods, "droid.execute_rewind");
+          if (boundary === "middle") {
+            const rewind = yield* fake.takeRequest("droid.execute_rewind");
+            assert.deepEqual(rewind.params, {
+              sessionId: "forked-session",
+              messageId: "later-user-message",
+              filesToRestore: [],
+              filesToDelete: [],
+              forkTitle: `Fork ${source.providerThread.id}`,
+            });
+            const rewoundLoad = yield* fake.takeRequest("droid.load_session");
+            assert.equal(Reflect.get(rewoundLoad.params ?? {}, "sessionId"), "rewound-session");
+            assert.deepEqual(
+              Reflect.get(rewoundLoad.params ?? {}, "mcpServers"),
+              Reflect.get(forkLoad.params ?? {}, "mcpServers"),
+            );
+            assert.equal(
+              Reflect.get(rewoundLoad.params ?? {}, "autoRejectPermissionRequests"),
+              Reflect.get(forkLoad.params ?? {}, "autoRejectPermissionRequests"),
+            );
+            assert.isBelow(
+              fake.requestedMethods.indexOf("droid.change_working_directory"),
+              fake.requestedMethods.indexOf("droid.execute_rewind"),
+            );
+            assert.isBelow(
+              fake.requestedMethods.indexOf("droid.execute_rewind"),
+              fake.requestedMethods.indexOf("droid.update_session_settings"),
+            );
+          } else {
+            assert.notInclude(fake.requestedMethods, "droid.execute_rewind");
+          }
+          assert.deepEqual(
+            (yield* source.runtime.readThreadSnapshot({
+              providerThread: source.providerThread,
+            })).providerTurns,
+            sourceTurns,
+          );
+          assert.notInclude(sourceFake.requestedMethods, "droid.execute_rewind");
         }),
       ),
   );
@@ -784,43 +834,91 @@ describe("Droid adapter", () => {
     ),
   );
 
-  it.effect.each(["historical", "same-id", "active", "source-active", "background"])(
-    "rejects unsafe %s forks",
-    (reason) =>
-      provide(
-        Effect.gen(function* () {
-          const fake = yield* makeFakeDroid({
-            forkSessionId: reason === "same-id" ? "native-session" : "forked-session",
-          });
-          const { runtime, input, providerThread } = yield* open(fake);
-          if (reason === "active") {
-            yield* runtime.startTurn(input);
-            yield* fake.takeRequest("droid.add_user_message");
-          }
-          const error = yield* Effect.flip(
-            runtime.forkThread({
-              sourceProviderThread:
-                reason === "background"
-                  ? {
-                      ...providerThread,
-                      pendingBackgroundTasks: [
-                        { taskId: "child", kind: "subagent", description: "running" },
-                      ],
-                    }
-                  : reason === "source-active"
-                    ? { ...providerThread, status: "active" }
-                    : providerThread,
-              targetThreadId: ThreadId.make("droid-fork-target"),
-              ...(reason === "historical"
-                ? { providerTurnId: ProviderTurnId.make("old-turn") }
-                : {}),
-            }),
+  it.effect.each([
+    "unmapped",
+    "missing-boundary",
+    "task-boundary",
+    "same-id",
+    "active",
+    "source-active",
+    "background",
+  ])("rejects unsafe %s forks", (reason) =>
+    provide(
+      Effect.gen(function* () {
+        const fake = yield* makeFakeDroid({
+          forkSessionId: reason === "same-id" ? "native-session" : "forked-session",
+        });
+        const { runtime, input, providerThread } = yield* open(fake);
+        if (reason === "active") {
+          yield* runtime.startTurn(input);
+          yield* fake.takeRequest("droid.add_user_message");
+        }
+        const unmappableBoundary = reason === "missing-boundary" || reason === "task-boundary";
+        let sourceProviderTurns: ProviderAdapter.ProviderAdapterV2ForkThreadInput["sourceProviderTurns"];
+        if (unmappableBoundary) {
+          const completed = yield* Deferred.make<void>();
+          yield* runtime.events.pipe(
+            Stream.runForEach((event) =>
+              event.type === "turn.terminal" ? Deferred.succeed(completed, undefined) : Effect.void,
+            ),
+            Effect.forkChild,
           );
-          assert.instanceOf(error, ProviderAdapter.ProviderAdapterForkThreadError);
-          if (reason !== "same-id") assert.notInclude(fake.requestedMethods, "droid.fork_session");
-          assert.notInclude(fake.requestedMethods, "droid.execute_rewind");
-        }),
-      ),
+          yield* runtime.startTurn(input);
+          yield* fake.takeRequest("droid.add_user_message");
+          yield* fake.emitNotification({
+            type: "agent_turn_completed",
+            reason: "completed",
+            turnId: input.message.messageId,
+          });
+          yield* Deferred.await(completed);
+          const sourceTurn = (yield* runtime.readThreadSnapshot({ providerThread }))
+            .providerTurns[0]!;
+          const persistedTurn = {
+            ...sourceTurn,
+            id: ProviderTurnId.make("old-turn"),
+          };
+          sourceProviderTurns = [
+            persistedTurn,
+            {
+              ...persistedTurn,
+              id: ProviderTurnId.make("later-turn"),
+              ordinal: persistedTurn.ordinal + 1,
+              nativeTurnRef:
+                reason === "missing-boundary"
+                  ? null
+                  : {
+                      driver: DROID_PROVIDER,
+                      nativeId: "task-completion:child",
+                      strength: "strong",
+                    },
+            },
+          ];
+        }
+        const error = yield* Effect.flip(
+          runtime.forkThread({
+            sourceProviderThread:
+              reason === "background"
+                ? {
+                    ...providerThread,
+                    pendingBackgroundTasks: [
+                      { taskId: "child", kind: "subagent", description: "running" },
+                    ],
+                  }
+                : reason === "source-active"
+                  ? { ...providerThread, status: "active" }
+                  : providerThread,
+            targetThreadId: ThreadId.make("droid-fork-target"),
+            ...(reason === "unmapped" || unmappableBoundary
+              ? { providerTurnId: ProviderTurnId.make("old-turn") }
+              : {}),
+            ...(sourceProviderTurns === undefined ? {} : { sourceProviderTurns }),
+          }),
+        );
+        assert.instanceOf(error, ProviderAdapter.ProviderAdapterForkThreadError);
+        if (reason !== "same-id") assert.notInclude(fake.requestedMethods, "droid.fork_session");
+        assert.notInclude(fake.requestedMethods, "droid.execute_rewind");
+      }),
+    ),
   );
 
   it.effect.each([
