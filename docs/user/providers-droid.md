@@ -55,7 +55,10 @@ approval, session approval when offered, and cancellation. Pending approvals
 are live requests: if the provider session stops, they cannot be answered later.
 Droid does not request approval for file reads.
 
-Droid subagents appear in the shared subagent view with their status and
+When T3 Code's tools are attached to a Droid thread, Droid starts subagents
+through T3 Code, and Droid's native `Task` tool is turned off because T3 Code
+cannot stop or recover its children. Without T3 Code's tools, Droid can use
+`Task`: its subagents appear in the shared subagent view with their status and
 result. When a subagent asks for approval or asks a question, the request is
 shown on that subagent. T3 Code follows the child session transcript and shows
 its conversation, tool activity, model, and effort in the child thread.
