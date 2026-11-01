@@ -396,10 +396,7 @@ const resolveDroidRewindBoundary = Effect.fn("DroidAdapter.resolveRewindBoundary
     return yield* protocolError("Target was not found in Droid provider turn history");
   const nextTurn = orderedTurns[targetIndex + 1];
   const messageId = nextTurn?.nativeTurnRef?.nativeId;
-  if (
-    nextTurn !== undefined &&
-    (messageId == null || messageId.length === 0 || messageId.startsWith("task-completion:"))
-  )
+  if (nextTurn !== undefined && (messageId == null || messageId.length === 0))
     return yield* protocolError("The next Droid turn has no rewindable user message id");
   return { targetTurn: orderedTurns[targetIndex], messageId };
 });
