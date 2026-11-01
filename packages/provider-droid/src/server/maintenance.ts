@@ -1,5 +1,7 @@
 import { ProviderDriverKind, type ServerProvider } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientRequest from "effect/http/HttpClientRequest";
@@ -45,12 +47,27 @@ const packageManagedResolver = makePackageManagedProviderMaintenanceResolver({
 });
 
 export const droidMaintenanceResolver = {
-  resolve: (context: Parameters<typeof packageManagedResolver.resolve>[0]) =>
-    packageManagedResolver.resolve(
+  resolve: Effect.fn("droidMaintenanceResolver.resolve")(function* (
+    context: Parameters<typeof packageManagedResolver.resolve>[0],
+  ) {
+    const capabilities = yield* packageManagedResolver.resolve(
       context !== null && isPackageManagedPath(context.realCommandPath)
         ? { ...context, resolvedCommandPath: context.realCommandPath }
         : context,
-    ),
+    );
+    if (context?.platform !== "win32" || capabilities.update?.lockKey !== "droid-native") {
+      return capabilities;
+    }
+    const fileSystem = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const backupPath = path.join(path.dirname(context.resolvedCommandPath), "droid.exe.old");
+    return {
+      ...capabilities,
+      onUpdated: fileSystem
+        .remove(backupPath)
+        .pipe(Effect.catch(() => Effect.logDebug("Could not remove the previous Droid binary"))),
+    };
+  }),
 };
 
 const latestDroidVersion = Effect.fn("latestDroidVersion")(function* (options?: {

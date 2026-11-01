@@ -15,6 +15,8 @@ export interface ProviderMaintenanceCapabilities {
   readonly compareVersions?: (current: string, latest: string) => number;
   /** Resolved executable path for advisories when no update command is proven. */
   readonly installPath?: string;
+  /** Runs only after an update command succeeds and its refreshed version is verified current. */
+  readonly onUpdated?: Effect.Effect<void>;
 }
 
 export interface ProviderMaintenanceCommandAction {
