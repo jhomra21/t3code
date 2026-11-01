@@ -731,30 +731,106 @@ describe("providerMaintenanceRunner", () => {
     ),
   );
 
-  it.effect(
-    "marks successful commands as unchanged when the refreshed provider is still outdated",
-    () =>
-      Effect.gen(function* () {
-        const { registry } = yield* makeRegistry({
+  it.effect.each([
+    {
+      name: "staged update",
+      versions: ["0.1.0", "9.9.9"],
+      code: 0,
+      status: "succeeded",
+      refreshes: 2,
+      cleanups: 1,
+    },
+    {
+      name: "still outdated",
+      versions: ["0.1.0", "0.1.0"],
+      code: 0,
+      status: "unchanged",
+      refreshes: 2,
+      cleanups: 0,
+    },
+    {
+      name: "inconclusive recheck",
+      versions: ["0.1.0", null],
+      code: 0,
+      status: "unchanged",
+      refreshes: 2,
+      cleanups: 0,
+    },
+    {
+      name: "already updated",
+      versions: ["9.9.9"],
+      code: 0,
+      status: "succeeded",
+      refreshes: 1,
+      cleanups: 1,
+    },
+    {
+      name: "failed command",
+      versions: ["9.9.9"],
+      code: 1,
+      status: "failed",
+      refreshes: 0,
+      cleanups: 0,
+    },
+    {
+      name: "unknown version",
+      versions: [null],
+      code: 0,
+      status: "succeeded",
+      refreshes: 1,
+      cleanups: 0,
+    },
+  ])(
+    "verifies successful commands with one bounded recheck: $name",
+    ({ versions, code, status, refreshes, cleanups }) => {
+      let refreshCount = 0;
+      let cleanupCount = 0;
+      return Effect.gen(function* () {
+        const { registry, providersRef } = yield* makeRegistry({
           ...baseProvider,
           installed: true,
           version: "0.1.0",
         });
-        const updater = yield* makeTestRunner(registry);
+        const updater = yield* makeTestRunner({
+          ...registry,
+          refreshAfterUpdate: () =>
+            Ref.updateAndGet(providersRef, (providers) => {
+              const version = versions[refreshCount++];
+              if (version === undefined) throw new Error("must not probe more than expected");
+              return providers.map((provider) => ({ ...provider, version }));
+            }),
+          getProviderMaintenanceCapabilitiesForInstance: () =>
+            Effect.succeed({
+              ...lifecycleFor(CODEX_DRIVER),
+              onUpdated: Effect.sync(() => {
+                cleanupCount += 1;
+              }),
+            }),
+        });
 
         const result = yield* updater.updateProvider(CODEX_DRIVER);
 
-        assert.strictEqual(result.providers[0]?.updateState?.status, "unchanged");
-        assert.include(result.providers[0]?.updateState?.message ?? "", "still detects");
+        assert.strictEqual(result.providers[0]?.updateState?.status, status);
+        assert.strictEqual(refreshCount, refreshes);
+        assert.strictEqual(cleanupCount, cleanups);
+        if (status === "unchanged") {
+          assert.include(
+            result.providers[0]?.updateState?.message ?? "",
+            "still detects an outdated provider version",
+          );
+        } else if (status === "succeeded") {
+          assert.strictEqual(result.providers[0]?.updateState?.message, "Provider updated.");
+        }
       }).pipe(
         Effect.provide(
           Layer.mergeAll(
             layerNonWindowsPlatform,
             layerLatestVersionHttpClient("9.9.9"),
-            layerMockSpawner(() => ({ stdout: "updated" })),
+            layerMockSpawner(() => ({ stdout: "updated", code })),
           ),
         ),
-      ),
+      );
+    },
   );
 
   // A native updater such as `claude update` downloads a ~300 MB binary and
