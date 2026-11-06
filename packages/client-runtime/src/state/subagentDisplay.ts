@@ -1,4 +1,5 @@
 import type {
+  ModelSelection,
   OrchestrationV2TurnItemStatus,
   OrchestrationV2ThreadShell,
   OrchestrationProjectShell,
@@ -14,7 +15,10 @@ import { isTerminalSubagentStatus } from "./subagentRuntime.ts";
 export function isThreadListed(
   thread: {
     readonly environmentId: EnvironmentId;
-    readonly lineage: { readonly relationshipToParent: string | null };
+    readonly lineage: {
+      readonly relationshipToParent: string | null;
+      readonly sideChat?: boolean | undefined;
+    };
     readonly providerInstanceId: string;
     readonly runtime: { readonly status: string } | null;
   },
@@ -23,6 +27,7 @@ export function isThreadListed(
     ReadonlyArray<{ readonly instanceId: string; readonly driver: string }>
   >,
 ): boolean {
+  if (thread.lineage.sideChat === true) return false;
   if (thread.lineage.relationshipToParent !== "subagent") return true;
   return (
     providersByEnvironment
@@ -78,6 +83,7 @@ export function formatSubagentDisplayTitle(title: string): string {
 
 export function resolveSubagentMetadata(input: {
   readonly model: string | null;
+  readonly modelSelection?: Pick<ModelSelection, "model"> | undefined;
   readonly provider?: Pick<ServerProvider, "driver" | "models"> | null | undefined;
   readonly parentThread?:
     | Pick<OrchestrationV2ThreadShell, "projectId" | "worktreePath">
@@ -93,7 +99,7 @@ export function resolveSubagentMetadata(input: {
     | null
     | undefined;
 }) {
-  const model = input.model?.trim();
+  const model = input.model?.trim() || input.modelSelection?.model.trim();
   const slug = input.provider
     ? resolveSelectableModel(input.provider.driver, model, input.provider.models)
     : model;
@@ -136,7 +142,7 @@ export function resolveSubagentMetadata(input: {
         ]
       : []),
   ];
-  return { modelLabel, workspace };
+  return { modelLabel, modelSlug: slug ?? model ?? null, workspace };
 }
 
 export function subagentDetailPreview(input: {
@@ -144,10 +150,23 @@ export function subagentDetailPreview(input: {
   readonly result?: string | null | undefined;
   readonly progress?: string | null | undefined;
 }): string | null {
-  const result = input.result?.trim();
-  const progress = input.progress?.trim();
-  const detail =
-    (isTerminalSubagentStatus(input.status) ? result || progress : progress || result) || "";
-  const compact = detail.replace(/\s+/gu, " ");
-  return compact.length > 280 ? `${compact.slice(0, 280).trimEnd()}…` : compact || null;
+  const terminal = isTerminalSubagentStatus(input.status);
+  const preferred = terminal ? input.result : input.progress;
+  const fallback = terminal ? input.progress : input.result;
+  const detail = preferred?.trimStart() || fallback?.trimStart() || "";
+  if (detail.length <= 280) return detail.trimEnd().replace(/\s+/gu, " ") || null;
+  const whitespace = /\s+/uy;
+  let compact = "";
+  for (let index = 0; index < detail.length; index += 1) {
+    whitespace.lastIndex = index;
+    const gap = whitespace.exec(detail);
+    if (gap) {
+      index += gap[0].length;
+      if (index === detail.length) break;
+      if (compact.length > 0) compact += " ";
+    }
+    compact += detail[index];
+    if (compact.length > 280) return `${compact.slice(0, 280).trimEnd()}…`;
+  }
+  return compact || null;
 }
