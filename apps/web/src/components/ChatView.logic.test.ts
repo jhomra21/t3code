@@ -7,6 +7,7 @@ import {
   snapshotComposerSend,
   withMessageContext,
   deriveAvailableRevertTurnCounts,
+  deriveWorkspaceMutationId,
 } from "./ChatView.logic";
 import { recallCheckoutIsRepo, rememberCheckoutIsRepo } from "./ChatView.logic";
 import { ProviderDriverKind, type ServerProvider } from "@t3tools/contracts";
@@ -25,6 +26,7 @@ import {
   ThreadId,
   RunId,
   TurnItemId,
+  type OrchestrationV2PendingBackgroundTask,
   type OrchestrationV2ProjectedTurnItem,
   type WorktreeSetupSnapshot,
 } from "@t3tools/contracts";
@@ -39,6 +41,7 @@ import type { Thread } from "../types";
 import { makeThreadFixture, makeThreadProjectionFixture } from "../test-fixtures";
 import {
   getAntigravitySendBlockReason,
+  resolveBackgroundWorkBanner,
   resolveComposerProviderSelection,
   resolveWorktreeSetupProgress,
   peekRememberedThreadTimeline,
@@ -1270,5 +1273,72 @@ describe("deriveAvailableRevertTurnCounts", () => {
   it("offers nothing without a provider session to rewind", () => {
     expect(deriveAvailableRevertTurnCounts(projection({ providerSessionId: null })).size).toBe(0);
     expect(deriveAvailableRevertTurnCounts(null).size).toBe(0);
+  });
+});
+describe("deriveWorkspaceMutationId", () => {
+  const item = (id: string, type: string, status: string) =>
+    ({
+      item: { id: TurnItemId.make(id), type, status },
+    }) as unknown as OrchestrationV2ProjectedTurnItem;
+
+  it("keys on the latest finished command or file change and the latest checkpoint", () => {
+    expect(
+      deriveWorkspaceMutationId(
+        [
+          item("edit", "file_change", "completed"),
+          item("reply", "assistant_message", "completed"),
+          item("command", "command_execution", "running"),
+        ],
+        "2026-01-01T00:00:00.000Z",
+      ),
+    ).toBe(JSON.stringify(["edit", "2026-01-01T00:00:00.000Z"]));
+  });
+
+  it("is null before anything could have touched the workspace", () => {
+    expect(deriveWorkspaceMutationId([item("reply", "assistant_message", "completed")], null)).toBe(
+      null,
+    );
+  });
+});
+
+describe("background work banner", () => {
+  const activeRoster: ReadonlyArray<OrchestrationV2PendingBackgroundTask> = [
+    { taskId: "subagent", kind: "subagent" },
+  ];
+  const settledTasks: ReadonlyArray<OrchestrationV2PendingBackgroundTask> = [
+    { taskId: "command", kind: "command" },
+  ];
+
+  it("shows the active provider roster while working and withholds Stop", () => {
+    expect(
+      resolveBackgroundWorkBanner({
+        hasActiveThread: true,
+        isWorking: true,
+        activeRoster,
+        settledTasks,
+      }),
+    ).toEqual({ tasks: activeRoster, canStop: false });
+  });
+
+  it("shows settled work and enables Stop after the run ends", () => {
+    expect(
+      resolveBackgroundWorkBanner({
+        hasActiveThread: true,
+        isWorking: false,
+        activeRoster,
+        settledTasks,
+      }),
+    ).toEqual({ tasks: settledTasks, canStop: true });
+  });
+
+  it("shows no work without an active thread", () => {
+    expect(
+      resolveBackgroundWorkBanner({
+        hasActiveThread: false,
+        isWorking: true,
+        activeRoster,
+        settledTasks,
+      }),
+    ).toEqual({ tasks: [], canStop: false });
   });
 });

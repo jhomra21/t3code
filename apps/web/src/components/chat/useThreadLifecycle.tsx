@@ -10,6 +10,7 @@ import {
   shouldShowBranchMismatchBanner,
   chatActionErrorMessage,
   makeThreadErrorSetter,
+  resolveBackgroundWorkBanner,
 } from "../ChatView.logic";
 import { useStableCallback } from "../../hooks/useStableCallback";
 import { useDeadlinePassed, useNowAfter } from "../../hooks/useDeadline";
@@ -106,6 +107,7 @@ interface ThreadLifecycleInput {
   readonly runtimeMode: RuntimeMode;
   readonly isWorking: boolean;
   readonly pendingBackgroundTasks: Parameters<typeof backgroundWorkNowItem>[0]["tasks"];
+  readonly activeBackgroundRoster: Parameters<typeof backgroundWorkNowItem>[0]["tasks"];
   readonly turnItems: Parameters<typeof backgroundWorkNowItem>[0]["turnItems"];
   readonly activePendingApproval: PendingThreadRequests["activePendingApproval"];
   readonly activePendingUserInput: PendingThreadRequests["activePendingUserInput"];
@@ -158,6 +160,7 @@ export function useThreadLifecycle(input: ThreadLifecycleInput) {
     runtimeMode,
     isWorking,
     pendingBackgroundTasks,
+    activeBackgroundRoster,
     turnItems,
     activePendingApproval,
     activePendingUserInput,
@@ -408,7 +411,13 @@ export function useThreadLifecycle(input: ThreadLifecycleInput) {
   });
   // The interrupt path also accepts a completed run while its provider still
   // has background work.
-  const activeBackgroundTasks = !isWorking && activeThread ? pendingBackgroundTasks : [];
+  const backgroundWork = resolveBackgroundWorkBanner({
+    hasActiveThread: activeThread !== undefined,
+    isWorking,
+    activeRoster: activeBackgroundRoster,
+    settledTasks: pendingBackgroundTasks,
+  });
+  const activeBackgroundTasks = backgroundWork.tasks;
   const [backgroundWorkStops, setBackgroundWorkStops] = useState<
     Record<string, BackgroundWorkStopRequest | undefined>
   >({});
@@ -599,6 +608,7 @@ export function useThreadLifecycle(input: ThreadLifecycleInput) {
         threadId: activeThread.id,
         tasks: activeBackgroundTasks,
         turnItems,
+        canStop: backgroundWork.canStop,
         stopDisabled: !canOperateThread || isStoppingBackgroundWork,
         stopping: isStoppingBackgroundWork,
         onStop: handleStopBackgroundWorkStable,
