@@ -464,20 +464,27 @@ export function routeProviderEvent(
               ownedThreadIds: new Set([...state.ownedThreadIds, coordinator.childThreadId]),
             }
           : state;
-      if (
-        !ownsRun(coordinator.runId) ||
-        coordinator.workflow === undefined ||
-        coordinator.childThreadId === null
-      ) {
+      if (!ownsRun(coordinator.runId) || coordinator.childThreadId === null) {
         return [belongs, adopted];
       }
+      const childThreadId = coordinator.childThreadId;
       const workflowMemberParents = new Map(state.workflowMemberParents);
-      for (const member of coordinator.workflow.agents) {
+      for (const member of coordinator.workflow?.agents ?? []) {
         if (member.childThreadId !== undefined) {
-          workflowMemberParents.set(member.childThreadId, coordinator.childThreadId);
+          workflowMemberParents.set(member.childThreadId, childThreadId);
         }
       }
-      return [true, { ...adopted, workflowMemberParents }];
+      return [
+        true,
+        {
+          ...adopted,
+          workflowMemberParents,
+          ownedThreadIds:
+            childThreadId === input.threadId
+              ? adopted.ownedThreadIds
+              : new Set([...adopted.ownedThreadIds, childThreadId]),
+        },
+      ];
     }
     case "message.updated":
       return [ownsRun(event.message.runId) || ownsChildThread(event.message.threadId), state];
