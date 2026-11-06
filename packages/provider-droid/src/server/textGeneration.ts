@@ -12,6 +12,7 @@ export function makeDroidTextGeneration(): ProviderTextGeneration {
       }),
     );
   return {
+    generateTranscriptionPostProcessing: () => unsupported("generateTranscriptionPostProcessing"),
     generateCommitMessage: () => unsupported("generateCommitMessage"),
     generatePrContent: () => unsupported("generatePrContent"),
     generateBranchName: () => unsupported("generateBranchName"),
