@@ -124,6 +124,24 @@ export function handoffBudget(input: {
   );
 }
 
+export function handoffRemainingWindow(input: {
+  readonly userText: string;
+  readonly attachments: ReadonlyArray<ChatAttachment>;
+  readonly providerThread: OrchestrationV2ProviderThread;
+  readonly nativeContextEstimate: number;
+  readonly modelContextWindow?: number | undefined;
+}): number {
+  const usage = input.providerThread.contextUsage;
+  const window = Math.min(
+    input.modelContextWindow ?? usage?.maxTokens ?? 128_000,
+    usage?.maxTokens ?? Infinity,
+  );
+  const native = usage?.usedTokens ?? input.nativeContextEstimate;
+  const current =
+    Buffer.byteLength(JSON.stringify(input.userText)) + attachmentTokenAllowance(input.attachments);
+  return Math.max(0, window - native - current);
+}
+
 export function historicalMessage(
   item: OrchestrationV2TurnItem,
 ): OrchestrationV2HistoricalMessage | null {
