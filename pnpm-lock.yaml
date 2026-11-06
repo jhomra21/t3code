@@ -336,7 +336,7 @@ overrides:
   effect: 4.1.2
   '@opencode/protocol>effect': 4.1.2
   '@opencode/schema>effect': 4.1.2
-  node-abi: 4.33.0
+  node-abi: 4.40.0
   '@react-native/metro-config': 0.88.0
   electron-webauthn>@electron-webauthn/macos: 1.3.1
   '@electron-webauthn/macos>objc-js': 1.5.0
@@ -10196,8 +10196,8 @@ packages:
   nlcst-to-string@4.0.0:
     resolution: {integrity: sha512-YKLBCcUYKAg0FNlOBT6aI91qFmSiFKiluk655WzPF+DDMA02qIyy8uiRqI8QXtcFpEvll12LpL5MXqEmAZ+dcA==}
 
-  node-abi@4.33.0:
-    resolution: {integrity: sha512-vLBWCKb+7LWsX+TbfzWOkw0W81m377tyx3hOweBTjO43CXZnRGS1/JPWs20fr0PgZyDXk6ROYrylsEycK8raDA==}
+  node-abi@4.40.0:
+    resolution: {integrity: sha512-GuvqvtrOk+AC27RidBxBsMzVNkwNl7PjHgc4NXbmdvSVLgIUjpaqcG1FjNRYnt2Yn9Ytq+Ln37XsBaglUcte/w==}
     engines: {node: '>=22.12.0'}
 
   node-addon-api@7.1.1:
@@ -13750,7 +13750,7 @@ snapshots:
     dependencies:
       '@malept/cross-spawn-promise': 2.0.0
       debug: 4.4.3(supports-color@8.1.1)
-      node-abi: 4.33.0
+      node-abi: 4.40.0
       node-api-version: 0.2.1
       node-gyp: 12.4.0
       read-binary-file-arch: 1.0.6(supports-color@8.1.1)
@@ -20187,7 +20187,7 @@ snapshots:
     dependencies:
       '@types/nlcst': 2.0.3
 
-  node-abi@4.33.0:
+  node-abi@4.40.0:
     dependencies:
       semver: 7.7.4
 
