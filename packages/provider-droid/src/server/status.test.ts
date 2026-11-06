@@ -206,6 +206,7 @@ describe("Droid status", () => {
       const requests = invocations
         .filter((invocation) => typeof invocation.method === "string")
         .map((invocation) => invocation.method);
+      const environment = yield* HostProcess.Environment;
       assert.isTrue(snapshot.installed);
       assert.equal(snapshot.auth.status, "authenticated");
       assert.equal(snapshot.status, "ready");
@@ -217,9 +218,9 @@ describe("Droid status", () => {
         assert.isString(invocation.cwd);
         assert.notEqual(invocation.cwd, projectCwd);
         assert.isString(invocation.factoryHome);
-        assert.notEqual(invocation.factoryHome, process.env.HOME);
+        assert.notEqual(invocation.factoryHome, environment.HOME);
         assert.isString(invocation.home);
-        assert.notEqual(invocation.home, process.env.HOME);
+        assert.notEqual(invocation.home, environment.HOME);
         assert.isUndefined(invocation.runtimeSettingsPath);
       }
       assert.deepEqual(

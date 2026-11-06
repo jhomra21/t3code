@@ -82,9 +82,7 @@ describe("DroidRpc", () => {
         args: ["-e", peer],
         env: process.env,
         onRequest: (request) =>
-          request.method === "droid.ask_user"
-            ? Effect.die("handler failed")
-            : Effect.sync(() => undefined),
+          request.method === "droid.ask_user" ? Effect.die("handler failed") : Effect.undefined,
       });
       yield* rpc.request("requests", {});
       const replies = yield* rpc.notifications.pipe(Stream.take(3), Stream.runCollect);
