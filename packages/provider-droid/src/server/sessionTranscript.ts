@@ -77,25 +77,33 @@ export type DroidSubagentWork = {
 export const droidSubagentStepSignature = (step: DroidSubagentStep) =>
   NodeCrypto.hash("sha256", JSON.stringify(step));
 
+class DroidSessionFileError extends Schema.TaggedError<DroidSessionFileError>()(
+  "DroidSessionFileError",
+  { path: Schema.String, cause: Schema.Defect() },
+) {}
+
 export const readDroidSessionAppend = (file: string, offset: number, inode?: number) =>
-  Effect.tryPromise(async () => {
-    const handle = await NodeFSP.open(file, "r");
-    try {
-      const stat = await handle.stat();
-      const restarted = stat.size < offset || (inode !== undefined && inode !== stat.ino);
-      const start = restarted ? 0 : offset;
-      const buffer = Buffer.alloc(stat.size - start);
-      const { bytesRead } = await handle.read(buffer, 0, buffer.length, start);
-      const complete = buffer.subarray(0, bytesRead).lastIndexOf(0x0a) + 1;
-      return {
-        text: buffer.subarray(0, complete).toString("utf8"),
-        consumed: complete,
-        restarted,
-        inode: stat.ino,
-      };
-    } finally {
-      await handle.close();
-    }
+  Effect.tryPromise({
+    try: async () => {
+      const handle = await NodeFSP.open(file, "r");
+      try {
+        const stat = await handle.stat();
+        const restarted = stat.size < offset || (inode !== undefined && inode !== stat.ino);
+        const start = restarted ? 0 : offset;
+        const buffer = Buffer.alloc(stat.size - start);
+        const { bytesRead } = await handle.read(buffer, 0, buffer.length, start);
+        const complete = buffer.subarray(0, bytesRead).lastIndexOf(0x0a) + 1;
+        return {
+          text: buffer.subarray(0, complete).toString("utf8"),
+          consumed: complete,
+          restarted,
+          inode: stat.ino,
+        };
+      } finally {
+        await handle.close();
+      }
+    },
+    catch: (cause) => new DroidSessionFileError({ path: file, cause }),
   }).pipe(
     Effect.orElseSucceed(() => ({
       text: "",
@@ -113,9 +121,11 @@ const displayModel = (value: string | undefined) => {
 };
 
 const readSessionModel = (file: string) =>
-  Effect.tryPromise(() =>
-    NodeFSP.readFile(file.replace(/\.jsonl$/u, ".settings.json"), "utf8"),
-  ).pipe(
+  Effect.tryPromise({
+    try: () => NodeFSP.readFile(file.replace(/\.jsonl$/u, ".settings.json"), "utf8"),
+    catch: (cause) =>
+      new DroidSessionFileError({ path: file.replace(/\.jsonl$/u, ".settings.json"), cause }),
+  }).pipe(
     Effect.map((text) => {
       const decoded = decodeSettings(text);
       return decoded._tag === "Some"
@@ -161,27 +171,30 @@ export const findDroidSessionDirectory = (input: {
   readonly sessionId: string;
   readonly environment: NodeJS.ProcessEnv;
 }) =>
-  Effect.tryPromise(async () => {
-    if (!isSessionId(input.sessionId)) return undefined;
-    const home =
-      input.environment.FACTORY_HOME_OVERRIDE ?? input.environment.HOME ?? NodeOS.homedir();
-    const root = NodePath.join(home, ".factory", "sessions");
-    const realRoot = await NodeFSP.realpath(root);
-    for (const project of await NodeFSP.readdir(root)) {
-      const directory = NodePath.join(root, project);
-      const candidate = NodePath.join(directory, `${input.sessionId}.jsonl`);
-      if (
-        !(await NodeFSP.stat(candidate).then(
-          (stat) => stat.isFile(),
-          () => false,
-        ))
-      )
-        continue;
-      const realDirectory = await NodeFSP.realpath(directory);
-      if (realDirectory === realRoot || realDirectory.startsWith(`${realRoot}${NodePath.sep}`))
-        return realDirectory;
-    }
-    return undefined;
+  Effect.tryPromise({
+    try: async () => {
+      if (!isSessionId(input.sessionId)) return undefined;
+      const home =
+        input.environment.FACTORY_HOME_OVERRIDE ?? input.environment.HOME ?? NodeOS.homedir();
+      const root = NodePath.join(home, ".factory", "sessions");
+      const realRoot = await NodeFSP.realpath(root);
+      for (const project of await NodeFSP.readdir(root)) {
+        const directory = NodePath.join(root, project);
+        const candidate = NodePath.join(directory, `${input.sessionId}.jsonl`);
+        if (
+          !(await NodeFSP.stat(candidate).then(
+            (stat) => stat.isFile(),
+            () => false,
+          ))
+        )
+          continue;
+        const realDirectory = await NodeFSP.realpath(directory);
+        if (realDirectory === realRoot || realDirectory.startsWith(`${realRoot}${NodePath.sep}`))
+          return realDirectory;
+      }
+      return undefined;
+    },
+    catch: (cause) => new DroidSessionFileError({ path: input.sessionId, cause }),
   }).pipe(Effect.orElseSucceed(() => undefined));
 
 const maxToolOutputChars = 20_000;
@@ -251,18 +264,20 @@ export const makeDroidSubagentFollower = Effect.fn("DroidTranscript.makeFollower
         resource.close();
       });
     const watcher = yield* Effect.acquireRelease(
-      Effect.try(() =>
-        watchDirectory(input.directory, (_event, name) => {
-          if (
-            name !== null &&
-            [
-              NodePath.basename(expectedFile),
-              NodePath.basename(expectedFile.replace(/\.jsonl$/u, ".settings.json")),
-            ].includes(String(name))
-          )
-            Queue.offerUnsafe(dirty, undefined);
-        }),
-      ),
+      Effect.try({
+        try: () =>
+          watchDirectory(input.directory, (_event, name) => {
+            if (
+              name !== null &&
+              [
+                NodePath.basename(expectedFile),
+                NodePath.basename(expectedFile.replace(/\.jsonl$/u, ".settings.json")),
+              ].includes(String(name))
+            )
+              Queue.offerUnsafe(dirty, undefined);
+          }),
+        catch: (cause) => new DroidFollowerError({ cause }),
+      }),
       release,
     ).pipe(Effect.tap((resource) => Effect.sync(() => resource.on("error", onError))));
     const tools = new Map<string, Extract<DroidSubagentStep, { readonly kind: "tool" }>>();
