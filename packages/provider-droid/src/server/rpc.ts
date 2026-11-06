@@ -198,10 +198,8 @@ export const makeConnection = Effect.fn("DroidRpc.makeConnection")(function* (op
       serverRequests.set(frame.id, incomingRequest);
       const handled =
         closing || options.onRequest === undefined
-          ? Effect.sync(() => undefined)
-          : Effect.suspend(
-              () => options.onRequest?.(incomingRequest) ?? Effect.sync(() => undefined),
-            );
+          ? Effect.undefined
+          : Effect.suspend(() => options.onRequest?.(incomingRequest) ?? Effect.undefined);
       yield* handled.pipe(
         // ignoreCause would discard the handler's reply, answering every request with the default.
         Effect.catchCause((cause) =>

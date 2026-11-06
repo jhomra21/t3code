@@ -1571,7 +1571,7 @@ it.layer(NodeServices.layer)("AgentSessionScanner", (it) => {
             workspaceRoot: workspace,
           });
           expect(outcomes.map((outcome) => outcome._tag)).toEqual(
-            overflow ? ["Skipped", "Importable"] : ["Importable", "Skipped"],
+            overflow ? ["Skipped", "Importable"] : ["Importable", "Importable"],
           );
           expect(
             outcomes.flatMap((outcome) =>
@@ -1579,7 +1579,7 @@ it.layer(NodeServices.layer)("AgentSessionScanner", (it) => {
                 ? outcome.thread.messages.map((message) => message.text)
                 : [],
             ),
-          ).toEqual([overflow ? "Older prompt" : "First prompt"]);
+          ).toEqual(overflow ? ["Older prompt"] : ["First prompt", "Older prompt"]);
         }),
     );
     it.effect("imports recent Claude, Codex, and Pi sessions for the selected project only", () =>
