@@ -217,6 +217,66 @@ const TASK_ID = ScheduledTaskId.make("task-1");
 const AUTOMATION_PROMPT = "Triage the inbox\n\nLabel every new issue and close duplicates.";
 
 describe("MessagesTimeline work rows", () => {
+  it("discloses nested tools without replacing their normal rows", async () => {
+    setup();
+    const at = DateTime.makeUnsafe(CREATED_AT);
+    const entries = deriveTimelineEntriesFromVisibleTurnItems({
+      visibleTurnItems: [
+        v2Item("dynamic_tool", {
+          id: "script",
+          toolName: "Script",
+          input: {},
+          status: "completed",
+          updatedAt: at,
+        }),
+        v2Item("command_execution", {
+          id: "nested-command",
+          parentItemId: "script",
+          input: "bun test nested",
+          status: "running",
+          updatedAt: at,
+        }),
+        v2Item("file_change", {
+          id: "nested-edit",
+          parentItemId: "script",
+          fileName: "/project/src/nested.ts",
+          status: "completed",
+          updatedAt: at,
+        }),
+        ...Array.from({ length: 1_000 }, (_, index) =>
+          v2Item("command_execution", {
+            id: `nested-command-${index}`,
+            parentItemId: "script",
+            input: `echo child-${index}`,
+            status: "completed",
+            updatedAt: at,
+          }),
+        ),
+      ],
+      optimisticMessages: [],
+    });
+    await using screen = await renderTimeline(entries);
+    const header = () =>
+      screen.container.querySelector<HTMLElement>('[data-v2-item-type="dynamic_tool"]')!;
+    await expect.element(page.getByRole("status")).toHaveTextContent("Running");
+    expect(screen.container.querySelector('[data-v2-item-type="command_execution"]')).toBeNull();
+    await click(header());
+    await expect.element(page.getByRole("button", { name: /bun test nested/ })).toBeVisible();
+    await expect.element(page.getByRole("region", { name: "Tool calls" })).toBeVisible();
+    expect(screen.container.querySelectorAll("[data-v2-item-type]").length).toBeLessThan(100);
+    const list = screen.container.querySelector<HTMLElement>("[data-tool-group-scroll]")!;
+    await act(() => {
+      list.scrollTop = list.scrollHeight;
+      list.dispatchEvent(new Event("scroll"));
+    });
+    await expect.element(page.getByRole("button", { name: /echo child-999/ })).toBeVisible();
+    expect(screen.container.querySelectorAll("[data-v2-item-type]").length).toBeLessThan(100);
+    await click(header());
+    expect(screen.container.querySelector('[data-v2-item-type="command_execution"]')).toBeNull();
+    await click(header());
+    await expect.element(page.getByRole("button", { name: /echo child-999/ })).toBeVisible();
+  });
+
   it("keeps the worked-for heading in place when expanded at the bottom", async () => {
     const props = baseProps();
     const runId = RunId.make("completed-run");

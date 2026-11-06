@@ -1,4 +1,5 @@
 import { worktreeSetupAgentStarted } from "@t3tools/client-runtime/worktree-setup";
+import { groupNestedToolItems } from "@t3tools/client-runtime/work-log/nested-tools";
 import { resolveUserMessagePresentation } from "@t3tools/client-runtime/user-message";
 import { isLiveSubagentTurnItem } from "@t3tools/client-runtime/state/subagentRuntime";
 import * as DateTime from "effect/DateTime";
@@ -271,6 +272,7 @@ export function workEntryIsVisibleInGroup(
 ): boolean {
   if (entry.itemType === "reasoning") return Boolean(entry.detail?.trim());
   return (
+    entry.nestedToolEntries !== undefined ||
     (expandedToolGroupEntry &&
       (entry.toolLifecycleStatus === "inProgress" ||
         entry.sourceActivityKind === "task.progress")) ||
@@ -797,6 +799,9 @@ function deriveSupersededAttemptFolds(
       entry.kind === "mcp-app" ||
       timelineEntryIsPersistentResourceCard(entry) ||
       liveSubagentEntryIds.has(entry.id) ||
+      (entry.kind === "work" &&
+        entry.entry.nestedToolEntries !== undefined &&
+        entry.entry.toolLifecycleStatus === "inProgress") ||
       (entry.kind === "work" && entry.entry.itemType === "system_notice")
     ) {
       continue;
@@ -1140,6 +1145,12 @@ function deriveTurnFolds(input: {
       ) {
         continue;
       }
+      if (
+        entry.kind === "work" &&
+        entry.entry.nestedToolEntries !== undefined &&
+        entry.entry.toolLifecycleStatus === "inProgress"
+      )
+        continue;
       if (entry.kind === "work" && entry.entry.itemType === "notification") continue;
       if (entry.kind === "work" && entry.entry.questionAnswer !== undefined) continue;
       hiddenEntryIds.add(entry.id);
@@ -1361,8 +1372,31 @@ function settleSupersededReasoning(entries: ReadonlyArray<TimelineEntry>) {
   });
 }
 
-function timelineRowEntries(entries: ReadonlyArray<TimelineEntry>) {
-  return withoutSubagentDelegationRows(settleSupersededReasoning(entries));
+function timelineRowEntries(entries: ReadonlyArray<TimelineEntry>, revealedWorkEntryId?: string) {
+  return groupNestedToolItems(
+    withoutSubagentDelegationRows(settleSupersededReasoning(entries)).map((entry) =>
+      entry.kind === "work" && entry.id === revealedWorkEntryId
+        ? { ...entry, entry: { ...entry.entry, revealNestedTools: true } }
+        : entry,
+    ),
+    (entry) => (entry.kind === "work" ? entry.entry.projectedItem?.item : undefined),
+    (entry, children, running): TimelineEntry =>
+      entry.kind === "work"
+        ? {
+            ...entry,
+            entry: {
+              ...entry.entry,
+              nestedToolEntries: children.flatMap((child) =>
+                child.kind === "work" ? [child.entry] : [],
+              ),
+              revealNestedTools:
+                entry.entry.revealNestedTools ||
+                children.some((child) => child.kind === "work" && child.entry.revealNestedTools),
+              ...(running ? { toolLifecycleStatus: "inProgress" } : {}),
+            },
+          }
+        : entry,
+  );
 }
 
 function deriveTimelineTurnFolds(
@@ -1391,6 +1425,7 @@ function deriveTimelineTurnFolds(
 }
 
 export function deriveMessagesTimelineRows(input: {
+  revealedWorkEntryId?: string | undefined;
   timelineEntries: ReadonlyArray<TimelineEntry>;
   pendingApprovalRequestIds?: ReadonlySet<RuntimeRequestId>;
   latestRun?: TimelineLatestRun | null;
@@ -1408,7 +1443,7 @@ export function deriveMessagesTimelineRows(input: {
   availableRevertTurnCounts?: ReadonlySet<number> | undefined;
   worktreeSetup?: WorktreeSetupSnapshot | null;
 }): MessagesTimelineRow[] {
-  const timelineEntries = timelineRowEntries(input.timelineEntries);
+  const timelineEntries = timelineRowEntries(input.timelineEntries, input.revealedWorkEntryId);
   const isPendingApproval = (entry: WorkLogEntry) => {
     const item = entry.projectedItem?.item;
     return (
@@ -1509,6 +1544,7 @@ export function deriveMessagesTimelineRows(input: {
       const entry = timelineEntries[index]!;
       if (
         entry.kind !== "work" ||
+        entry.entry.nestedToolEntries !== undefined ||
         entry.entry.tone === "error" ||
         entry.entry.sourceActivityKind === "runtime.error" ||
         entry.entry.itemType === "system_notice" ||
@@ -1797,6 +1833,7 @@ export function deriveMessagesTimelineRows(input: {
 
     if (timelineEntry.kind === "work") {
       if (
+        timelineEntry.entry.nestedToolEntries !== undefined ||
         isPendingApproval(timelineEntry.entry) ||
         (timelineEntry.entry.runId != null && itemizedRunIds.has(timelineEntry.entry.runId)) ||
         (timelineEntry.entry.itemType === "error" &&
@@ -1814,6 +1851,9 @@ export function deriveMessagesTimelineRows(input: {
           groupedEntries: [timelineEntry.entry],
           isExpandedToolGroup: false,
         });
+        hasActivityRow ||=
+          timelineEntry.entry.nestedToolEntries !== undefined &&
+          workEntryIsInActiveRun(timelineEntry.entry);
         continue;
       }
       const groupedEntries = [timelineEntry.entry];
@@ -1823,6 +1863,7 @@ export function deriveMessagesTimelineRows(input: {
         if (
           !nextEntry ||
           nextEntry.kind !== "work" ||
+          nextEntry.entry.nestedToolEntries !== undefined ||
           nextEntry.entry.sourceActivityKind === "context-compaction" ||
           (nextEntry.entry.itemType === "error" &&
             nextEntry.entry.toolLifecycleStatus === "failed") ||
@@ -2253,7 +2294,34 @@ export function timelineTurnFoldRunIdsByEntryId(
   for (const fold of deriveTimelineTurnFolds(input).values()) {
     for (const entryId of fold.hiddenEntryIds) byEntryId.set(entryId, fold.runId);
   }
+  for (const entry of timelineRowEntries(input.timelineEntries)) {
+    if (entry.kind !== "work") continue;
+    const runId = byEntryId.get(entry.id);
+    if (runId === undefined) continue;
+    const pending = [...(entry.entry.nestedToolEntries ?? [])];
+    for (let index = 0; index < pending.length; index += 1) {
+      const child = pending[index]!;
+      byEntryId.set(child.id, runId);
+      if (child.nestedToolEntries) pending.push(...child.nestedToolEntries);
+    }
+  }
   return byEntryId;
+}
+
+export function timelineRowContainsWorkEntry(row: MessagesTimelineRow, entryId: string): boolean {
+  if (row.id === entryId) return true;
+  const pending =
+    row.kind === "work"
+      ? [...row.groupedEntries]
+      : row.kind === "work-live"
+        ? [...row.groupedEntries]
+        : [];
+  for (let index = 0; index < pending.length; index += 1) {
+    const entry = pending[index]!;
+    if (entry.id === entryId) return true;
+    if (entry.nestedToolEntries) pending.push(...entry.nestedToolEntries);
+  }
+  return false;
 }
 
 function sameCheckpointSummaries(

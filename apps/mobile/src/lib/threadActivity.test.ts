@@ -370,6 +370,113 @@ function assistantMessage(updatedAt = "2026-06-20T00:00:03.000Z") {
 }
 
 describe("buildThreadFeed", () => {
+  it("keeps nested tools together across messages and shows a running child after the parent finishes", () => {
+    const parent: OrchestrationV2TurnItem = {
+      ...base("outer", "2026-06-20T00:00:02.000Z", 1),
+      type: "dynamic_tool",
+      toolName: "Script",
+      input: {},
+    };
+    const child = {
+      ...command(),
+      id: TurnItemId.make("nested"),
+      parentItemId: parent.id,
+      status: "running" as const,
+    };
+    const items = [projected(parent, 0), projected(assistantMessage(), 1), projected(child, 2)];
+    const cache = createThreadFeedCache();
+    const feed = buildThreadFeed(items, { cache });
+    expect(feed).toMatchObject([
+      {
+        type: "activity-group",
+        activities: [
+          {
+            lifecycleStatus: "inProgress",
+            nestedToolActivities: [{ projectedItem: { item: { id: child.id } } }],
+          },
+        ],
+      },
+      { type: "message" },
+    ]);
+    const presented = deriveThreadFeedPresentation(feed, null, new Set());
+    expect(presented[0]).toMatchObject({
+      type: "activity-group",
+      activities: [{ lifecycleStatus: "inProgress" }],
+    });
+    expect(
+      deriveThreadFeedPresentation(
+        feed,
+        {
+          runId,
+          status: "running",
+          startedAt: "2026-06-20T00:00:02.000Z",
+          completedAt: null,
+        },
+        new Set(),
+        new Set(),
+        "2026-06-20T00:00:02.000Z",
+      ).some((entry) => entry.type === "thinking"),
+    ).toBe(false);
+    const unrelatedUpdate = buildThreadFeed(
+      [items[0]!, projected({ ...assistantMessage(), text: "Still working" }, 1), items[2]!],
+      { cache },
+    );
+    expect(unrelatedUpdate[0]).toBe(feed[0]);
+    const completed = { ...child, status: "completed" as const };
+    const updated = buildThreadFeed([...items.slice(0, 2), projected(completed, 2)], { cache });
+    expect(updated[0]).not.toBe(feed[0]);
+    expect(updated[0]).toMatchObject({
+      activities: [
+        {
+          lifecycleStatus: "completed",
+          nestedToolActivities: [{ projectedItem: { item: { status: "completed" } } }],
+        },
+      ],
+    });
+    const nextPrompt = projected(
+      {
+        ...userMessage(),
+        id: TurnItemId.make("next-prompt"),
+        runId: RunId.make("next-run"),
+        messageId: MessageId.make("next-message"),
+      },
+      2,
+    );
+    const beforeLateChild = [...items.slice(0, 2), nextPrompt];
+    buildThreadFeed(beforeLateChild, { cache });
+    const withLateChild = [...beforeLateChild, projected(child, 3)];
+    expect(buildThreadFeed(withLateChild, { cache })).toEqual(buildThreadFeed(withLateChild));
+    const answer = projected(
+      {
+        ...assistantMessage(),
+        id: TurnItemId.make("next-answer"),
+        messageId: MessageId.make("next-answer-message"),
+        runId: RunId.make("next-run"),
+      },
+      4,
+    );
+    const beforeUnrelatedUpdate = buildThreadFeed([...withLateChild, answer], { cache });
+    const afterUnrelatedUpdate = buildThreadFeed(
+      [
+        ...withLateChild,
+        {
+          ...answer,
+          item: { ...answer.item, updatedAt: DateTime.makeUnsafe("2026-06-20T00:00:09.000Z") },
+        },
+      ],
+      { cache },
+    );
+    expect(afterUnrelatedUpdate[0]).toBe(beforeUnrelatedUpdate[0]);
+    expect(afterUnrelatedUpdate[1]).toBe(beforeUnrelatedUpdate[1]);
+    const childBeforeParent = [items[2]!, items[1]!, items[0]!, nextPrompt, answer];
+    buildThreadFeed(childBeforeParent, { cache });
+    const changedParent = [
+      ...childBeforeParent.slice(0, 2),
+      projected({ ...parent, status: "running" }, 2),
+      ...childBeforeParent.slice(3),
+    ];
+    expect(buildThreadFeed(changedParent, { cache })).toEqual(buildThreadFeed(changedParent));
+  });
   it("keeps async answers in question history instead of user bubbles", () => {
     const requestId = RuntimeRequestId.make("question");
     const question: OrchestrationV2TurnItem = {

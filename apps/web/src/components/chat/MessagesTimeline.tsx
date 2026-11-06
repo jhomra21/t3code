@@ -84,6 +84,7 @@ import {
   resolveTimelineMinimapVisibleRange,
   resolveTimelineMinimapHitStripWidth,
   timelineTurnFoldRunIdsByEntryId,
+  timelineRowContainsWorkEntry,
   type MessagesTimelineRow,
   type TimelineLatestRun,
 } from "./MessagesTimeline.logic";
@@ -664,6 +665,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
     pendingApprovals.filter(isVisiblePendingApproval).map((approval) => approval.requestId),
   );
   const rawRows = useIncrementalTimelineRows(`${listIdentityKey}\0${workspaceRoot ?? ""}`, {
+    revealedWorkEntryId: findActive ? activeFindMatch?.entryId : undefined,
     timelineEntries,
     pendingApprovalRequestIds,
     latestRun,
@@ -1191,7 +1193,9 @@ const ConversationTimeline = memo(function ConversationTimeline({
     query: normalizedFindQuery,
     match: activeFindMatch,
     navigationId: findNavigationId,
-    rowIndex: activeFindMatch ? rows.findIndex((row) => row.id === activeFindMatch.entryId) : -1,
+    rowIndex: activeFindMatch
+      ? rows.findIndex((row) => timelineRowContainsWorkEntry(row, activeFindMatch.entryId))
+      : -1,
     listRef,
     contentInsetEndAdjustment,
   });
