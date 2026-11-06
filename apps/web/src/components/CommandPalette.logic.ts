@@ -32,7 +32,7 @@ import { filterFilesystemBrowseEntries } from "@t3tools/client-runtime/state/fil
 import { type ReactNode } from "react";
 import { formatRelativeTimeLabel } from "../timestampFormat";
 import { type Project, type SidebarThreadSummary, type Thread } from "../types";
-import { isSidebarHiddenThread } from "./Sidebar.logic";
+import { isSidebarSubagentThread } from "./Sidebar.logic";
 
 export const RECENT_THREAD_LIMIT = 12;
 export const ITEM_ICON_CLASS = "size-4 text-icon-muted";
@@ -406,6 +406,7 @@ export type BuildThreadActionItemsThread = Pick<
   | "id"
   | "lineage"
   | "modelSelection"
+  | "providerInstanceId"
   | "projectId"
   | "runtime"
   | "title"
@@ -422,6 +423,7 @@ export type BuildThreadActionItemsThread = Pick<
 
 export function buildThreadActionItems<TThread extends BuildThreadActionItemsThread>(input: {
   threads: ReadonlyArray<TThread>;
+  providersByEnvironment?: Parameters<typeof isSidebarSubagentThread>[1];
   activeThread?: Pick<Thread, "environmentId" | "id">;
   projectByKey: ReadonlyMap<string, Pick<Project, "title">>;
   icon: ReactNode;
@@ -434,7 +436,8 @@ export function buildThreadActionItems<TThread extends BuildThreadActionItemsThr
 }): CommandPaletteActionItem[] {
   // Callers order these: recents by last use, search results by rank.
   const visibleThreads = input.threads.filter(
-    (thread) => thread.archivedAt === null && !isSidebarHiddenThread(thread),
+    (thread) =>
+      thread.archivedAt === null && !isSidebarSubagentThread(thread, input.providersByEnvironment),
   );
 
   return visibleThreads.map((thread) => {

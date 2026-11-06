@@ -4,11 +4,43 @@ import type {
   OrchestrationV2ThreadShell,
   OrchestrationProjectShell,
   ServerProvider,
+  EnvironmentId,
 } from "@t3tools/contracts";
 import { formatModelSlugName, resolveSelectableModel } from "@t3tools/shared/model";
 import { fileBasename } from "@t3tools/shared/path";
 import { resolveModelShortName } from "../providerClients.ts";
 import { isTerminalSubagentStatus } from "./subagentRuntime.ts";
+
+/** Droid subagents run in their own threads; other providers stay nested. */
+export function isThreadListed(
+  thread: {
+    readonly environmentId: EnvironmentId;
+    readonly lineage: {
+      readonly relationshipToParent: string | null;
+      readonly sideChat?: boolean | undefined;
+    };
+    readonly providerInstanceId: string;
+    readonly runtime: { readonly status: string } | null;
+  },
+  providersByEnvironment?: ReadonlyMap<
+    EnvironmentId,
+    ReadonlyArray<{ readonly instanceId: string; readonly driver: string }>
+  >,
+): boolean {
+  if (thread.lineage.sideChat === true) return false;
+  if (thread.lineage.relationshipToParent !== "subagent") return true;
+  return (
+    providersByEnvironment
+      ?.get(thread.environmentId)
+      ?.some(
+        (provider) =>
+          provider.instanceId === thread.providerInstanceId && provider.driver === "droid",
+      ) === true &&
+    (thread.runtime?.status === "starting" ||
+      thread.runtime?.status === "running" ||
+      thread.runtime?.status === "waiting")
+  );
+}
 
 export function subagentGroupSummary(
   members: ReadonlyArray<{ readonly status: OrchestrationV2TurnItemStatus }>,
