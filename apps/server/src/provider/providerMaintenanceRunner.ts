@@ -564,13 +564,28 @@ export const make = Effect.fn("ProviderMaintenanceRunner.make")(function* () {
             yield* invalidateLatestProviderVersion(verified).pipe(
               Effect.provideService(ProviderLatestVersions.ProviderLatestVersions, latestVersions),
             );
-            const { verifiedProviders } = yield* verifyFromRefresh(
+            const postUpdateRefresh = verifyFromRefresh(
               providerRegistry.refreshAfterUpdate(provider, instanceId),
               provider,
               verified,
               instanceId,
               "post-update",
             );
+            let verification = yield* postUpdateRefresh;
+            if (verification.verifiedProviders.some(isOutdatedProvider)) {
+              // Windows native updaters can apply a staged binary while still reporting the old version.
+              const recheck = yield* postUpdateRefresh;
+              if (
+                recheck.advisoryEnriched &&
+                recheck.verifiedProviders.length > 0 &&
+                recheck.verifiedProviders.every(
+                  (verifiedProvider) => verifiedProvider.versionAdvisory?.status === "current",
+                )
+              ) {
+                verification = recheck;
+              }
+            }
+            const { verifiedProviders } = verification;
             // Cursor about probes can fail transiently; missing versions alone do not imply failure.
             const couldNotVerify =
               verifiedProviders.length === 0 ||
@@ -591,6 +606,16 @@ export const make = Effect.fn("ProviderMaintenanceRunner.make")(function* () {
             const stillOutdated =
               targetVersion === undefined &&
               verifiedProviders.some((verifiedProvider) => isOutdatedProvider(verifiedProvider));
+            if (
+              !couldNotVerify &&
+              !stillOutdated &&
+              verification.advisoryEnriched &&
+              verifiedProviders.every(
+                (verifiedProvider) => verifiedProvider.versionAdvisory?.status === "current",
+              )
+            ) {
+              yield* verified.onUpdated ?? Effect.void;
+            }
             return yield* finish(
               makeUpdateState({
                 status: couldNotVerify || stillOutdated ? "unchanged" : "succeeded",
