@@ -67,11 +67,11 @@ for or close one independently.
 
 ## Limits
 
-T3 Code has no flow for importing an existing Factory Droid session.
-Conversation rollback uses Droid's native rewind. You can fork a thread at its
-current end or an earlier turn without changing the original session. Forking
-from a native subagent is not supported. Stop active and background work before
-forking. Droid can finish
+Import an existing Droid session from the welcome wizard. Conversation rollback
+uses Droid's native rewind. You can fork a thread at its current end or an
+earlier turn without changing the original session. Forking from a native
+subagent is not supported. Stop active and background work before forking. Droid
+can finish
 background tasks after a turn; T3 Code brings their completion back into the
 thread. The context meter shows Droid's context window and usage, and
 **Compact context** (or `/compact`) compacts the session. Droid also compacts

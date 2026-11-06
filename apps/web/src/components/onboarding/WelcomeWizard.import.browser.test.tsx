@@ -292,6 +292,13 @@ function setup() {
   return now;
 }
 
+it("shows the Factory Droid source label for imported projects", async () => {
+  using _now = setup();
+  state.candidates = [{ ...candidate("/projects/droid"), sources: ["droid"] }];
+  await using _screen = await mountImport();
+  expect(document.querySelectorAll('[role="img"][aria-label="Factory Droid"]')).toHaveLength(1);
+});
+
 it("keeps the project selection after going back a stage", async () => {
   using _now = setup();
   await using _screen = await mountImport();
