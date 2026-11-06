@@ -141,6 +141,8 @@ const runlessSubagentShellUsesRootTurnStatus = Effect.gen(function* () {
     assert.equal(shell?.activityRunStatus, "running");
     assert.isNull(shell?.activeRunId);
   }
+  const index = yield* store.listActiveShellIndex();
+  assert.isTrue(index.find((entry) => entry.id === threadId)?.mayBeLive);
 });
 
 const traceSqlStatements = () => {

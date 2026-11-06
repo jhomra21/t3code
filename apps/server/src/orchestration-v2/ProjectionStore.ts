@@ -7248,6 +7248,14 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                 AND r.status IN ('queued', 'preparing', 'starting', 'running', 'waiting')
             )
             OR EXISTS (
+              SELECT 1 FROM orchestration_v2_projection_nodes root
+              WHERE json_extract(t.payload_json, '$.lineage.relationshipToParent') = 'subagent'
+                AND root.thread_id = t.thread_id
+                AND root.run_id IS NULL
+                AND root.kind = 'root_turn'
+                AND root.status IN ('pending', 'running', 'waiting')
+            )
+            OR EXISTS (
               SELECT 1 FROM orchestration_v2_projection_runtime_requests request
               WHERE request.thread_id = t.thread_id AND request.status = 'pending'
             )
