@@ -66,7 +66,7 @@ T3 Code cannot wait for or close a subagent independently.
 
 ## Limits
 
-Import an existing Droid session from the welcome wizard. Conversation rollback
+Import an existing Droid session from the Welcome page. Conversation rollback
 uses Droid's native rewind. You can fork a thread at its current end or an
 earlier turn without changing the original session. Forking from a native
 subagent is not supported. Stop active and background work before forking. Droid
