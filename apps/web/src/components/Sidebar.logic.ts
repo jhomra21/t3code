@@ -1207,7 +1207,14 @@ export function resolveThreadStatusPill(input: {
 export function getFallbackThreadIdAfterDelete<
   T extends Pick<
     Thread,
-    "id" | "projectId" | "createdAt" | "updatedAt" | "settledOverride" | "lineage"
+    | "id"
+    | "projectId"
+    | "createdAt"
+    | "updatedAt"
+    | "settledOverride"
+    | "lineage"
+    | "providerInstanceId"
+    | "runtime"
   > &
     ThreadSortInput &
     ThreadSnoozeShell,
