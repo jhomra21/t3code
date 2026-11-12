@@ -66,6 +66,8 @@ export type WorkLogToolLifecycleStatus =
   | "stopped";
 
 export interface WorkLogEntry {
+  readonly nestedToolEntries?: ReadonlyArray<WorkLogEntry>;
+  readonly revealNestedTools?: boolean;
   readonly questionAnswer?: import("@t3tools/contracts").UserInputAttachmentAnswerPayload;
   readonly id: string;
   readonly createdAt: string;

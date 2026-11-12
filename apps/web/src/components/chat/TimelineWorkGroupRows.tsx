@@ -129,16 +129,18 @@ function WorkingTimer({ createdAt }: { createdAt: string }) {
 
 const compactWorkEntryHeight = 24;
 
-function ExpandedWorkGroupEntries({
+export function ExpandedWorkGroupEntries({
   anchorKey,
   disclosureAnchorKey,
   entries,
   workspaceRoot,
+  onToggleEntry,
 }: {
   anchorKey: string;
   disclosureAnchorKey: string;
-  entries: TimelineWorkEntry[];
+  entries: ReadonlyArray<TimelineWorkEntry>;
   workspaceRoot: string | undefined;
+  onToggleEntry?: ((collapsed: boolean) => void) | undefined;
 }) {
   const {
     workGroupViewState: viewState,
@@ -167,7 +169,9 @@ function ExpandedWorkGroupEntries({
   const groupView = {
     state: viewState,
     onToggleEntry: (collapsed: boolean, entryId: string) =>
-      onToggleWorkEntry(disclosureAnchorKey, collapsed, entryId),
+      onToggleEntry
+        ? onToggleEntry(collapsed)
+        : onToggleWorkEntry(disclosureAnchorKey, collapsed, entryId),
     onContentReady: (entryId: string) => onWorkEntryContentReady?.(disclosureAnchorKey, entryId),
   };
   const updateScrollFades = () => {
