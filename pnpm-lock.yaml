@@ -421,7 +421,7 @@ importers:
     dependencies:
       '@clerk/electron':
         specifier: 0.1.10
-        version: 0.1.10(@clerk/electron-passkeys@0.0.3)(electron-store@8.2.0)(electron@45.2.3(supports-color@8.1.1))(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
+        version: 0.1.10(@clerk/electron-passkeys@0.0.3)(electron-store@8.2.0)(electron@45.3.1(supports-color@8.1.1))(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       '@clerk/electron-passkeys':
         specifier: 0.0.3
         version: 0.0.3
@@ -456,8 +456,8 @@ importers:
         specifier: 4.1.2
         version: 4.1.2
       electron:
-        specifier: 45.2.3
-        version: 45.2.3(supports-color@8.1.1)
+        specifier: 45.3.1
+        version: 45.3.1(supports-color@8.1.1)
       electron-store:
         specifier: ^8.2.0
         version: 8.2.0
@@ -1058,7 +1058,7 @@ importers:
         version: 6.42.3(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       '@clerk/electron':
         specifier: 0.1.10
-        version: 0.1.10(@clerk/electron-passkeys@0.0.3)(electron-store@8.2.0)(electron@45.2.3(supports-color@8.1.1))(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
+        version: 0.1.10(@clerk/electron-passkeys@0.0.3)(electron-store@8.2.0)(electron@45.3.1(supports-color@8.1.1))(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       '@clerk/react':
         specifier: 6.18.6
         version: 6.18.6(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
@@ -8992,8 +8992,8 @@ packages:
     resolution: {integrity: sha512-bO3y10YikuUwUuDUQRM4KfwNkKhnpVO7IPdbsrejwN9/AABJzzTQ4GeHwyzNSrVO+tEH3/Np255a3sVZpZDjvg==}
     engines: {node: '>=8.0.0'}
 
-  electron@45.2.3:
-    resolution: {integrity: sha512-Vurzu5UOA5nTGT4LqIwXD16QFGrOZdiXxF+1UP4KNsAOo/YtDcT3/u0jhP4WSwNJ0iLrLDi85hzBJ0arnGDhyw==}
+  electron@45.3.1:
+    resolution: {integrity: sha512-1oYau2B4RXF27Df2fzvrFDJoy8AOSVlgS6gklo6wkLZ/QWJemJCJHkY4+uuacvSFUtR8IimiLukLNFoYP0fmjA==}
     engines: {node: '>= 22.12.0'}
     hasBin: true
 
@@ -14015,12 +14015,12 @@ snapshots:
       '@clerk/electron-passkeys-win32-arm64-msvc': 0.0.3
       '@clerk/electron-passkeys-win32-x64-msvc': 0.0.3
 
-  '@clerk/electron@0.1.10(@clerk/electron-passkeys@0.0.3)(electron-store@8.2.0)(electron@45.2.3(supports-color@8.1.1))(react-dom@19.3.0(react@19.3.0))(react@19.3.0)':
+  '@clerk/electron@0.1.10(@clerk/electron-passkeys@0.0.3)(electron-store@8.2.0)(electron@45.3.1(supports-color@8.1.1))(react-dom@19.3.0(react@19.3.0))(react@19.3.0)':
     dependencies:
       '@clerk/clerk-js': 6.42.3(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       '@clerk/react': 6.18.6(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       '@clerk/shared': 4.44.1(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
-      electron: 45.2.3(supports-color@8.1.1)
+      electron: 45.3.1(supports-color@8.1.1)
       react: 19.3.0
     optionalDependencies:
       '@clerk/electron-passkeys': 0.0.3
@@ -19056,7 +19056,7 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  electron@45.2.3(supports-color@8.1.1):
+  electron@45.3.1(supports-color@8.1.1):
     dependencies:
       '@electron-internal/extract-zip': 1.0.5
       '@electron/get': 5.1.0(supports-color@8.1.1)
