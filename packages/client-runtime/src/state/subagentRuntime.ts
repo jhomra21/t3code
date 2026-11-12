@@ -208,6 +208,7 @@ export function projectedSubagentsToRuntime(
     readonly title: string | null;
     readonly prompt: string;
     readonly model: string | null;
+    readonly effort?: string | undefined;
     readonly status: OrchestrationV2Subagent["status"];
     readonly progress?: string | undefined;
     readonly childThreadId?: string | null | undefined;
@@ -230,7 +231,7 @@ export function projectedSubagentsToRuntime(
       title: subagent.title ?? promptTitle(subagent.prompt),
       role: null,
       model: subagent.model,
-      effort: null,
+      effort: subagent.effort ?? null,
       status: subagent.status,
       activationCount: 1,
       usage: workflow === undefined ? null : workflowUsage(workflow),
