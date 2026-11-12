@@ -225,7 +225,7 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
     groupView?.state ?? (workEntry.nestedToolEntries ? ctx.workGroupViewState : undefined);
   const nestedGroupView = groupView ?? {
     state: ctx.workGroupViewState,
-    onToggleEntry: (collapsed: boolean) => props.onToggleEntry?.(collapsed),
+    onToggleEntry: (collapsed: boolean, _entryId: string) => props.onToggleEntry?.(collapsed),
   };
   const [locallyExpanded, setExpanded] = useState(
     () => entryViewState?.expandedEntries.has(workEntry.id) ?? false,
@@ -571,7 +571,7 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
             disclosureAnchorKey={workEntry.id}
             entries={workEntry.nestedToolEntries}
             workspaceRoot={workspaceRoot}
-            onToggleEntry={nestedGroupView.onToggleEntry}
+            onToggleEntry={(collapsed) => nestedGroupView.onToggleEntry(collapsed, workEntry.id)}
           />
         </div>
       ) : null}

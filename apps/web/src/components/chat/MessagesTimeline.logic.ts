@@ -2462,13 +2462,14 @@ export function timelineTurnFoldRunIdsByEntryId(
     | "runningRunId"
     | "toolCallVisibility"
     | "revealedMessageId"
+    | "revealedWorkEntryId"
   >,
 ): ReadonlyMap<string, RunId> {
   const byEntryId = new Map<string, RunId>();
   for (const fold of deriveTimelineTurnFolds(input).values()) {
     for (const entryId of fold.hiddenEntryIds) byEntryId.set(entryId, fold.runId);
   }
-  for (const entry of timelineRowEntries(input.timelineEntries)) {
+  for (const entry of timelineRowEntries(input)) {
     if (entry.kind !== "work") continue;
     const runId = byEntryId.get(entry.id);
     if (runId === undefined) continue;
