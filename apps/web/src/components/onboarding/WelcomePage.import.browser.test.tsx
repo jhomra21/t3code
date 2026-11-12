@@ -327,6 +327,16 @@ function setup() {
   return now;
 }
 
+it("shows the Factory Droid source label for imported projects", async () => {
+  using _now = setup();
+  state.candidates = Atom.make<ReadonlyArray<AgentSessionProjectCandidate>>([
+    { ...candidate("/projects/droid"), sources: ["droid"] },
+  ]).pipe(Atom.keepAlive);
+  await using _screen = await mountWelcome();
+  await click("Review all 1");
+  expect(document.querySelectorAll('[role="img"][aria-label="Factory Droid"]')).toHaveLength(1);
+});
+
 it("rechecks after project creation and can retry its history without recreating the project", async () => {
   using _now = setup();
   const creation = deferred<void>();
