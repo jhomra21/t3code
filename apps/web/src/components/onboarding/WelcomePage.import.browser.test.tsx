@@ -333,6 +333,7 @@ it("shows the Factory Droid source label for imported projects", async () => {
     { ...candidate("/projects/droid"), sources: ["droid"] },
   ]).pipe(Atom.keepAlive);
   await using _screen = await mountWelcome();
+  await click("Review all 1");
   expect(document.querySelectorAll('[role="img"][aria-label="Factory Droid"]')).toHaveLength(1);
 });
 

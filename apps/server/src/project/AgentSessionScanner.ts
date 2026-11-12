@@ -1571,7 +1571,7 @@ export const make = Effect.gen(function* () {
               mtimeMs: stats.value.mtime.value.getTime(),
               providerInstanceId,
               homePath,
-              size: Number(stats.value.size),
+              identity: transcriptIdentity(filePath, stats.value),
             });
           }
         }
