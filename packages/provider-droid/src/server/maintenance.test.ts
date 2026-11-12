@@ -258,37 +258,52 @@ it.layer(NodeServices.layer)("droid maintenance", (it) => {
     ),
   );
 
-  it.effect("gets npm's latest advisory only when update checks are enabled", () =>
-    (() => {
-      const fetches: string[] = [];
-      const http = HttpClient.make((request) => {
-        fetches.push(request.url);
-        return Effect.succeed(
-          HttpClientResponse.fromWeb(request, Response.json({ version: "0.241.1" })),
-        );
-      });
-      return Effect.gen(function* () {
-        const capabilities = yield* droidMaintenanceResolver.resolve(null);
-        const enriched = yield* enrichDroidSnapshot({
-          snapshot: installedDroid,
-          maintenanceCapabilities: capabilities,
-          enableProviderUpdateChecks: true,
+  it.effect.each([
+    {
+      path: "/home/user/.local/bin/droid",
+      native: true,
+      body: "  1.9.1\n",
+      url: "https://downloads.factory.ai/factory-cli/LATEST",
+      version: "1.9.1",
+    },
+    {
+      path: "/usr/local/lib/node_modules/droid/bin/droid",
+      native: false,
+      body: JSON.stringify({ version: "1.10.0" }),
+      url: "https://registry.npmjs.org/droid/latest",
+      version: "1.10.0",
+    },
+  ])(
+    "uses the appropriate latest-version channel for native=$native",
+    ({ path, body, url, version }) =>
+      (() => {
+        const fetches: string[] = [];
+        const http = HttpClient.make((request) => {
+          fetches.push(request.url);
+          return Effect.succeed(HttpClientResponse.fromWeb(request, new Response(body)));
         });
-        expect(enriched.versionAdvisory.latestVersion).toBe("0.241.1");
-        expect(fetches).toEqual(["https://registry.npmjs.org/droid/latest"]);
+        return Effect.gen(function* () {
+          const capabilities = yield* droidMaintenanceResolver.resolve(context(path));
+          const enriched = yield* enrichDroidSnapshot({
+            snapshot: installedDroid,
+            maintenanceCapabilities: capabilities,
+            enableProviderUpdateChecks: true,
+          });
+          expect(enriched.versionAdvisory.latestVersion).toBe(version);
+          expect(fetches).toEqual([url]);
 
-        fetches.length = 0;
-        const disabled = yield* enrichDroidSnapshot({
-          snapshot: installedDroid,
-          maintenanceCapabilities: capabilities,
-          enableProviderUpdateChecks: false,
-        });
-        expect(disabled.versionAdvisory.latestVersion).toBeNull();
-        expect(fetches).toEqual([]);
-      }).pipe(
-        Effect.provide(ProviderLatestVersions.layer),
-        Effect.provideService(HttpClient.HttpClient, http),
-      );
-    })(),
+          fetches.length = 0;
+          const disabled = yield* enrichDroidSnapshot({
+            snapshot: installedDroid,
+            maintenanceCapabilities: capabilities,
+            enableProviderUpdateChecks: false,
+          });
+          expect(disabled.versionAdvisory.latestVersion).toBeNull();
+          expect(fetches).toEqual([]);
+        }).pipe(
+          Effect.provide(ProviderLatestVersions.layer),
+          Effect.provideService(HttpClient.HttpClient, http),
+        );
+      })(),
   );
 });
