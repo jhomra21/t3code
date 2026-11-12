@@ -16,7 +16,9 @@ import { parseGenericCliVersion } from "@t3tools/provider-core/server/snapshotPr
 
 const DRIVER = ProviderDriverKind.make("droid");
 const PACKAGE_URL = "https://registry.npmjs.org/droid/latest";
+const NATIVE_URL = "https://downloads.factory.ai/factory-cli/LATEST";
 const LatestPackage = Schema.fromJsonString(Schema.Struct({ version: Schema.String }));
+const decodeLatestPackage = Schema.decodeEffect(LatestPackage);
 
 export const parseDroidVersion = parseGenericCliVersion;
 
@@ -70,19 +72,27 @@ export const droidMaintenanceResolver = {
   }),
 };
 
-const latestDroidVersion = Effect.fn("latestDroidVersion")(function* (options?: {
-  readonly fresh?: boolean;
-}) {
+const latestDroidVersion = Effect.fn("latestDroidVersion")(function* (
+  native: boolean,
+  options?: { readonly fresh?: boolean },
+) {
   const http = yield* HttpClient.HttpClient;
   const latestVersions = yield* ProviderLatestVersions.ProviderLatestVersions;
+  const url = native ? NATIVE_URL : PACKAGE_URL;
   return yield* latestVersions.cached(
-    `droid:${PACKAGE_URL}`,
-    http.execute(HttpClientRequest.get(PACKAGE_URL)).pipe(
+    `droid:${url}`,
+    http.execute(HttpClientRequest.get(url)).pipe(
       Effect.flatMap((response) =>
         response.status >= 200 && response.status < 300
           ? response.text.pipe(
-              Effect.flatMap(Schema.decodeUnknownEffect(LatestPackage)),
-              Effect.map((manifest) => parseDroidVersion(manifest.version)),
+              Effect.map((body) => (native ? body.trim() : body)),
+              Effect.flatMap((body) =>
+                native
+                  ? Effect.succeed(parseDroidVersion(body))
+                  : decodeLatestPackage(body).pipe(
+                      Effect.map((manifest) => parseDroidVersion(manifest.version)),
+                    ),
+              ),
             )
           : Effect.succeed(null),
       ),
@@ -100,7 +110,7 @@ export const enrichDroidSnapshot = Effect.fn("enrichDroidSnapshot")(function* (i
 }) {
   const latestVersion =
     input.enableProviderUpdateChecks && input.snapshot.enabled && input.snapshot.installed
-      ? yield* latestDroidVersion()
+      ? yield* latestDroidVersion(input.maintenanceCapabilities.update?.lockKey === "droid-native")
       : null;
   return yield* enrichProviderSnapshotWithVersionAdvisory(
     input.snapshot,
