@@ -10,6 +10,7 @@ import {
   shouldShowBranchMismatchBanner,
   chatActionErrorMessage,
   makeThreadErrorSetter,
+  resolveBackgroundWorkBanner,
 } from "../ChatView.logic";
 import { useStableCallback } from "../../hooks/useStableCallback";
 import { useDeadlinePassed, useNowAfter } from "../../hooks/useDeadline";
@@ -109,6 +110,7 @@ interface ThreadLifecycleInput {
   /** Also true while the server prepares, starts, or queues a run this client did not send. */
   readonly runIsLive: boolean;
   readonly pendingBackgroundTasks: Parameters<typeof backgroundWorkNowItem>[0]["tasks"];
+  readonly activeBackgroundRoster: Parameters<typeof backgroundWorkNowItem>[0]["tasks"];
   readonly turnItems: Parameters<typeof backgroundWorkNowItem>[0]["turnItems"];
   readonly activePendingApproval: PendingThreadRequests["activePendingApproval"];
   readonly activePendingUserInput: PendingThreadRequests["activePendingUserInput"];
@@ -162,6 +164,7 @@ export function useThreadLifecycle(input: ThreadLifecycleInput) {
     isWorking,
     runIsLive,
     pendingBackgroundTasks,
+    activeBackgroundRoster,
     turnItems,
     activePendingApproval,
     activePendingUserInput,
@@ -413,7 +416,15 @@ export function useThreadLifecycle(input: ThreadLifecycleInput) {
   const handleSwitchCheckoutToThreadStable = useStableCallback(() => {
     void handleSwitchCheckoutToThread();
   });
-  const activeBackgroundTasks = activeThread ? pendingBackgroundTasks : [];
+  // The interrupt path also accepts a completed run while its provider still
+  // has background work.
+  const backgroundWork = resolveBackgroundWorkBanner({
+    hasActiveThread: activeThread !== undefined,
+    isWorking,
+    activeRoster: activeBackgroundRoster,
+    settledTasks: pendingBackgroundTasks,
+  });
+  const activeBackgroundTasks = backgroundWork.tasks;
   const [backgroundWorkStops, setBackgroundWorkStops] = useState<
     Record<string, BackgroundWorkStopRequest | undefined>
   >({});
@@ -605,8 +616,10 @@ export function useThreadLifecycle(input: ThreadLifecycleInput) {
         threadId: activeThread.id,
         tasks: activeBackgroundTasks,
         turnItems,
+        canStop: backgroundWork.canStop,
         // Interrupt stops the active run first, not this work; the composer owns that Stop.
-        stopDisabled: runIsLive || !canOperateThread || isStoppingBackgroundWork,
+        stopDisabled:
+          !backgroundWork.canStop || runIsLive || !canOperateThread || isStoppingBackgroundWork,
         stopping: isStoppingBackgroundWork,
         onStop: handleStopBackgroundWorkStable,
         onOpenThread: onOpenRelatedThreadStable,

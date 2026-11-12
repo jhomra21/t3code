@@ -1,4 +1,8 @@
-import { type OrchestrationV2ProviderTurn, type RunAttemptId } from "@t3tools/contracts";
+import {
+  type OrchestrationV2PendingBackgroundTask,
+  type OrchestrationV2ProviderTurn,
+  type RunAttemptId,
+} from "@t3tools/contracts";
 import {
   deriveLatestThreadRun,
   deriveThreadRuntime,
@@ -1500,6 +1504,17 @@ export function deriveThreadPendingBackgroundTasks(projection: ThreadStructure |
   ];
 }
 
+export function resolveBackgroundWorkBanner(input: {
+  readonly hasActiveThread: boolean;
+  readonly isWorking: boolean;
+  readonly activeRoster: ReadonlyArray<OrchestrationV2PendingBackgroundTask>;
+  readonly settledTasks: ReadonlyArray<OrchestrationV2PendingBackgroundTask>;
+}): { tasks: ReadonlyArray<OrchestrationV2PendingBackgroundTask>; canStop: boolean } {
+  if (!input.hasActiveThread) return { tasks: [], canStop: false };
+  if (input.isWorking) return { tasks: input.activeRoster, canStop: false };
+  return { tasks: input.settledTasks, canStop: input.settledTasks.length > 0 };
+}
+
 /**
  * Run ordinals the conversation can be reverted to: those whose provider turn belongs to the
  * active provider thread, plus 0 for the thread start. Empty without a live provider session
@@ -1540,4 +1555,27 @@ export function deriveAvailableRevertTurnCounts(projection: ThreadStructure | nu
     if (providerTurn?.providerThreadId === providerThread.id) available.add(run.ordinal);
   }
   return available;
+}
+
+/**
+ * Identifies the latest visible workspace mutation without reporting the paths it touched.
+ */
+export function deriveWorkspaceMutationId(
+  visibleTurnItems: ReadonlyArray<ThreadStructureRow>,
+  latestCheckpointCompletedAt: string | null,
+) {
+  let itemId: string | null = null;
+  for (let index = visibleTurnItems.length - 1; index >= 0; index -= 1) {
+    const item = visibleTurnItems[index]?.item;
+    if (!item) continue;
+    if (item.type !== "command_execution" && item.type !== "file_change") continue;
+    if (item.status === "pending" || item.status === "running" || item.status === "waiting") {
+      continue;
+    }
+    itemId = item.id;
+    break;
+  }
+  return itemId === null && latestCheckpointCompletedAt === null
+    ? null
+    : JSON.stringify([itemId, latestCheckpointCompletedAt]);
 }

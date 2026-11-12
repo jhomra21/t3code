@@ -119,6 +119,7 @@ function RestoreBranchHarness(props: {
     isWorking: false,
     runIsLive: false,
     pendingBackgroundTasks: [{ taskId: "background-command", kind: "command" }] as never,
+    activeBackgroundRoster: [],
     turnItems: [],
     activePendingApproval: null as never,
     activePendingUserInput: null as never,

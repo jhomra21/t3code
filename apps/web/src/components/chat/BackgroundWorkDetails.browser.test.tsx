@@ -68,6 +68,7 @@ it("opens full command details for short labels and keeps pending tasks current"
             ordinal: 2,
           },
         ],
+        canStop: true,
         stopDisabled: false,
         stopping: false,
         onStop: async () => undefined,
