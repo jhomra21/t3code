@@ -136,6 +136,7 @@ import { useNowMinute } from "../hooks/useNowMinute";
 import {
   useEnvironmentIdentities,
   useConnectedEnvironmentIds,
+  useEnvironmentProviders,
   useEnvironmentMachines,
   usePrimaryEnvironmentId,
 } from "../state/environments";
@@ -348,6 +349,7 @@ type SidebarOptimisticDrop = {
 
 interface SidebarThreadPartitionInput {
   readonly threads: readonly EnvironmentThreadShell[];
+  readonly providersByEnvironment: ReturnType<typeof useEnvironmentProviders>;
   readonly scopedProjectKeys: ReadonlySet<string> | null;
   /** Tasks linked environments run for a listed thread; they show under it. */
   readonly delegatedUnderParent: ReadonlySet<string>;
@@ -414,6 +416,7 @@ function routeThreadOnly(
 
 // Separate hooks cache maps independently of later Sidebar hooks and preserve dnd-kit inputs.
 function useSidebarThreads(input: {
+  readonly providersByEnvironment: ReturnType<typeof useEnvironmentProviders>;
   readonly projectScopeKey: string | null;
   readonly scopedProjectKeys: ReadonlySet<string> | null;
   readonly serverConfigs: ReadonlyMap<EnvironmentId, EnvironmentServerConfig>;
@@ -479,6 +482,7 @@ function useSidebarThreads(input: {
 
   const partition = partitionSidebarThreads({
     threads,
+    providersByEnvironment: input.providersByEnvironment,
     scopedProjectKeys,
     delegatedUnderParent,
     serverConfigs,
@@ -623,7 +627,12 @@ function partitionSidebarThreads(input: SidebarThreadPartitionInput) {
     sortActiveBySend,
   } = input;
   const preciseNow = new Date().toISOString();
-  const visible = filterSidebarV2VisibleThreads(threads, scopedProjectKeys, delegatedUnderParent);
+  const visible = filterSidebarV2VisibleThreads(
+    threads,
+    scopedProjectKeys,
+    delegatedUnderParent,
+    input.providersByEnvironment,
+  );
   const inboxObservation = inboxReturns.observe(workingShelfEnabled ? threads : null);
   const pinned: EnvironmentThreadShell[] = [];
   const active: EnvironmentThreadShell[] = [];
@@ -911,6 +920,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     projectScopeItems: lookupProjectScopeItems,
   } = useSidebarLookups();
   const delegatedUnderParent = useDelegatedUnderParent();
+  const providersByEnvironment = useEnvironmentProviders();
   const router = useRouter();
   const { isMobile, setOpenMobile } = useSidebar();
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
@@ -1134,6 +1144,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
               routeThreadRef.threadId,
               routeThreadRef.environmentId,
               threads,
+              providersByEnvironment,
             ),
           ),
         );
@@ -1149,6 +1160,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     isSearching: isSearchingThreads,
     scopedProjectKeys: chosenScopeProjectKeys,
     delegatedUnderParent,
+    providersByEnvironment,
     findThread: (key) => threads.find((candidate) => threadShellKey(candidate) === key),
   });
   const projectScopeKeys = revealWidensScope ? [] : chosenProjectScopeKeys;
@@ -1350,6 +1362,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     pinnedKeysById,
     activeKeysById,
   } = useSidebarThreads({
+    providersByEnvironment,
     projectScopeKey,
     scopedProjectKeys,
     serverConfigs,

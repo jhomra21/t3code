@@ -173,6 +173,7 @@ function ThreadArrangementSheet(props: { onClose: () => void }) {
   const threads = useAtomValue(steadyNavigationThreadShellsAtom);
   const configs = useAtomValue(environmentServerConfigsAtom);
   const listEnvironments = useAtomValue(threadListEnvironmentsAtom);
+  const { providersByEnvironmentId } = listEnvironments;
   const queuedThreadKeys = useAtomValue(queuedThreadKeysAtom);
   const pendingOrder = useAtomValue(pendingThreadOrderAtom);
   const dropBusy = useAtomValue(threadDropBusyAtom);
@@ -193,6 +194,7 @@ function ThreadArrangementSheet(props: { onClose: () => void }) {
   const sections = useMemo(() => {
     const shared = {
       threads,
+      providersByEnvironment: providersByEnvironmentId,
       now,
       queuedThreadKeys,
       pendingOrder,
@@ -213,7 +215,15 @@ function ThreadArrangementSheet(props: { onClose: () => void }) {
       snoozed: parked.filter((thread) => effectiveSnoozed(thread, { now })),
       settled: sortSettledThreads(parked.filter((thread) => !effectiveSnoozed(thread, { now }))),
     };
-  }, [threads, configs, now, queuedThreadKeys, pendingOrder, workingShelfEnabled]);
+  }, [
+    threads,
+    configs,
+    providersByEnvironmentId,
+    now,
+    queuedThreadKeys,
+    pendingOrder,
+    workingShelfEnabled,
+  ]);
   const listedSettled = sections.settled.filter(olderSettledShelf.isListed);
   useOlderSettledShelfGrowth(olderSettledShelf, listedSettled);
   const visibleSettled = listedSettled.slice(0, settledVisibleCount);

@@ -13,6 +13,8 @@ import {
   threadListV2LayoutTime,
 } from "./threadListV2";
 import { computeThreadMoveAvailability } from "./threadOrder";
+import { useAtomValue } from "@effect/atom-react";
+import { threadListEnvironmentsAtom } from "../../state/presentation";
 
 /**
  * Screens' select handlers read the content-only key set; a fresh one per list rebuild gave
@@ -67,6 +69,7 @@ export function useThreadListV2(input: {
   readonly selectedThreadKey: string | null;
 }) {
   const { threads, workingShelfEnabled } = input;
+  const { providersByEnvironmentId } = useAtomValue(threadListEnvironmentsAtom);
   const layoutTime = useMemo(
     () => threadListV2LayoutTime({ threads, now: input.now, searchQuery: input.searchQuery }),
     [threads, input.now, input.searchQuery],
@@ -91,6 +94,7 @@ export function useThreadListV2(input: {
           section === "pinned" ? input.pinReorderEnvironmentIds : input.activeReorderEnvironmentIds,
         ordered: getThreadListV2OrderedSection({
           threads,
+          providersByEnvironment: providersByEnvironmentId,
           section,
           pendingOrder: input.pendingOrder,
           now: layoutTime,
@@ -105,6 +109,7 @@ export function useThreadListV2(input: {
     ]);
   }, [
     threads,
+    providersByEnvironmentId,
     input.pendingOrder,
     input.pinReorderEnvironmentIds,
     input.activeReorderEnvironmentIds,
@@ -136,6 +141,7 @@ export function useThreadListV2(input: {
       buildThreadListV2Items({
         pendingOrder: input.pendingOrder,
         threads: threads.filter((thread) => thread.archivedAt === null),
+        providersByEnvironment: providersByEnvironmentId,
         environmentId: input.environmentId,
         projectRefs: input.projectRefs,
         searchQuery: input.searchQuery,
@@ -168,6 +174,7 @@ export function useThreadListV2(input: {
     [
       input.pendingOrder,
       threads,
+      providersByEnvironmentId,
       input.environmentId,
       input.projectRefs,
       input.searchQuery,
