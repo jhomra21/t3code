@@ -166,6 +166,7 @@ describe("htmlRenderFromToolItem", () => {
       ["mcp__t3-code__html_render", [{ type: "text", text: JSON.stringify(result) }]],
       ["t3-code.html_render", { structuredContent: result, content: [] }],
       ["t3-code-thread_1_html_render", JSON.stringify(result)],
+      ["t3-code___html_render", JSON.stringify(result)],
       ["html_render", result],
       // OpenCode 2 Code Mode reports a script's nested html_render call as one `execute` item.
       ["execute", JSON.stringify(result)],
