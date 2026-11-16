@@ -1507,6 +1507,42 @@ const make = Effect.gen(function* () {
     return { matched, unmatched: input.taskIds.filter((taskId) => !matchedIds.has(taskId)) };
   });
 
+  // The sources thread.stop acts on: a live or queued run, background work, a pending question,
+  // a watch, or an unfinished task of its own. A read that fails counts as live, so thread.stop
+  // reports what it cannot reach. The latest run stays in the read: a cancelled or failed one
+  // may still be awaiting a restart continuation.
+  const threadMayStillRun = Effect.fn("ThreadManagementService.threadMayStillRun")(
+    function* (threadId: ThreadId) {
+      const records = yield* orchestrator.getThreadRecords(
+        threadId,
+        ["runs", "providerThreads", "runtimeRequests", "turnItems", "subagents"],
+        {
+          runStatuses: ["queued", ...ACTIVE_RUN_STATUSES],
+          includeLatestRun: true,
+          turnItemTypes: ["command_execution", "dynamic_tool", "subagent"],
+          turnItemStatuses: ["pending", "running", "waiting"],
+          runtimeRequestStatuses: ["pending"],
+          omitSettledSubagents: true,
+        },
+      );
+      const latestRun = records.runs.at(-1);
+      return (
+        records.runs.some((run) => run.status === "queued" || isActiveRun(run)) ||
+        latestRun?.status === "cancelled" ||
+        latestRun?.status === "failed" ||
+        records.providerThreads.some(
+          (thread) =>
+            thread.status === "active" || (thread.pendingBackgroundTasks?.length ?? 0) > 0,
+        ) ||
+        records.runtimeRequests.length > 0 ||
+        records.turnItems.length > 0 ||
+        (records.thread.pullRequests ?? []).some((link) => link.watch !== undefined) ||
+        records.subagents.some((task) => task.origin === "app_owned" && task.result === null)
+      );
+    },
+    Effect.orElseSucceed(() => true),
+  );
+
   const stopDelegatedTasks: ThreadManagementServiceShape["stopDelegatedTasks"] = Effect.fn(
     "ThreadManagementService.stopDelegatedTasks",
   )(function* (input) {
@@ -1519,8 +1555,18 @@ const make = Effect.gen(function* () {
       if (task.origin !== "app_owned") continue;
       if (task.childThreadId === null) {
         // A task in a linked environment ends here; its follower then stops it there.
-        // One with its result keeps it, but its thread there may run follow-up work.
         if (task.remoteChild === undefined) continue;
+        // One with its result owes a stop only when nothing says it is settled or already
+        // owed: `stoppedThere` is set once its run ended by itself or a stop reached it, and
+        // work sent to its thread since is a task of its own, stopped as one.
+        if (
+          task.result !== null &&
+          (task.remoteChild.stoppedThere !== undefined ||
+            task.status === "cancelled" ||
+            task.status === "interrupted")
+        ) {
+          continue;
+        }
         const commandId = CommandId.make(`${input.commandId}:stop:${task.id}`);
         yield* (input.remoteDispatch ?? dispatch)(
           task.result === null
@@ -1556,13 +1602,18 @@ const make = Effect.gen(function* () {
       // Follow-up tasks reuse a child thread; walk its subtree only once.
       if (stoppedChildThreadIds.has(threadId)) continue;
       stoppedChildThreadIds.add(threadId);
-      yield* dispatch({
-        type: "thread.stop",
-        commandId: CommandId.make(`${input.commandId}:stop:${threadId}`),
-        threadId,
-        stopDelegatedTasks: false,
-        ...(input.reason === undefined ? {} : { reason: input.reason }),
-      }).pipe(
+      // An idle child needs no stop, but its own tasks are still walked: a finished task can
+      // leave a grandchild running.
+      const stopChild = (yield* threadMayStillRun(threadId))
+        ? dispatch({
+            type: "thread.stop",
+            commandId: CommandId.make(`${input.commandId}:stop:${threadId}`),
+            threadId,
+            stopDelegatedTasks: false,
+            ...(input.reason === undefined ? {} : { reason: input.reason }),
+          })
+        : Effect.void;
+      yield* stopChild.pipe(
         Effect.andThen(
           stopDelegatedTasks({ threadId, commandId: input.commandId, reason: input.reason }),
         ),

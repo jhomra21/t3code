@@ -1800,6 +1800,23 @@ const stoppedThere = (
       ),
     );
 
+/** A task recorded before `stoppedThere` was kept: its result stands with no word on its thread there. */
+const asLegacyTask = (laptopEnv: Effect.Success<ReturnType<typeof makeLaptop>>, taskId: NodeId) =>
+  Effect.gen(function* () {
+    const { subagents } = yield* laptopEnv.threads.getThreadRecords(parentThreadId, ["subagents"]);
+    const task = subagents.find((candidate) => candidate.id === taskId)!;
+    const { stoppedThere: _settled, ...remoteChild } = task.remoteChild!;
+    yield* laptopEnv.projections.apply({
+      id: EventId.make(`event:legacy-task:${taskId}`),
+      type: "subagent.updated",
+      threadId: parentThreadId,
+      nodeId: task.id,
+      driver: task.driver,
+      occurredAt: yield* DateTime.now,
+      payload: { ...task, remoteChild },
+    });
+  });
+
 it.effect("stopping the parent stops follow-up work on a task there that has its result", () =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -1837,26 +1854,32 @@ it.effect("stopping the parent stops follow-up work on a task there that has its
         threadId: parentThreadId,
         commandId: CommandId.make("command:stop:laptop-parent-after-result"),
       });
-      // The thread there is stopped as Stop does, for each task, and the first keeps its result.
-      const task = yield* stoppedThere(a, delegated.taskId);
+      // The follow-up is the task still running there, so it is stopped. The first task's run
+      // ended by itself (nothing left to stop there), so it keeps its result and owes nothing.
       expect(yield* stoppedThere(a, followUpId, null)).toMatchObject({ status: "interrupted" });
-      expect((yield* Ref.get(thread.stops)).toSorted()).toEqual([
-        "delegated-tasks",
-        "delegated-tasks",
-        "thread.stop",
-        "thread.stop",
-      ]);
-      expect(task).toMatchObject({ status: "completed", result: "All green." });
+      expect((yield* Ref.get(thread.stops)).toSorted()).toEqual(["delegated-tasks", "thread.stop"]);
+      const tasks = () =>
+        a.threads
+          .getThreadRecords(parentThreadId, ["subagents"])
+          .pipe(Effect.map(({ subagents }) => subagents));
+      expect((yield* tasks()).find((task) => task.id === delegated.taskId)).toMatchObject({
+        status: "completed",
+        result: "All green.",
+        remoteChild: { stoppedThere: true },
+      });
+      expect(
+        (yield* tasks()).find((task) => task.id === delegated.taskId)?.remoteChild?.stopCount,
+      ).toBeUndefined();
       expect(yield* a.projections.getOpenRemoteDelegatedTasks).toEqual([]);
 
-      // A second Stop owes a second stop there, not a replay of the first.
+      // A second Stop finds both settled there and owes neither a stop.
+      const before = yield* tasks();
       yield* a.threads.stopDelegatedTasks({
         threadId: parentThreadId,
         commandId: CommandId.make("command:stop:laptop-parent-again"),
       });
-      expect(yield* stoppedThere(a, delegated.taskId, 2)).toMatchObject({ status: "completed" });
-      expect(yield* stoppedThere(a, followUpId, 1)).toMatchObject({ status: "interrupted" });
-      expect(yield* Ref.get(thread.interrupted)).toBe(4);
+      expect(yield* tasks()).toEqual(before);
+      expect(yield* Ref.get(thread.interrupted)).toBe(1);
     }),
   ).pipe(Effect.provide(NodeHttpServer.layerTest)),
 );
@@ -2067,57 +2090,65 @@ it.effect("a follow-up sent after the parent's own run ended is still a task", (
   ).pipe(Effect.provide(NodeHttpServer.layerTest)),
 );
 
-it.effect("a delayed Stop acknowledgement leaves a newer Stop owed", () =>
-  Effect.scoped(
-    Effect.gen(function* () {
-      const thread = yield* makeBoxThread;
-      const b = yield* serveBox(thread);
-      const offers = yield* SubscriptionRef.make<
-        ReadonlyArray<ProviderContinuationRequests.ProviderContinuationRequest>
-      >([]);
-      const database = yield* SqlitePersistence.layerMemory.pipe(Layer.build);
-      const a = yield* makeLaptop(database, offers);
-      yield* a.remote.start();
-      yield* linkTo(a.links, b, "full-access");
-      yield* seedParent(a);
-      const delegated = yield* delegateToBox(a);
-      yield* Ref.set(thread.reply, "All green.");
-      yield* Ref.set(thread.status, "completed");
-      yield* Deferred.succeed(thread.finished, undefined);
-      yield* taskResult(a, delegated.taskId);
+it.effect(
+  "a newer Stop does not owe a task again the stop its delayed acknowledgement awaits",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const thread = yield* makeBoxThread;
+        const b = yield* serveBox(thread);
+        const offers = yield* SubscriptionRef.make<
+          ReadonlyArray<ProviderContinuationRequests.ProviderContinuationRequest>
+        >([]);
+        const database = yield* SqlitePersistence.layerMemory.pipe(Layer.build);
+        const a = yield* makeLaptop(database, offers);
+        yield* a.remote.start();
+        yield* linkTo(a.links, b, "full-access");
+        yield* seedParent(a);
+        const delegated = yield* delegateToBox(a);
+        yield* Ref.set(thread.reply, "All green.");
+        yield* Ref.set(thread.status, "completed");
+        yield* Deferred.succeed(thread.finished, undefined);
+        yield* taskResult(a, delegated.taskId);
+        yield* asLegacyTask(a, delegated.taskId);
 
-      yield* Ref.set(thread.holdFirstStop, true);
-      yield* a.threads.stopDelegatedTasks({
-        threadId: parentThreadId,
-        commandId: CommandId.make("command:stop:delayed-first"),
-      });
-      yield* Deferred.await(thread.stopStarted);
-      // Work starts after the first Stop landed there, but before its acknowledgement returns.
-      const sent = yield* a.call("t3_thread_send", {
-        environmentId: box.environmentId,
-        threadId: delegated.remoteChild.threadId,
-        message: "Run another check.",
-      });
-      const followUpId = (sent.structuredContent as { taskId: NodeId }).taskId;
-      yield* a.threads.stopDelegatedTasks({
-        threadId: parentThreadId,
-        commandId: CommandId.make("command:stop:delayed-second"),
-      });
-      const pending = yield* a.threads.getThreadRecords(parentThreadId, ["subagents"]);
-      expect(
-        pending.subagents.find((task) => task.id === delegated.taskId)?.remoteChild,
-      ).toMatchObject({ stoppedThere: false, stopCount: 2 });
-      yield* Deferred.succeed(thread.releaseStop, undefined);
-      expect(yield* stoppedThere(a, delegated.taskId, 2)).toMatchObject({
-        status: "completed",
-        result: "All green.",
-      });
-      // The follow-up the work became is stopped there too, as its own task.
-      expect(yield* stoppedThere(a, followUpId, null)).toMatchObject({ status: "interrupted" });
-      expect(yield* Ref.get(thread.interrupted)).toBe(3);
-      expect(yield* a.projections.getOpenRemoteDelegatedTasks).toEqual([]);
-    }),
-  ).pipe(Effect.provide(NodeHttpServer.layerTest)),
+        yield* Ref.set(thread.holdFirstStop, true);
+        yield* a.threads.stopDelegatedTasks({
+          threadId: parentThreadId,
+          commandId: CommandId.make("command:stop:delayed-first"),
+        });
+        yield* Deferred.await(thread.stopStarted);
+        // Work starts after the first Stop landed there, but before its acknowledgement returns.
+        const sent = yield* a.call("t3_thread_send", {
+          environmentId: box.environmentId,
+          threadId: delegated.remoteChild.threadId,
+          message: "Run another check.",
+        });
+        const followUpId = (sent.structuredContent as { taskId: NodeId }).taskId;
+        yield* a.threads.stopDelegatedTasks({
+          threadId: parentThreadId,
+          commandId: CommandId.make("command:stop:delayed-second"),
+        });
+        // A retry of the first Stop's effect replays its receipts and owes nothing new.
+        yield* a.threads.stopDelegatedTasks({
+          threadId: parentThreadId,
+          commandId: CommandId.make("command:stop:delayed-first"),
+        });
+        const pending = yield* a.threads.getThreadRecords(parentThreadId, ["subagents"]);
+        expect(
+          pending.subagents.find((task) => task.id === delegated.taskId)?.remoteChild,
+        ).toMatchObject({ stoppedThere: false, stopCount: 1 });
+        yield* Deferred.succeed(thread.releaseStop, undefined);
+        expect(yield* stoppedThere(a, delegated.taskId, 1)).toMatchObject({
+          status: "completed",
+          result: "All green.",
+        });
+        // The follow-up the work became is stopped there as its own task.
+        expect(yield* stoppedThere(a, followUpId, null)).toMatchObject({ status: "interrupted" });
+        expect(yield* Ref.get(thread.interrupted)).toBe(2);
+        expect(yield* a.projections.getOpenRemoteDelegatedTasks).toEqual([]);
+      }),
+    ).pipe(Effect.provide(NodeHttpServer.layerTest)),
 );
 
 it.effect("a Stop on a task that has its result reaches there after a restart", () =>
@@ -2140,6 +2171,7 @@ it.effect("a Stop on a task that has its result reaches there after a restart", 
           yield* Ref.set(thread.status, "completed");
           yield* Deferred.succeed(thread.finished, undefined);
           yield* taskResult(before, task.taskId);
+          yield* asLegacyTask(before, task.taskId);
           yield* before.threads.stopDelegatedTasks({
             threadId: parentThreadId,
             commandId: CommandId.make("command:stop:laptop-parent-before-restart"),

@@ -2,10 +2,13 @@ import { assert, it } from "@effect/vitest";
 import {
   CommandId,
   ContextTransferId,
+  EnvironmentId,
   EventId,
   MessageId,
   NodeId,
   type OrchestrationV2DomainEvent,
+  type OrchestrationV2RemoteTaskChild,
+  type OrchestrationV2Subagent,
   ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
@@ -1300,6 +1303,165 @@ it.effect("a delegated task that cannot be stopped fails the walk after its sibl
     );
     assert.isTrue(Exit.isFailure(walked));
     assert.deepEqual((yield* threadState(childThreadId)).runs, ["interrupted"]);
+  }).pipe(Effect.provide(layerTest)),
+);
+
+it.effect("Stop reaches only the delegated tasks that can still be running", () =>
+  Effect.gen(function* () {
+    const orchestrator = yield* Orchestrator.OrchestratorV2;
+    const projections = yield* ProjectionStore.ProjectionStoreV2;
+    const threads = yield* ThreadManagementService.ThreadManagementService;
+    const eventStore = yield* EventStore.EventStoreV2;
+    const parentThreadId = ThreadId.make("thread:stop-idle-children");
+    yield* createWatchingThread(parentThreadId, 7);
+    yield* send(parentThreadId, "work", "start_immediately");
+    const idleThreadId = yield* delegate(parentThreadId, "idle child");
+    const runningThreadId = yield* delegate(parentThreadId, "running child");
+    const midThreadId = yield* delegate(parentThreadId, "idle child of a running grandchild");
+    const grandchildThreadId = yield* delegate(midThreadId, "running grandchild");
+
+    const now = yield* DateTime.now;
+    let sequence = 0;
+    const apply = (event: Omit<OrchestrationV2DomainEvent, "id">) =>
+      projections.apply({
+        ...event,
+        id: EventId.make(`event:stop-idle-children:${sequence++}`),
+      } as OrchestrationV2DomainEvent);
+    // The child's run ended long ago and nothing is left running in it.
+    const settleThread = (threadId: ThreadId) =>
+      Effect.gen(function* () {
+        const child = yield* orchestrator.getThreadProjection(threadId);
+        for (const run of child.runs) {
+          yield* apply({
+            type: "run.updated",
+            threadId,
+            runId: run.id,
+            occurredAt: now,
+            payload: { ...run, status: "completed", startedAt: now, completedAt: now },
+          });
+        }
+        for (const providerThread of child.providerThreads) {
+          yield* apply({
+            type: "provider-thread.updated",
+            threadId,
+            occurredAt: now,
+            payload: { ...providerThread, status: "idle", pendingBackgroundTasks: [] },
+          });
+        }
+      });
+    const finishTask = (threadId: ThreadId, match: (task: OrchestrationV2Subagent) => boolean) =>
+      Effect.gen(function* () {
+        const projection = yield* orchestrator.getThreadProjection(threadId);
+        const task = projection.subagents.find(match)!;
+        const item = projection.turnItems.find(
+          (candidate) => candidate.type === "subagent" && candidate.subagentId === task.id,
+        )!;
+        yield* apply({
+          type: "turn-item.updated",
+          threadId,
+          occurredAt: now,
+          payload: { ...item, status: "completed", completedAt: now },
+        });
+        yield* apply({
+          type: "subagent.updated",
+          threadId,
+          nodeId: task.id,
+          driver: task.driver,
+          occurredAt: now,
+          payload: { ...task, status: "completed", result: "Done.", completedAt: now },
+        });
+      });
+    yield* settleThread(idleThreadId);
+    yield* settleThread(midThreadId);
+    yield* finishTask(parentThreadId, (task) => task.childThreadId === idleThreadId);
+    yield* finishTask(parentThreadId, (task) => task.childThreadId === midThreadId);
+    yield* finishTask(midThreadId, (task) => task.childThreadId === grandchildThreadId);
+
+    const template = (yield* orchestrator.getThreadProjection(parentThreadId)).subagents[0]!;
+    const remoteTask = (
+      name: string,
+      state: Partial<OrchestrationV2Subagent>,
+      remoteChild: Partial<OrchestrationV2RemoteTaskChild>,
+    ) =>
+      apply({
+        type: "subagent.updated",
+        threadId: parentThreadId,
+        nodeId: NodeId.make(`node:remote:${name}`),
+        driver: template.driver,
+        occurredAt: now,
+        payload: {
+          ...template,
+          ...state,
+          id: NodeId.make(`node:remote:${name}`),
+          childThreadId: null,
+          remoteChild: {
+            environmentId: EnvironmentId.make("environment:box"),
+            threadId: ThreadId.make(`thread:box:${name}`),
+            label: "Box",
+            ...remoteChild,
+          },
+        },
+      });
+    const finished = { status: "completed", result: "Done.", completedAt: now } as const;
+    // Finished tasks: its run there ended by itself, a stop is already owed, and one recorded
+    // before `stoppedThere` was kept. The last still runs.
+    yield* remoteTask("settled", finished, { stoppedThere: true });
+    yield* remoteTask("owed", finished, { stoppedThere: false, stopCount: 1 });
+    yield* remoteTask("legacy", finished, {});
+    yield* remoteTask("open", { status: "running", result: null, completedAt: null }, {});
+
+    const sequences = Effect.forEach(
+      [idleThreadId, midThreadId, runningThreadId, grandchildThreadId],
+      (threadId) => eventStore.latestSequence({ threadId }),
+    );
+    const before = yield* sequences;
+    const stop = (commandId: string) =>
+      threads.stopDelegatedTasks({
+        threadId: parentThreadId,
+        commandId: CommandId.make(commandId),
+      });
+    yield* stop("stop-idle-children");
+
+    const after = yield* sequences;
+    // Nothing that is finished and idle is written to, but what can still run is stopped.
+    assert.deepEqual(after.slice(0, 1), before.slice(0, 1));
+    assert.deepEqual(
+      (yield* orchestrator.getThreadProjection(midThreadId)).turnItems.filter(
+        (item) => item.type === "run_interrupt_request",
+      ),
+      [],
+    );
+    assert.deepEqual((yield* threadState(runningThreadId)).runs, ["interrupted"]);
+    assert.deepEqual((yield* threadState(grandchildThreadId)).runs, ["interrupted"]);
+    const remote = () =>
+      orchestrator.getThreadProjection(parentThreadId).pipe(
+        Effect.map(({ subagents }) =>
+          Object.fromEntries(
+            subagents
+              .filter((task) => task.remoteChild !== undefined)
+              .map((task) => [
+                task.id.replace("node:remote:", ""),
+                {
+                  status: task.status,
+                  stoppedThere: task.remoteChild?.stoppedThere,
+                  stopCount: task.remoteChild?.stopCount,
+                },
+              ]),
+          ),
+        ),
+      );
+    const expected = {
+      settled: { status: "completed", stoppedThere: true, stopCount: undefined },
+      owed: { status: "completed", stoppedThere: false, stopCount: 1 },
+      legacy: { status: "completed", stoppedThere: false, stopCount: 1 },
+      open: { status: "interrupted", stoppedThere: undefined, stopCount: undefined },
+    } as const;
+    assert.deepEqual(yield* remote(), expected);
+
+    // A retry of the same effect and a later Stop owe nothing the first already owes.
+    yield* stop("stop-idle-children");
+    yield* stop("stop-idle-children:later");
+    assert.deepEqual(yield* remote(), expected);
   }).pipe(Effect.provide(layerTest)),
 );
 
