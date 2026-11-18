@@ -300,6 +300,11 @@ const AssociatedSessions = Schema.Struct({
 });
 const fields = Schema.decodeUnknownOption(Schema.Record(Schema.String, Schema.Unknown));
 const decodeAssociatedSessions = Schema.decodeUnknownOption(AssociatedSessions);
+// Droid starts these loops itself when background work finishes; their user-message id names the loop.
+const NATIVE_WAKE_PREFIXES = ["task-completion:", "script-completion:", "execute-completion:"];
+const isNativeWake = (id: string | null | undefined) =>
+  id != null && NATIVE_WAKE_PREFIXES.some((prefix) => id.startsWith(prefix));
+
 const stringField = (value: unknown, key: string): string | undefined => {
   const record = fields(value);
   const entry = Option.isSome(record) ? record.value[key] : undefined;
@@ -483,6 +488,9 @@ export type DroidAdapterV2Options = {
 
 type ActiveTurn = {
   readonly isWake: boolean;
+  // Droid reports one completion per native loop, under the id of the message that started it.
+  // A message absorbed into a running loop therefore ends with that loop's id, not its own.
+  readonly nativeIds: Set<string>;
   readonly input: ProviderAdapter.ProviderAdapterV2TurnInput;
   readonly turn: OrchestrationV2ProviderTurn;
   readonly ordinals: Map<string, number>;
@@ -638,6 +646,8 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
         let wakeBuffer: DroidRpc.DroidRpcNotification[] = [];
         let wakeOwner: ActiveTurn | null = null;
         let nativeNotificationTurnId: string | null = null;
+        let nativeLoopId: string | null = null;
+        let nativeIdle = true;
         let settingsModel: string | null = null;
 
         const emit = (event: ProviderAdapter.ProviderAdapterV2Event) =>
@@ -1563,6 +1573,8 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
           wakeGeneration++;
           wakePending = false;
           wakeBuffer = [];
+          nativeLoopId = null;
+          nativeIdle = true;
           yield* rpc.close;
           if (connectionScope !== null) {
             const failedScope = connectionScope;
@@ -1593,8 +1605,7 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
             child?.context ??
             (requestSessionId !== undefined && requestSessionId !== nativeId
               ? null
-              : nativeNotificationTurnId?.startsWith("task-completion:") &&
-                  (active === null || active.isWake)
+              : isNativeWake(nativeNotificationTurnId) && (active === null || active.isWake)
                 ? wakeOwner
                 : active);
           if (context === null) {
@@ -1764,6 +1775,25 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
           });
         });
 
+        // Runs on the RPC reader, so loop state is ordered with response frames.
+        const trackNativeLoop = (notice: DroidRpc.DroidRpcNotification) => {
+          if (notice.sessionId !== undefined && nativeId !== null && notice.sessionId !== nativeId)
+            return;
+          const notification = notice.notification;
+          const type = notification["type"];
+          if (type === "droid_working_state_changed" || type === "working_state_changed") {
+            nativeIdle = notification["newState"] === "idle";
+            if (nativeIdle) nativeLoopId = null;
+          } else if (type === "agent_turn_completed") {
+            if (stringField(notification, "turnId") === nativeLoopId) nativeLoopId = null;
+          } else if (type === "create_message" && (nativeLoopId === null || nativeIdle)) {
+            const message = notification["message"];
+            const id = stringField(message, "id");
+            if (stringField(message, "role") === "user" && isNativeWake(id))
+              nativeLoopId = id ?? null;
+          }
+        };
+
         const handleNotification = Effect.fnUntraced(function* (
           notice: DroidRpc.DroidRpcNotification,
         ) {
@@ -1792,22 +1822,31 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
               });
             return;
           }
+          if (
+            (type === "droid_working_state_changed" || type === "working_state_changed") &&
+            notification["newState"] === "idle" &&
+            active?.interrupted === true
+          ) {
+            // Droid may end a cancelled loop without a completion we can match.
+            yield* terminal("interrupted");
+            return;
+          }
           const explicitTurnId = stringField(notification, "turnId");
-          const isTaskCompletionNotice =
-            type === "create_message" &&
-            stringField(notification["message"], "id")?.startsWith("task-completion:") === true;
+          const isWakeNotice =
+            type === "create_message" && isNativeWake(stringField(notification["message"], "id"));
           if (
             active !== null &&
             type === "create_message" &&
             explicitTurnId !== undefined &&
-            explicitTurnId !== active.turn.nativeTurnRef?.nativeId &&
-            !isTaskCompletionNotice
+            !active.nativeIds.has(explicitTurnId) &&
+            !isWakeNotice
           )
             return;
           if (
             active?.toolSearchStopped &&
             type === "agent_turn_completed" &&
-            explicitTurnId === active.turn.nativeTurnRef?.nativeId
+            explicitTurnId !== undefined &&
+            active.nativeIds.has(explicitTurnId)
           ) {
             yield* Deferred.succeed(active.toolSearchCompletion, undefined);
             return;
@@ -1815,6 +1854,7 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
           if (type === "create_message") {
             const message = yield* decodeNotice(Message, notification["message"]);
             if (message === undefined) return;
+            const isWake = isNativeWake(message.id);
             const isTaskCompletion = message.id.startsWith("task-completion:");
             const text = isTaskCompletion
               ? message.content.map((part) => part.text ?? "").join("")
@@ -1822,9 +1862,11 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
             const childId = /^task_id: (\S+)$/mu.exec(text)?.[1];
             const reason = /^reason: (\S+)$/mu.exec(text)?.[1];
             const child = childId === undefined ? undefined : children.get(childId);
-            if (isTaskCompletion) {
+            if (isWake) {
               nativeNotificationTurnId = message.id;
               wakeOwner = active?.isWake ? active : (child?.context ?? wakeOwner ?? lastContext);
+            }
+            if (isTaskCompletion) {
               if (child?.task.status === "running")
                 yield* finishChild(
                   child,
@@ -1838,7 +1880,7 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
             } else if (message.role === "user" && message.id === active?.input.message.messageId) {
               nativeNotificationTurnId = message.id;
             }
-            if (isTaskCompletion && active === null && lastContext !== null) {
+            if (isWake && active === null && lastContext !== null) {
               wakeBuffer.push(notice);
               if (!wakePending) {
                 wakePending = true;
@@ -1892,7 +1934,7 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
             return;
           }
           const context =
-            nativeNotificationTurnId?.startsWith("task-completion:") && active.isWake
+            isNativeWake(nativeNotificationTurnId) && active.isWake
               ? (wakeOwner ?? active)
               : active;
           if (context.toolSearchStopped && type !== "agent_turn_completed") return;
@@ -1998,8 +2040,7 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
             let toolSearchFailure: ReturnType<typeof makeProviderFailure> | undefined;
             if (
               !context.interrupted &&
-              (notificationTurnId === undefined ||
-                notificationTurnId === context.turn.nativeTurnRef?.nativeId) &&
+              (notificationTurnId === undefined || context.nativeIds.has(notificationTurnId)) &&
               tool?.name === "ToolSearch" &&
               Option.isSome(toolInput) &&
               Object.keys(toolInput.value).length === 0 &&
@@ -2114,7 +2155,7 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
             yield* emitTool(context, tool, "running", fullOutput);
           } else if (type === "agent_turn_completed") {
             const turnId = stringField(notification, "turnId");
-            const matching = turnId === context.turn.nativeTurnRef?.nativeId;
+            const matching = turnId !== undefined && context.nativeIds.has(turnId);
             if (!matching || active !== context) return;
             const reason = stringField(notification, "reason");
             const failure =
@@ -2265,6 +2306,8 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
           wakeGeneration++;
           wakePending = false;
           wakeBuffer = [];
+          nativeLoopId = null;
+          nativeIdle = true;
           yield* finishRequests();
           if (owned !== null) yield* owned.close;
           for (const child of children.values()) {
@@ -2299,6 +2342,7 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
             const transportOptions = {
               cwd,
               env,
+              onNotification: trackNativeLoop,
               onRequest: (request: DroidRpc.DroidRpcRequest) =>
                 handleRequest(request).pipe(
                   Effect.mapError(
@@ -2367,6 +2411,8 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
                   yield* rpc.close;
                   wakePending = false;
                   wakeBuffer = [];
+                  nativeLoopId = null;
+                  nativeIdle = true;
                   if (context?.toolSearchStopped === true) {
                     for (const child of children.values()) {
                       if (child.task.status === "running" && child.pendingCompletion !== null) {
@@ -2464,6 +2510,23 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
             resolveAttachmentPath: providerHost.resolveAttachmentPath,
             resolveExtractedTextPath: providerHost.resolveExtractedTextPath,
           });
+        const sendUserMessage = Effect.fnUntraced(function* (
+          rpc: DroidRpc.DroidRpcConnection,
+          context: ActiveTurn,
+          message: {
+            readonly messageId: string;
+            readonly text: string;
+            readonly imagePaths: ReadonlyArray<string>;
+            readonly queuePlacement: "end_of_turn" | "end_of_loop";
+          },
+        ) {
+          context.nativeIds.add(message.messageId);
+          yield* rpc.request("droid.add_user_message", { ...message, userMessageSource: "sdk" });
+          // The response is ordered after every earlier working-state notice, so an idle Droid
+          // started a loop under this id and a busy one absorbed the message into its loop.
+          if (nativeIdle) nativeLoopId = message.messageId;
+          else if (nativeLoopId !== null) context.nativeIds.add(nativeLoopId);
+        });
         const startTurn = Effect.fnUntraced(function* (
           input: ProviderAdapter.ProviderAdapterV2TurnInput,
           compact = false,
@@ -2496,10 +2559,11 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
           const wakeTurnId = isContinuation
             ? wakeBuffer
                 .map((notice) => stringField(notice.notification["message"], "id"))
-                .find((id) => id?.startsWith("task-completion:"))
+                .find((id) => isNativeWake(id))
             : undefined;
           const context: ActiveTurn = {
             isWake: isContinuation,
+            nativeIds: new Set([wakeTurnId ?? input.message.messageId]),
             input,
             turn: {
               id: ids.derive.providerTurn({
@@ -2583,11 +2647,13 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
           }
           nativeNotificationTurnId = input.message.messageId;
           contextUsageAfterCompaction = false;
-          yield* rpc.request("droid.add_user_message", {
+          const text = yield* messageText(input.message);
+          // An interrupt that settled this turn while it was starting must not start a loop for it.
+          if (active !== context) return;
+          yield* sendUserMessage(rpc, context, {
             messageId: input.message.messageId,
-            text: yield* messageText(input.message),
+            text,
             imagePaths,
-            userMessageSource: "sdk",
             queuePlacement: "end_of_turn",
           });
         });
@@ -2685,11 +2751,10 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
               if (active?.turn.id !== input.providerTurnId || active.toolSearchStopped)
                 return yield* protocolError("The requested Droid turn is not active");
               const rpc = yield* requireConnection();
-              yield* rpc.request("droid.add_user_message", {
+              yield* sendUserMessage(rpc, active, {
                 messageId: input.message.messageId,
                 text: yield* messageText(input.message),
                 imagePaths: yield* imagePathsFor(input.message),
-                userMessageSource: "sdk",
                 queuePlacement: "end_of_loop",
               });
             },
@@ -2717,9 +2782,12 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
               active.interrupted = true;
               const rpc = yield* requireConnection();
               yield* finishRequests();
+              const context = active;
               yield* rpc
                 .request("droid.interrupt_session", {})
                 .pipe(Effect.onError(() => terminal("interrupted")));
+              // An idle Droid sends no completion for an interrupt, so nothing else would settle this turn.
+              if (nativeIdle) yield* terminal("interrupted", false, undefined, undefined, context);
             },
             (effect, input) =>
               effect.pipe(
@@ -2884,6 +2952,8 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
               lastContext = null;
               wakeOwner = null;
               nativeNotificationTurnId = null;
+              nativeLoopId = null;
+              nativeIdle = true;
               providerThread = {
                 ...input.providerThread,
                 nativeThreadRef: nativeRef(result.newSessionId),

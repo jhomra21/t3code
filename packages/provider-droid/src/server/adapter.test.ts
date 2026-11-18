@@ -3966,6 +3966,246 @@ describe("Droid adapter", () => {
       ),
   );
 
+  describe("native loop ownership", () => {
+    type Fake = Effect.Success<ReturnType<typeof makeFakeDroid>>;
+    type Opened = Effect.Success<ReturnType<typeof open>>;
+    const followUp = (input: Opened["input"], id: string, ordinal: number): Opened["input"] => ({
+      ...input,
+      runId: RunId.make(`${id}-run`),
+      attemptId: RunAttemptId.make(`${id}-attempt`),
+      runOrdinal: ordinal,
+      providerTurnOrdinal: ordinal,
+      message: { ...input.message, messageId: MessageId.make(id) },
+    });
+    const barrier = (fake: Fake, id: string) =>
+      Effect.gen(function* () {
+        yield* fake.emitRequest(id, "droid.unknown_barrier", {});
+        yield* fake.takeReply;
+      });
+    const lastStatus = (opened: Opened) =>
+      opened.runtime
+        .readThreadSnapshot({ providerThread: opened.input.providerThread })
+        .pipe(Effect.map((snapshot) => snapshot.providerTurns.at(-1)?.status));
+    const steer = Effect.fnUntraced(function* (opened: Opened, messageId: string) {
+      const turn = (yield* opened.runtime.readThreadSnapshot({
+        providerThread: opened.input.providerThread,
+      })).providerTurns.at(-1);
+      if (turn === undefined) return yield* Effect.die(new Error("No turn to steer"));
+      yield* opened.runtime.steerTurn({
+        threadId,
+        runId: opened.input.runId,
+        providerThread: opened.input.providerThread,
+        providerTurnId: turn.id,
+        message: { ...opened.input.message, messageId: MessageId.make(messageId), text: "Also" },
+      });
+    });
+    const complete = (fake: Fake, turnId: string) =>
+      fake.emitNotification({ type: "agent_turn_completed", reason: "completed", turnId });
+
+    it.effect("ends a turn on the single completion of the loop that absorbed its steer", () =>
+      provide(
+        Effect.gen(function* () {
+          const fake = yield* makeFakeDroid();
+          const opened = yield* open(fake);
+          yield* opened.runtime.startTurn(opened.input);
+          yield* fake.takeRequest("droid.add_user_message");
+          yield* steer(opened, "absorbed-steer");
+          yield* fake.takeRequest("droid.add_user_message");
+          yield* complete(fake, opened.input.message.messageId);
+          yield* barrier(fake, "absorbed-steer-barrier");
+          assert.equal(yield* lastStatus(opened), "completed");
+        }),
+      ),
+    );
+
+    it.effect(
+      "ends a turn started inside a native script-completion loop and offers that loop",
+      () =>
+        provide(
+          Effect.gen(function* () {
+            const fake = yield* makeFakeDroid();
+            const offered = yield* Deferred.make<void>();
+            const opened = yield* open(fake, { offer: () => Deferred.succeed(offered, undefined) });
+            yield* opened.runtime.startTurn(opened.input);
+            yield* fake.takeRequest("droid.add_user_message");
+            yield* complete(fake, opened.input.message.messageId);
+            yield* barrier(fake, "first-turn-barrier");
+            assert.equal(yield* lastStatus(opened), "completed");
+
+            const loopId = "script-completion:native-session:tool-1:tool-1";
+            yield* fake.emitNotification({
+              type: "create_message",
+              message: { id: loopId, role: "user", content: [] },
+            });
+            yield* fake.emitNotification({
+              type: "droid_working_state_changed",
+              newState: "streaming",
+            });
+            yield* barrier(fake, "self-started-loop-barrier");
+            assert.isTrue(yield* Deferred.isDone(offered));
+
+            yield* opened.runtime.startTurn(followUp(opened.input, "user-inside-loop", 2));
+            yield* fake.takeRequest("droid.add_user_message");
+            yield* complete(fake, loopId);
+            yield* barrier(fake, "absorbed-loop-barrier");
+            assert.equal(yield* lastStatus(opened), "completed");
+          }),
+        ),
+    );
+
+    it.effect("ends a steer that starts a new loop after Droid went idle", () =>
+      provide(
+        Effect.gen(function* () {
+          const fake = yield* makeFakeDroid();
+          const opened = yield* open(fake);
+          yield* opened.runtime.startTurn(opened.input);
+          yield* fake.takeRequest("droid.add_user_message");
+          yield* complete(fake, "ended-native-loop");
+          yield* fake.emitNotification({ type: "droid_working_state_changed", newState: "idle" });
+          yield* barrier(fake, "idle-barrier");
+          assert.equal(yield* lastStatus(opened), "running");
+          yield* steer(opened, "idle-steer");
+          yield* fake.takeRequest("droid.add_user_message");
+          yield* complete(fake, "idle-steer");
+          yield* barrier(fake, "idle-steer-barrier");
+          assert.equal(yield* lastStatus(opened), "completed");
+        }),
+      ),
+    );
+
+    it.effect("settles an interrupt answered by an idle Droid and accepts the next turn", () =>
+      provide(
+        Effect.gen(function* () {
+          const fake = yield* makeFakeDroid();
+          const opened = yield* open(fake);
+          yield* opened.runtime.startTurn(opened.input);
+          yield* fake.takeRequest("droid.add_user_message");
+          yield* fake.emitNotification({ type: "droid_working_state_changed", newState: "idle" });
+          yield* barrier(fake, "idle-interrupt-barrier");
+          const turn = (yield* opened.runtime.readThreadSnapshot({
+            providerThread: opened.input.providerThread,
+          })).providerTurns[0];
+          assert.isDefined(turn);
+          if (turn === undefined) return;
+          yield* opened.runtime.interruptTurn({
+            providerThread: opened.input.providerThread,
+            providerTurnId: turn.id,
+          });
+          assert.equal(yield* lastStatus(opened), "interrupted");
+          assert.include(fake.requestedMethods, "droid.interrupt_session");
+          yield* opened.runtime.startTurn(followUp(opened.input, "after-idle-interrupt", 2));
+          yield* fake.takeRequest("droid.add_user_message");
+        }),
+      ),
+    );
+
+    const firstTurn = (opened: Opened) =>
+      opened.runtime
+        .readThreadSnapshot({ providerThread: opened.input.providerThread })
+        .pipe(Effect.map((snapshot) => snapshot.providerTurns.at(-1)));
+    const interrupt = Effect.fnUntraced(function* (opened: Opened) {
+      const turn = yield* firstTurn(opened);
+      if (turn === undefined) return yield* Effect.die(new Error("No turn to interrupt"));
+      yield* opened.runtime.interruptTurn({
+        providerThread: opened.input.providerThread,
+        providerTurnId: turn.id,
+      });
+    });
+    const workingState = (fake: Fake, newState: string) =>
+      fake.emitNotification({ type: "droid_working_state_changed", newState });
+
+    it.effect(
+      "keeps loop ownership when the previous loop's idle arrives after the next turn",
+      () =>
+        provide(
+          Effect.gen(function* () {
+            const fake = yield* makeFakeDroid();
+            const opened = yield* open(fake);
+            yield* opened.runtime.startTurn(opened.input);
+            yield* fake.takeRequest("droid.add_user_message");
+            yield* complete(fake, opened.input.message.messageId);
+            yield* barrier(fake, "completed-barrier");
+            assert.equal(yield* lastStatus(opened), "completed");
+            yield* opened.runtime.startTurn(followUp(opened.input, "next-turn", 2));
+            yield* fake.takeRequest("droid.add_user_message");
+            yield* workingState(fake, "idle");
+            yield* workingState(fake, "streaming");
+            yield* barrier(fake, "stale-idle-barrier");
+            yield* interrupt(opened);
+            assert.include(fake.requestedMethods, "droid.interrupt_session");
+            assert.equal(yield* lastStatus(opened), "running");
+            yield* complete(fake, "next-turn");
+            yield* barrier(fake, "next-turn-barrier");
+            assert.equal(yield* lastStatus(opened), "interrupted");
+          }),
+        ),
+    );
+
+    it.effect("settles an interrupted turn when Droid goes idle without a completion", () =>
+      provide(
+        Effect.gen(function* () {
+          const fake = yield* makeFakeDroid();
+          const opened = yield* open(fake);
+          yield* opened.runtime.startTurn(opened.input);
+          yield* fake.takeRequest("droid.add_user_message");
+          yield* workingState(fake, "streaming");
+          yield* barrier(fake, "busy-barrier");
+          yield* interrupt(opened);
+          assert.include(fake.requestedMethods, "droid.interrupt_session");
+          assert.equal(yield* lastStatus(opened), "running");
+          yield* workingState(fake, "idle");
+          yield* barrier(fake, "cancelled-idle-barrier");
+          assert.equal(yield* lastStatus(opened), "interrupted");
+        }),
+      ),
+    );
+
+    it.effect("attributes a steer acknowledged while Droid is busy to the running loop", () =>
+      provide(
+        Effect.gen(function* () {
+          const fake = yield* makeFakeDroid();
+          const opened = yield* open(fake);
+          const userMessage = (id: string) =>
+            fake.emitNotification({
+              type: "create_message",
+              message: { id, role: "user", content: [] },
+            });
+          yield* opened.runtime.startTurn(opened.input);
+          yield* fake.takeRequest("droid.add_user_message");
+          yield* workingState(fake, "executing_tool");
+          yield* userMessage(`context-${opened.input.message.messageId}`);
+          yield* barrier(fake, "busy-barrier");
+          yield* steer(opened, "busy-steer");
+          yield* fake.takeRequest("droid.add_user_message");
+          yield* userMessage("busy-steer");
+          yield* barrier(fake, "steer-barrier");
+          assert.equal(yield* lastStatus(opened), "running");
+          yield* complete(fake, opened.input.message.messageId);
+          yield* workingState(fake, "idle");
+          yield* barrier(fake, "loop-completed-barrier");
+          assert.equal(yield* lastStatus(opened), "completed");
+        }),
+      ),
+    );
+
+    it.effect("keeps a turn running when an unrelated loop completes", () =>
+      provide(
+        Effect.gen(function* () {
+          const fake = yield* makeFakeDroid();
+          const opened = yield* open(fake);
+          yield* opened.runtime.startTurn(opened.input);
+          yield* fake.takeRequest("droid.add_user_message");
+          yield* complete(fake, "unrelated-loop");
+          yield* barrier(fake, "unrelated-barrier");
+          assert.equal(yield* lastStatus(opened), "running");
+          yield* complete(fake, opened.input.message.messageId);
+          yield* barrier(fake, "own-completion-barrier");
+          assert.equal(yield* lastStatus(opened), "completed");
+        }),
+      ),
+    );
+  });
+
   it.effect("sends image paths on steering messages", () =>
     provide(
       Effect.gen(function* () {

@@ -82,6 +82,8 @@ export const makeConnection = Effect.fn("DroidRpc.makeConnection")(function* (op
   readonly cwd?: string;
   readonly env: NodeJS.ProcessEnv;
   readonly closeSession?: boolean;
+  // Runs on the reader before the notification is queued, so it is ordered with response frames.
+  readonly onNotification?: (notification: DroidRpcNotification) => void;
   readonly onRequest?: (
     request: DroidRpcRequest,
   ) => Effect.Effect<DroidRpcReply | undefined, DroidRpcError>;
@@ -220,6 +222,7 @@ export const makeConnection = Effect.fn("DroidRpc.makeConnection")(function* (op
         ),
       );
       if (notification === undefined) return;
+      options.onNotification?.(notification);
       yield* Queue.offer(incoming, notification);
     } else {
       yield* Effect.logWarning("Skipping unknown native Droid RPC frame", {
