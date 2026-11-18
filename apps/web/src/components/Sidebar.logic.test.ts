@@ -10,6 +10,7 @@ import {
   shouldCreateNewThreadInCurrentProject,
   deleteSelectedThreadEntries,
   getFallbackThreadIdAfterDelete,
+  filterSidebarV2VisibleThreads,
   hasUnseenCompletion,
   orderItemsByPreferredIds,
   pinOrderKeyBetween,
@@ -1680,5 +1681,39 @@ describe("shouldCreateNewThreadInCurrentProject", () => {
     expect(shouldCreateNewThreadInCurrentProject(false, 1, 3)).toBe(true);
     expect(shouldCreateNewThreadInCurrentProject(false, 0, 0)).toBe(true);
     expect(shouldCreateNewThreadInCurrentProject(true, 2, 2)).toBe(true);
+  });
+});
+
+describe("filterSidebarV2VisibleThreads", () => {
+  it("lists a running Droid subagent as its own row and hides other subagents", () => {
+    const environmentId = EnvironmentId.make("environment-row");
+    const root = makeThreadFixture({ id: ThreadId.make("thread-root"), environmentId });
+    const child = makeThreadFixture({
+      id: ThreadId.make("thread-child"),
+      environmentId,
+      lineage: {
+        rootThreadId: root.id,
+        parentThreadId: root.id,
+        relationshipToParent: "subagent",
+      },
+    });
+    const droidChild = {
+      ...child,
+      providerInstanceId: ProviderInstanceId.make("droid"),
+      runtime: { ...root.runtime!, status: "running" as const },
+    };
+    const idleDroidChild = {
+      ...droidChild,
+      runtime: { ...droidChild.runtime, status: "idle" as const },
+    };
+    expect(filterSidebarV2VisibleThreads([root, droidChild], null)).toEqual([root, droidChild]);
+    expect(filterSidebarV2VisibleThreads([root, idleDroidChild, child], null)).toEqual([root]);
+    expect(
+      filterSidebarV2VisibleThreads(
+        [root, droidChild],
+        null,
+        new Set([threadKey({ environmentId, threadId: droidChild.id })]),
+      ),
+    ).toEqual([root]);
   });
 });

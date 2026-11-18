@@ -20,12 +20,14 @@ import {
 import { foldSearchQuery, rankSearchItems, scoreThreadSearch } from "@t3tools/shared/paletteSearch";
 import {
   type ContextMenuItem,
+  isListedThreadLineage,
   type EnvironmentId,
   type ResolvedKeybindingsConfig,
   type ScopedThreadRef,
   type ThreadId,
 } from "@t3tools/contracts";
 import { isThreadListed } from "@t3tools/client-runtime/state/subagent-display";
+import { isShownUnderParent } from "@t3tools/client-runtime/state/threads";
 import type { SidebarProjectSortOrder, SidebarThreadSortOrder } from "@t3tools/contracts/settings";
 import type { AsyncResult } from "effect/reactivity";
 import {

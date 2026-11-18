@@ -659,6 +659,7 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
             anchorKey={workEntry.id}
             disclosureAnchorKey={workEntry.id}
             entries={workEntry.nestedToolEntries}
+            groupedEntries={workEntry.nestedToolEntries}
             workspaceRoot={workspaceRoot}
             onToggleEntry={(collapsed) => nestedGroupView.onToggleEntry(collapsed, workEntry.id)}
           />

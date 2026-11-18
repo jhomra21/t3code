@@ -241,7 +241,7 @@ function shellRuntime(thread: OrchestrationV2ThreadShell): ThreadRuntimeSummary 
   // threads stay active through activityRunStatus until their provider thread appears.
   if (
     thread.latestRunId === null &&
-    thread.activeProviderThreadId === null &&
+    (thread.activeProviderThreadId === null || thread.historyOrigin === "v1_import") &&
     (thread.activityRunStatus ?? null) === null &&
     !parkAtIdle
   ) {

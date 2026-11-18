@@ -2002,6 +2002,7 @@ it.effect("a follower that keeps hitting defects leaves a stop it owes owed", ()
       yield* Ref.set(thread.status, "completed");
       yield* Deferred.succeed(thread.finished, undefined);
       yield* taskResult(a, delegated.taskId);
+      yield* asLegacyTask(a, delegated.taskId);
       yield* Ref.set(broken, true);
       yield* Queue.take(retries.failed).pipe(
         Effect.andThen(Queue.offer(retries.retry, undefined)),

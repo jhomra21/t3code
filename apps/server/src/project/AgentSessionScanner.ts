@@ -1803,7 +1803,13 @@ export const make = Effect.gen(function* () {
           }
         }
       }
-      return { transcripts, truncated };
+      // A cap on directories stops the walk with budget left; counting it as spent keeps the
+      // rescan from retrying a walk that stops at the same point.
+      return {
+        transcripts,
+        truncated,
+        operationsUsed: truncated ? operationBudget : operationBudget - operationsRemaining,
+      };
     },
   );
 
