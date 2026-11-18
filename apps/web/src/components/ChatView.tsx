@@ -125,6 +125,7 @@ import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import { orchestrationV2WorktreePending } from "@t3tools/shared/orchestrationV2ThreadError";
 import { resolveThreadReferenceCopyTarget } from "@t3tools/client-runtime/thread-reference";
 import { resolveTerminalSessionLabel } from "@t3tools/shared/terminalLabelsCopy";
+import { pendingBackgroundRosterForActiveThread } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import { useAtomValue } from "@effect/atom-react";
 import {
   type MouseEvent as ReactMouseEvent,
@@ -1522,6 +1523,10 @@ export default function ChatView(props: ChatViewProps) {
     activeProviderThread,
   );
   const pendingBackgroundTasks = deriveThreadPendingBackgroundTasks(serverProjection);
+  const activeBackgroundRoster = pendingBackgroundRosterForActiveThread({
+    providerThreads: serverProjection?.providerThreads ?? [],
+    activeProviderThreadId: serverProjection?.thread.activeProviderThreadId,
+  });
   const activeWorkStartedAt =
     deriveActiveWorkStartedAt(activeActivityRun, activeRuntime, localDispatchStartedAt) ??
     runlessWorkStartedAt;
@@ -2485,6 +2490,7 @@ export default function ChatView(props: ChatViewProps) {
     // A waiting run is checkpoint drain; Stop there reaches its background work.
     runIsLive: (isWorking && activeRuntime?.status !== "waiting") || phase === "connecting",
     pendingBackgroundTasks,
+    activeBackgroundRoster,
     turnItems: serverProjection?.turnItems ?? EMPTY_TURN_ITEMS,
     activePendingApproval,
     activePendingUserInput,
