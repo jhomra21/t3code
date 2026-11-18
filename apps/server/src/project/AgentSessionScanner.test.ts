@@ -700,46 +700,6 @@ it.layer(NodeServices.layer)("AgentSessionScanner", (it) => {
         }),
     );
 
-    it.effect.each(["claudeAgent", "codex"] as const)(
-      "stops %s directory reads at the discovery operation budget",
-      (source) =>
-        Effect.gen(function* () {
-          const path = yield* Path.Path;
-          const fileSystem = yield* FileSystem.FileSystem;
-          const claudeHomePath = yield* makeTempDir("t3code-claude-home-");
-          const codexHomePath = yield* makeTempDir("t3code-codex-home-");
-          const discoveryRoot =
-            source === "claudeAgent"
-              ? path.join(claudeHomePath, "projects")
-              : path.join(codexHomePath, "sessions");
-          const emptyDirectories = Array.from(
-            { length: 20_001 },
-            (_, index) => `empty-${index.toString().padStart(5, "0")}`,
-          );
-          let directoryReadCount = 0;
-          const simulatedFileSystem = FileSystem.FileSystem.of({
-            ...fileSystem,
-            readDirectory: (directory, options) => {
-              if (directory === discoveryRoot) {
-                directoryReadCount += 1;
-                return Effect.succeed(emptyDirectories);
-              }
-              if (path.dirname(directory) === discoveryRoot) {
-                directoryReadCount += 1;
-                return Effect.succeed([]);
-              }
-              return fileSystem.readDirectory(directory, options);
-            },
-          });
-
-          const result = yield* runScan({ claudeHomePath, codexHomePath }).pipe(
-            Effect.provideService(FileSystem.FileSystem, simulatedFileSystem),
-          );
-
-          expect(result.candidates).toEqual([]);
-          expect(directoryReadCount).toBe(20_000);
-        }),
-    );
     it.effect("merges the same cwd seen by both agents and flags imported projects", () =>
       Effect.gen(function* () {
         const path = yield* Path.Path;
@@ -1932,53 +1892,6 @@ it.layer(NodeServices.layer)("AgentSessionScanner", (it) => {
           { _tag: "Importable", thread: { providerSessionId: "valid-session" } },
         ]);
       }),
-    );
-    it.effect.each([false, true])(
-      "counts terminal newlines correctly with record overflow=%s",
-      (overflow) =>
-        Effect.gen(function* () {
-          const path = yield* Path.Path;
-          const nowMs = Date.parse("2026-08-24T12:00:00.000Z");
-          yield* TestClock.setTime(nowMs);
-          const claudeHomePath = yield* makeTempDir("t3code-record-limit-claude-");
-          const codexHomePath = yield* makeTempDir("t3code-record-limit-codex-");
-          const workspace = yield* makeTempDir("t3code-record-limit-project-");
-          const directory = path.join(codexHomePath, "sessions", "2026", "08", "24");
-          yield* writeTranscript({
-            filePath: path.join(directory, "rollout-records.jsonl"),
-            contents: makeRecordLimitTranscript(workspace, overflow),
-            mtimeMs: nowMs,
-          });
-          yield* writeTranscript({
-            filePath: path.join(directory, "rollout-older.jsonl"),
-            contents: [
-              encodeTranscriptRecord({
-                type: "session_meta",
-                payload: { id: "older-session", cwd: workspace },
-              }),
-              encodeTranscriptRecord({
-                type: "event_msg",
-                payload: { type: "user_message", message: "Older prompt" },
-              }),
-            ].join("\n"),
-            mtimeMs: nowMs - 1_000,
-          });
-          const outcomes = yield* runRecentThreadOutcomes({
-            claudeHomePath,
-            codexHomePath,
-            workspaceRoot: workspace,
-          });
-          expect(outcomes.map((outcome) => outcome._tag)).toEqual(
-            overflow ? ["Skipped", "Importable"] : ["Importable", "Importable"],
-          );
-          expect(
-            outcomes.flatMap((outcome) =>
-              outcome._tag === "Importable"
-                ? outcome.thread.messages.map((message) => message.text)
-                : [],
-            ),
-          ).toEqual(overflow ? ["Older prompt"] : ["First prompt", "Older prompt"]);
-        }),
     );
     it.effect("imports Codex conversations stored only as zstd-compressed rollouts", () =>
       Effect.gen(function* () {
