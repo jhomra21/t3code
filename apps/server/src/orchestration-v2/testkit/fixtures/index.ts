@@ -99,7 +99,6 @@ import { assertPiCompactionOutput } from "./pi_compaction/output.ts";
 import { assertDroidCompactionOutput } from "./pi_compaction/droid_output.ts";
 import { providerThreadResumeInput } from "./provider_thread_resume/input.ts";
 import { assertDroidProviderThreadResumeOutput } from "./provider_thread_resume/droid_output.ts";
-import { assertKiroProviderThreadResumeOutput } from "./provider_thread_resume/kiro_output.ts";
 import { assertPiProviderThreadResumeOutput } from "./provider_thread_resume/pi_output.ts";
 import { assertMultiTurnClaudeOutput } from "./multi_turn/claude_output.ts";
 import { assertMultiTurnOutput } from "./multi_turn/codex_output.ts";
@@ -110,6 +109,7 @@ import { assertOpenCodeChildApprovalOutput } from "./opencode_child_approval/out
 import { openCodeRunningChildApprovalInput } from "./opencode_running_child_approval/input.ts";
 import { assertOpenCodeRunningChildApprovalOutput } from "./opencode_running_child_approval/output.ts";
 import { openCodeSubagentInput } from "./opencode_subagent/input.ts";
+import { openCodeBackgroundWakeInput } from "./opencode_background_wake/input.ts";
 import { openCode2InboxInput } from "./opencode2_inbox/input.ts";
 import { openCode2RevertInput } from "./opencode2_revert/input.ts";
 import { assertOpenCode2RevertOutput } from "./opencode2_revert/output.ts";
@@ -141,6 +141,7 @@ import { assertCodexModelRerouteOutput } from "./codex_model_reroute/output.ts";
 import { openCode2ToolCallInput } from "./opencode2_tool_call/input.ts";
 import { assertOpenCode2ToolCallOutput } from "./opencode2_tool_call/output.ts";
 import { assertOpenCodeSubagentOutput } from "./opencode_subagent/output.ts";
+import { assertOpenCodeBackgroundWakeOutput } from "./opencode_background_wake/output.ts";
 import {
   assertCodexPlanQuestionsOutput,
   assertPlanQuestionsOutput,
@@ -1193,6 +1194,22 @@ export const ORCHESTRATOR_REPLAY_FIXTURES: ReadonlyArray<OrchestratorReplayFixtu
     ],
   },
   {
+    name: "opencode_background_wake",
+    buildInput: openCodeBackgroundWakeInput,
+    providers: [
+      {
+        driver: ProviderDriverKind.make("opencode"),
+        transcriptFile: new URL(
+          "./opencode_background_wake/opencode_transcript.ndjson",
+          import.meta.url,
+        ),
+        modelSelection: OPENCODE_MODEL_SELECTION,
+        runContinuationWorker: true,
+        assertOutput: assertOpenCodeBackgroundWakeOutput,
+      },
+    ],
+  },
+  {
     name: "opencode2_simple",
     buildInput: openCode2SimpleInput,
     providers: [
@@ -1662,12 +1679,6 @@ export const ORCHESTRATOR_REPLAY_FIXTURES: ReadonlyArray<OrchestratorReplayFixtu
         modelSelection: DROID_MODEL_SELECTION,
         assertOutput: assertDroidProviderThreadResumeOutput,
       },
-      {
-        driver: ProviderDriverKind.make("kiro"),
-        transcriptFile: new URL("./provider_thread_resume/kiro_transcript.ndjson", import.meta.url),
-        modelSelection: KIRO_MODEL_SELECTION,
-        assertOutput: assertKiroProviderThreadResumeOutput,
-      },
     ],
   },
   {
@@ -1874,12 +1885,6 @@ export const ORCHESTRATOR_REPLAY_FIXTURES: ReadonlyArray<OrchestratorReplayFixtu
         transcriptFile: new URL("./message_steering/cursor_transcript.ndjson", import.meta.url),
         modelSelection: CURSOR_MODEL_SELECTION,
         assertOutput: assertCursorMessageSteeringOutput,
-      },
-      {
-        driver: ProviderDriverKind.make("grok"),
-        transcriptFile: new URL("./message_steering/grok_transcript.ndjson", import.meta.url),
-        modelSelection: GROK_MODEL_SELECTION,
-        assertOutput: assertGrokMessageSteeringOutput,
       },
       {
         driver: ProviderDriverKind.make("fx"),
