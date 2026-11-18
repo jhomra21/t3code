@@ -1780,7 +1780,12 @@ export const make = Effect.gen(function* () {
           }
         }
       }
-      return { transcripts, truncated, operationsUsed: operationBudget - operationsRemaining };
+      // The directory limit truncates with budget left over; counting it as spent stops the rescan loop.
+      return {
+        transcripts,
+        truncated,
+        operationsUsed: truncated ? operationBudget : operationBudget - operationsRemaining,
+      };
     },
   );
 
