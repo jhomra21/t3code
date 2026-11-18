@@ -313,9 +313,13 @@ const make = Effect.gen(function* () {
               status: "stopped",
               lastSeenAt: thread.updatedAt,
               resumeCursor:
-                thread.source === "claudeAgent"
-                  ? { threadId, resume: thread.providerSessionId }
-                  : { threadId: nativeThreadId },
+                thread.source === "codex"
+                  ? { threadId: thread.providerSessionId }
+                  : thread.source === "droid"
+                    ? { sessionId: thread.providerSessionId }
+                    : thread.source === "claudeAgent"
+                      ? { threadId, resume: thread.providerSessionId }
+                      : { threadId: nativeThreadId },
               runtimePayload: { cwd: outcome.worktree?.path ?? project.workspaceRoot },
             },
             { onConflict: "ignore" },

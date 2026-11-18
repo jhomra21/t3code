@@ -41,6 +41,7 @@ import * as ProviderSessionRuntime from "../persistence/ProviderSessionRuntime.t
 import { resolveCodexHomeLayout } from "../provider/Drivers/CodexHomeLayout.ts";
 import { mergeProviderInstanceEnvironment } from "@t3tools/provider-core/server/instanceEnvironment";
 import { expandHomePath } from "@t3tools/provider-core/server/pathExpansion";
+import { DroidSettings } from "@t3tools/provider-droid/settings";
 import { piHome, resolvePiSessionsDir } from "@t3tools/provider-pi/server/usage";
 import * as ServerSettings from "../serverSettings.ts";
 import { sourceControlDefinitions } from "../sourceControl/sourceControlDefinitions.ts";
@@ -127,6 +128,10 @@ const TranscriptRecord = Schema.Struct({
   parentId: Schema.optional(Schema.NullOr(Schema.String)),
   name: Schema.optional(Schema.String),
   timestamp: Schema.optional(Schema.String),
+  title: Schema.optional(Schema.String),
+  callingSessionId: Schema.optional(Schema.String),
+  callingToolUseId: Schema.optional(Schema.String),
+  seq: Schema.optional(Schema.Number),
   cwd: Schema.optional(Schema.String),
   sessionId: Schema.optional(Schema.String),
   aiTitle: Schema.optional(Schema.String),
@@ -158,6 +163,10 @@ const CodexSessionIndexEntry = Schema.Struct({
 
 const decodeClaudeSettings = Schema.decodeUnknownOption(ClaudeSettings);
 const decodeCodexSettings = Schema.decodeUnknownOption(CodexSettings);
+const decodeDroidSettings = Schema.decodeUnknownOption(DroidSettings);
+const decodeDroidSessionSettings = Schema.decodeUnknownOption(
+  Schema.fromJsonString(Schema.Struct({ model: Schema.optional(Schema.String) })),
+);
 const decodeTranscriptRecord = Schema.decodeUnknownOption(Schema.fromJsonString(TranscriptRecord));
 const decodeTranscriptValue = Schema.decodeUnknownOption(TranscriptRecord);
 const decodePiEntryLinks = Schema.decodeUnknownOption(
@@ -521,12 +530,13 @@ function parseAgentSessionRecords(
         ? records.find((record) => record.type === "session")?.id?.trim() || input.fallbackSessionId
         : (claudeFields.sessionId ?? input.fallbackSessionId);
   // Pi titles a session by its latest session_info on any branch; an empty name clears it.
-  const title =
-    input.source === "pi"
-      ? records.findLast((record) => record.type === "session_info")?.name?.trim() || null
-      : (claudeFields.title ?? null);
+  let title = claudeFields.title ?? null;
+  if (input.source === "pi") {
+    title = records.findLast((record) => record.type === "session_info")?.name?.trim() || null;
+  }
   let model = claudeFields.model ?? null;
   let derivedTitle: string | undefined;
+  let isDroidChildSession = false;
   // Names a session whose only request was a bare command, such as `/review`.
   let bareCommandTitle: string | undefined;
   let hasAssistantMessage = false;
@@ -637,6 +647,28 @@ function parseAgentSessionRecords(
       });
       continue;
     }
+    if (input.source === "droid") {
+      if (record.type === "session_start") {
+        if (record.id?.trim()) providerSessionId = record.id.trim();
+        if (record.title?.trim()) title = record.title.trim();
+        isDroidChildSession ||=
+          (record.callingSessionId?.trim().length ?? 0) > 0 ||
+          (record.callingToolUseId?.trim().length ?? 0) > 0;
+        continue;
+      }
+      if (record.type !== "message") continue;
+      const role = record.message?.role;
+      if (role !== "user" && role !== "assistant") continue;
+      const text = extractText(record.message?.content);
+      if (text.length === 0) continue;
+      retainMessage({
+        role,
+        text,
+        createdAt: normalizeTimestamp(record.timestamp, fallbackTimestamp),
+        codexResponseUser: false,
+      });
+      continue;
+    }
     if (input.source === "claudeAgent") {
       if (isHiddenClaudeRecord(record)) continue;
       if (record.type !== "user" && record.type !== "assistant") continue;
@@ -712,6 +744,7 @@ function parseAgentSessionRecords(
     });
   }
 
+  if (isDroidChildSession) return null;
   if (messages.length === 0 && droppedMessageCount === 0) return "empty";
   const visibleMessages = messages.map(
     ({ codexResponseUser: _codexResponseUser, ...message }) => message,
@@ -745,6 +778,12 @@ function parseAgentSessionRecords(
 }
 
 function extractDecodedCwd(record: DecodedTranscriptRecord): string | null {
+  if (
+    record.type === "session_start" &&
+    (record.callingSessionId?.trim() || record.callingToolUseId?.trim())
+  ) {
+    return null;
+  }
   const cwd = record.cwd?.trim() || record.payload?.cwd?.trim();
   return cwd && cwd.length > 0 ? cwd : null;
 }
@@ -761,6 +800,9 @@ function shouldRetainDecodedRecord(
     }
     // Same rule as the parser, so Claude Code's own output never takes a history window slot.
     return claudeVisibleText(record).text.length > 0;
+  }
+  if (source === "droid") {
+    return record.type === "session_start" || record.type === "message";
   }
   if (extractDecodedCwd(record) !== null) return true;
   return (
@@ -826,6 +868,13 @@ function extractCwd(line: string, source: AgentSessionSource): string | null | f
   if (typeof parsed !== "object" || parsed === null) return null;
 
   const record = parsed as Record<string, unknown>;
+  if (
+    record.type === "session_start" &&
+    ((typeof record.callingSessionId === "string" && record.callingSessionId.trim()) ||
+      (typeof record.callingToolUseId === "string" && record.callingToolUseId.trim()))
+  ) {
+    return null;
+  }
   if (typeof record.cwd === "string" && record.cwd.trim().length > 0) {
     return record.cwd;
   }
@@ -1403,6 +1452,26 @@ export const make = Effect.gen(function* () {
     );
   });
 
+  const readDroidModel = Effect.fn("AgentSessionScanner.readDroidModel")(function* (
+    filePath: string,
+  ) {
+    const settingsPath = `${filePath.slice(0, -".jsonl".length)}.settings.json`;
+    const stats = yield* statOption(settingsPath);
+    if (
+      Option.isNone(stats) ||
+      stats.value.type !== "File" ||
+      Number(stats.value.size) > 64 * 1024
+    ) {
+      return null;
+    }
+    const contents = yield* fileSystem
+      .readFileString(settingsPath)
+      .pipe(Effect.orElseSucceed(() => ""));
+    if (contents.length === 0) return null;
+    const settings = decodeDroidSessionSettings(contents);
+    return Option.isSome(settings) ? settings.value.model?.trim() || null : null;
+  });
+
   const readCodexThreadNames = Effect.fn("AgentSessionScanner.readCodexThreadNames")(function* (
     homePath: string,
   ) {
@@ -1639,6 +1708,87 @@ export const make = Effect.gen(function* () {
     },
   );
 
+  const discoverDroidTranscripts = Effect.fn("AgentSessionScanner.discoverDroidTranscripts")(
+    function* (homePath: string, providerInstanceId: ProviderInstanceId, operationBudget: number) {
+      const sessionsDir = path.join(homePath, "sessions");
+      let operationsRemaining = operationBudget;
+      let truncated = false;
+      const transcripts: Array<TranscriptCandidate> = [];
+      const readDirectory = (directory: string) => {
+        if (operationsRemaining <= 0) {
+          truncated = true;
+          return Effect.succeed<ReadonlyArray<string>>([]);
+        }
+        operationsRemaining -= 1;
+        return listDirectory(directory);
+      };
+      const sessionSlugs = yield* readDirectory(sessionsDir);
+      const sessionDirectories: Array<{ readonly path: string; readonly mtimeMs: number }> = [];
+      const directoryLimit = Math.floor(operationsRemaining / 3);
+      for (const [index, slug] of sessionSlugs.entries()) {
+        if (operationsRemaining <= 0) {
+          truncated = true;
+          break;
+        }
+        if (index === directoryLimit) {
+          truncated = true;
+          break;
+        }
+        const directory = path.join(sessionsDir, slug);
+        operationsRemaining -= 1;
+        const stats = yield* statOption(directory);
+        if (
+          Option.isSome(stats) &&
+          stats.value.type === "Directory" &&
+          Option.isSome(stats.value.mtime)
+        ) {
+          sessionDirectories.push({
+            path: directory,
+            mtimeMs: stats.value.mtime.value.getTime(),
+          });
+        }
+      }
+      sessionDirectories.sort(
+        (left, right) => right.mtimeMs - left.mtimeMs || left.path.localeCompare(right.path),
+      );
+      for (const { path: directory } of sessionDirectories) {
+        if (operationsRemaining <= 0) {
+          truncated = true;
+          break;
+        }
+        for (const entry of (yield* readDirectory(directory)).toSorted().toReversed()) {
+          if (!entry.endsWith(".jsonl")) continue;
+          if (operationsRemaining <= 0) {
+            truncated = true;
+            break;
+          }
+          operationsRemaining -= 1;
+          const filePath = path.join(directory, entry);
+          const stats = yield* statOption(filePath);
+          if (
+            Option.isSome(stats) &&
+            stats.value.type === "File" &&
+            Option.isSome(stats.value.mtime)
+          ) {
+            transcripts.push({
+              filePath,
+              mtimeMs: stats.value.mtime.value.getTime(),
+              providerInstanceId,
+              homePath,
+              identity: transcriptIdentity(filePath, stats.value),
+            });
+          }
+        }
+      }
+      // The directory limit truncates with budget left over; counting it as spent stops the rescan loop.
+      return {
+        transcripts,
+        truncated,
+        operationsUsed: truncated ? operationBudget : operationBudget - operationsRemaining,
+      };
+    },
+  );
+
   // Pi nests sessions in one directory per cwd, but a custom session directory holds them flat.
   const discoverPiTranscripts = Effect.fn("AgentSessionScanner.discoverPiTranscripts")(function* (
     sessionsDir: string,
@@ -1780,7 +1930,7 @@ export const make = Effect.gen(function* () {
     let truncated = false;
     let metadataTruncated = false;
 
-    for (const source of ["claudeAgent", "codex", "pi"] as const) {
+    for (const source of ["claudeAgent", "codex", "droid", "pi"] as const) {
       const instances: Array<{
         readonly instanceId: ProviderInstanceId;
         readonly config: ProviderInstanceConfig;
@@ -1835,7 +1985,7 @@ export const make = Effect.gen(function* () {
             config.value.homePath,
             environmentHome("CLAUDE_CONFIG_DIR"),
           );
-        } else {
+        } else if (source === "codex") {
           const config = decodeCodexSettings(instance.config ?? {});
           if (Option.isNone(config)) continue;
           const codexHome = environmentHome("CODEX_HOME");
@@ -1849,6 +1999,9 @@ export const make = Effect.gen(function* () {
             Effect.provideService(Path.Path, path),
           );
           homePath = layout.sharedHomePath;
+        } else {
+          if (Option.isNone(decodeDroidSettings(instance.config ?? {}))) continue;
+          homePath = path.join(homeDir, ".factory");
         }
 
         const homeKey = `${source}\0${yield* directoryIdentity(homePath)}`;
@@ -1863,7 +2016,9 @@ export const make = Effect.gen(function* () {
           ? discoverClaudeTranscripts
           : source === "codex"
             ? discoverCodexTranscripts
-            : discoverPiTranscripts;
+            : source === "droid"
+              ? discoverDroidTranscripts
+              : discoverPiTranscripts;
       const shares = splitOperationBudget(MAX_DISCOVERY_OPERATIONS_PER_SOURCE, homes.length);
       const discovered: Array<{
         readonly transcripts: ReadonlyArray<TranscriptCandidate>;
@@ -2268,6 +2423,10 @@ export const make = Effect.gen(function* () {
           if (parsedThread === null) {
             return Option.some<AgentSessionRecentThread>({ _tag: "Skipped" });
           }
+          const thread =
+            parsedThread.source === "droid" && parsedThread.model === null
+              ? { ...parsedThread, model: yield* readDroidModel(transcript.filePath) }
+              : parsedThread;
           let savedTitle: string | undefined;
           if (candidate.source === "codex") {
             const names =
@@ -2279,19 +2438,18 @@ export const make = Effect.gen(function* () {
 
           const source: AgentSessionImportSource = {
             ...identity,
-            provider: parsedThread.source,
-            providerInstanceId: parsedThread.providerInstanceId,
-            providerSessionId: parsedThread.providerSessionId,
+            provider: thread.source,
+            providerInstanceId: thread.providerInstanceId,
+            providerSessionId: thread.providerSessionId,
           };
-          const sessionKey = `${parsedThread.providerInstanceId}\0${parsedThread.providerSessionId}`;
+          const sessionKey = `${thread.providerInstanceId}\0${thread.providerSessionId}`;
           if (importedSessions.has(sessionKey)) {
             return Option.some<AgentSessionRecentThread>({ _tag: "Duplicate", source });
           }
           importedSessions.add(sessionKey);
           return Option.some<AgentSessionRecentThread>({
             _tag: "Importable",
-            thread:
-              savedTitle === undefined ? parsedThread : { ...parsedThread, title: savedTitle },
+            thread: savedTitle === undefined ? thread : { ...thread, title: savedTitle },
             source,
             worktree,
           });
