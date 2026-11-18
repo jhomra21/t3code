@@ -19,6 +19,8 @@ export interface ProviderMaintenanceCapabilities {
   readonly installPath?: string;
   /** Displayed for manual updates; never executed by T3 Code. */
   readonly manualCommand?: string;
+  /** Runs only after an update command succeeds and its refreshed version is verified current. */
+  readonly onUpdated?: Effect.Effect<void>;
 }
 
 export interface ProviderMaintenanceCommandAction {
