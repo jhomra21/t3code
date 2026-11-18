@@ -1,5 +1,6 @@
 import { presentThreadShell } from "@t3tools/client-runtime/state/models";
 import { threadKey } from "@t3tools/client-runtime/state/entities";
+import { resolveListedAncestorThreadRef } from "@t3tools/client-runtime/state/threads";
 import { isThreadWorking as isSidebarThreadWorking } from "@t3tools/client-runtime/state/thread-inbox";
 import * as DateTime from "effect/DateTime";
 import { deriveActiveWorkStartedAt } from "../session-logic.ts";
@@ -11,6 +12,7 @@ import {
   deleteSelectedThreadEntries,
   getFallbackThreadIdAfterDelete,
   hasUnseenCompletion,
+  filterSidebarV2VisibleThreads,
   orderItemsByPreferredIds,
   pinOrderKeyBetween,
   resolveSidebarSweepKeys,
@@ -134,6 +136,111 @@ describe("deleteSelectedThreadEntries", () => {
       deletedThreadKeys: testCase.deletedThreadKeys,
       firstFailure: testCase.firstFailure,
     });
+  });
+});
+
+describe("sidebar thread lineage helpers", () => {
+  const rowOf = (
+    threadId: ThreadId,
+    environmentId: EnvironmentId,
+    threads: Parameters<typeof resolveListedAncestorThreadRef>[1],
+    providers?: Parameters<typeof resolveListedAncestorThreadRef>[2],
+  ) => resolveListedAncestorThreadRef({ environmentId, threadId }, threads, providers).threadId;
+
+  it("maps an open subagent to its nearest visible ancestor's sidebar row", () => {
+    const environmentId = EnvironmentId.make("environment-row");
+    const otherEnvironmentId = EnvironmentId.make("environment-other");
+    const subagentOf = (id: string, parentId: ThreadId, environment = environmentId) =>
+      makeThreadFixture({
+        id: ThreadId.make(id),
+        environmentId: environment,
+        lineage: {
+          rootThreadId: parentId,
+          parentThreadId: parentId,
+          relationshipToParent: "subagent",
+        },
+      });
+    const root = makeThreadFixture({ id: ThreadId.make("thread-root"), environmentId });
+    const fork = makeThreadFixture({
+      id: ThreadId.make("thread-fork"),
+      environmentId,
+      lineage: {
+        rootThreadId: root.id,
+        parentThreadId: root.id,
+        relationshipToParent: "fork",
+      },
+    });
+    const child = subagentOf("thread-child", root.id);
+    const grandchild = subagentOf("thread-grandchild", child.id);
+    const forkChild = subagentOf("thread-fork-child", fork.id);
+    const orphan = subagentOf("thread-orphan", ThreadId.make("thread-missing"));
+    const elsewhere = subagentOf("thread-elsewhere", root.id, otherEnvironmentId);
+    const threads = [root, fork, child, grandchild, forkChild, orphan, elsewhere];
+
+    const droidChild = {
+      ...child,
+      providerInstanceId: ProviderInstanceId.make("work-agent"),
+      runtime: { ...root.runtime!, status: "running" as const },
+    };
+    const idleDroidChild = {
+      ...droidChild,
+      runtime: { ...droidChild.runtime, status: "idle" as const },
+    };
+    const providers = new Map([
+      [
+        environmentId,
+        [
+          { instanceId: ProviderInstanceId.make("work-agent"), driver: "droid" as const },
+          { instanceId: ProviderInstanceId.make("android-codex"), driver: "codex" as const },
+        ],
+      ],
+    ]);
+    const misleadingChild = {
+      ...droidChild,
+      providerInstanceId: ProviderInstanceId.make("android-codex"),
+    };
+    expect(
+      filterSidebarV2VisibleThreads(
+        [
+          root,
+          { ...fork, lineage: { ...fork.lineage, sideChat: true } },
+          { ...droidChild, lineage: { ...droidChild.lineage, sideChat: true } },
+        ],
+        null,
+        new Set(),
+        providers,
+      ),
+    ).toEqual([root]);
+    expect(
+      filterSidebarV2VisibleThreads(
+        [root, droidChild, misleadingChild],
+        null,
+        new Set(),
+        providers,
+      ),
+    ).toEqual([root, droidChild]);
+    expect(filterSidebarV2VisibleThreads([root, idleDroidChild, child], null)).toEqual([root]);
+    expect(
+      filterSidebarV2VisibleThreads(
+        [root, droidChild],
+        null,
+        new Set([threadKey({ environmentId, threadId: droidChild.id })]),
+        providers,
+      ),
+    ).toEqual([root]);
+    expect(filterSidebarV2VisibleThreads([droidChild], new Set())).toEqual([]);
+    expect(
+      filterSidebarV2VisibleThreads([{ ...droidChild, archivedAt: root.createdAt }], null),
+    ).toEqual([]);
+    expect(rowOf(droidChild.id, environmentId, [root, droidChild], providers)).toBe(droidChild.id);
+    expect(rowOf(child.id, environmentId, threads)).toBe(root.id);
+    expect(rowOf(grandchild.id, environmentId, threads)).toBe(root.id);
+    expect(rowOf(forkChild.id, environmentId, threads)).toBe(fork.id);
+    expect(rowOf(elsewhere.id, otherEnvironmentId, threads)).toBe(elsewhere.id);
+    expect(rowOf(orphan.id, environmentId, threads)).toBe(orphan.id);
+    const loopA = subagentOf("thread-loop-a", ThreadId.make("thread-loop-b"));
+    const loopB = subagentOf("thread-loop-b", loopA.id);
+    expect(rowOf(loopA.id, environmentId, [loopA, loopB])).toBe(loopA.id);
   });
 });
 

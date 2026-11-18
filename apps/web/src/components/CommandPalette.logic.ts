@@ -31,7 +31,8 @@ import {
   THREAD_JUMP_KEYBINDING_COMMANDS,
 } from "@t3tools/contracts";
 import { filterFilesystemBrowseEntries } from "@t3tools/client-runtime/state/filesystem";
-import { isShownUnderParent } from "@t3tools/client-runtime/state/threads";
+import { threadKey } from "@t3tools/client-runtime/state/entities";
+import { isThreadListed } from "@t3tools/client-runtime/state/subagent-display";
 import { type ReactNode } from "react";
 import { msg } from "gt-react";
 import { m, type MessageResolver } from "../i18n/messages";
@@ -422,6 +423,7 @@ export type BuildThreadActionItemsThread = Pick<
   | "id"
   | "lineage"
   | "modelSelection"
+  | "providerInstanceId"
   | "projectId"
   | "runtime"
   | "title"
@@ -450,6 +452,7 @@ export function buildThreadActionItems<TThread extends BuildThreadActionItemsThr
     environmentLabelOf?: (thread: TThread) => string | null;
     /** Tasks linked environments run for a listed thread; they open from under that thread. */
     delegatedUnderParent?: ReadonlySet<string>;
+    providersByEnvironment?: Parameters<typeof isThreadListed>[1];
   },
   resolve: MessageResolver = m,
 ): CommandPaletteActionItem[] {
@@ -458,10 +461,9 @@ export function buildThreadActionItems<TThread extends BuildThreadActionItemsThr
   const visibleThreads = input.threads.filter(
     (thread) =>
       thread.archivedAt === null &&
-      !isShownUnderParent(
-        { environmentId: thread.environmentId, threadId: thread.id },
-        thread.lineage,
-        delegatedUnderParent,
+      isThreadListed(thread, input.providersByEnvironment) &&
+      !delegatedUnderParent.has(
+        threadKey({ environmentId: thread.environmentId, threadId: thread.id }),
       ),
   );
 

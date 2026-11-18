@@ -1,6 +1,7 @@
 import {
   EnvironmentId,
   ProjectId,
+  ProviderInstanceId,
   RunId,
   RuntimeRequestId,
   ThreadId,
@@ -699,6 +700,8 @@ describe("resolveListedAncestorThreadRef", () => {
     id: ThreadId.make(id),
     environmentId: environment,
     lineage: { rootThreadId: ThreadId.make(id), parentThreadId: null, relationshipToParent: null },
+    providerInstanceId: ProviderInstanceId.make("codex"),
+    runtime: null,
     archivedAt: null,
     delegatedFrom: null,
     ...overrides,

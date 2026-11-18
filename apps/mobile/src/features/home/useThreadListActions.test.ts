@@ -69,6 +69,7 @@ vi.mock("../../state/session", () => ({
 }));
 vi.mock("../../state/presentation", () => ({
   connectedEnvironmentIdsAtom: "connected-environments",
+  threadListEnvironmentsAtom: "list-environments",
 }));
 vi.mock("../../state/server", () => ({
   environmentServerConfigsAtom: "server-configs",
@@ -84,28 +85,30 @@ vi.mock("../../state/atom-registry", async () => {
         ? state.connectedEnvironmentIds
         : atom === "thread-drop-busy"
           ? state.dropBusy
-          : atom === "steady-shells-holding"
-            ? state.holdingRows
-            : atom === "thread-shells"
-              ? state.shells
-              : atom === "queued-thread-keys"
-                ? new Set<string>()
-                : new Map(
-                    [...state.scopes.keys()].map((environmentId) => [
-                      environmentId,
-                      {
-                        environment: {
-                          capabilities: {
-                            threadSettlement: true,
-                            threadSnooze: true,
-                            threadPinning: true,
-                            threadPinReorder: true,
-                            threadTitleRegeneration: true,
+          : atom === "list-environments"
+            ? { providersByEnvironmentId: new Map() }
+            : atom === "steady-shells-holding"
+              ? state.holdingRows
+              : atom === "thread-shells"
+                ? state.shells
+                : atom === "queued-thread-keys"
+                  ? new Set<string>()
+                  : new Map(
+                      [...state.scopes.keys()].map((environmentId) => [
+                        environmentId,
+                        {
+                          environment: {
+                            capabilities: {
+                              threadSettlement: true,
+                              threadSnooze: true,
+                              threadPinning: true,
+                              threadPinReorder: true,
+                              threadTitleRegeneration: true,
+                            },
                           },
                         },
-                      },
-                    ]),
-                  ),
+                      ]),
+                    ),
   };
   // Real atoms such as composerDraftsAtom go to a real registry; strings are stubbed state.
   return {
