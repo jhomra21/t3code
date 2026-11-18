@@ -162,7 +162,8 @@ function handoffReservedWindow(input: {
     usage?.maxTokens ?? Infinity,
     usage?.autoCompactThreshold ?? Infinity,
   );
-  return Math.max(16_000, Math.ceil(window / 4));
+  // Small windows would otherwise reserve all of themselves for work.
+  return Math.min(Math.max(16_000, Math.ceil(window / 4)), Math.ceil(window / 2));
 }
 
 export function historicalMessage(
@@ -188,7 +189,7 @@ export function historicalMessage(
       text = item.message;
       break;
     case "file_change":
-      text = `File change: ${item.changes?.map((change) => change.path).join(", ") ?? item.fileName}`;
+      text = `File change: ${item.changes?.length ? item.changes.map((change) => change.path).join(", ") : item.fileName}`;
       break;
     case "proposed_plan":
       text = item.markdown;

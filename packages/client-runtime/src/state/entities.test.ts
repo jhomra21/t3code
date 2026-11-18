@@ -118,6 +118,19 @@ describe("V2 client presentation", () => {
     expect(shell.runtime).toMatchObject({ status: "running", activeRunId: null });
   });
 
+  it("keeps an imported thread that never ran out of Working", () => {
+    const imported = presentThreadShell(environmentId, {
+      ...v2ThreadShell,
+      historyOrigin: "v1_import",
+      activeProviderThreadId: ProviderThreadId.make("provider-thread-imported"),
+      latestRunId: null,
+      activeRunId: null,
+      status: "idle",
+      pendingBackgroundTasks: [],
+    });
+    expect(isThreadWorking(imported)).toBe(false);
+  });
+
   it.each([
     { kinds: ["command"], expected: "completed" },
     { kinds: ["command", "subagent"], expected: "idle" },
