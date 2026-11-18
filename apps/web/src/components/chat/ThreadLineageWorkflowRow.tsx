@@ -110,6 +110,7 @@ function WorkflowMemberRow({
           <SubagentTooltipContent
             title={member.title}
             model={member.model}
+            reportedEffort={member.effort}
             providerInstanceId={providerInstanceId}
             origin="provider_native"
             modelSelection={workflowMemberModelSelection(member, providerInstanceId)}
