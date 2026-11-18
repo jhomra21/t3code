@@ -184,18 +184,20 @@ function useWorkGroupViewedImages(
   });
 }
 
-function ExpandedWorkGroupEntries({
+export function ExpandedWorkGroupEntries({
   anchorKey,
   disclosureAnchorKey,
   entries,
   groupedEntries,
   workspaceRoot,
+  onToggleEntry,
 }: {
   anchorKey: string;
   disclosureAnchorKey: string;
-  entries: TimelineWorkEntry[];
+  entries: ReadonlyArray<TimelineWorkEntry>;
   groupedEntries: ReadonlyArray<TimelineWorkEntry>;
   workspaceRoot: string | undefined;
+  onToggleEntry?: ((collapsed: boolean) => void) | undefined;
 }) {
   const {
     workGroupViewState: viewState,
@@ -227,7 +229,9 @@ function ExpandedWorkGroupEntries({
     state: viewState,
     viewedImages,
     onToggleEntry: (collapsed: boolean, entryId: string) =>
-      onToggleWorkEntry(disclosureAnchorKey, collapsed, entryId),
+      onToggleEntry
+        ? onToggleEntry(collapsed)
+        : onToggleWorkEntry(disclosureAnchorKey, collapsed, entryId),
     onContentReady: (entryId: string) => onWorkEntryContentReady?.(disclosureAnchorKey, entryId),
   };
   const updateScrollFades = () => {
