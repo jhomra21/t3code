@@ -115,6 +115,7 @@ it("gives a subagent the same status as the background work line", async () => {
           },
         ],
         turnItems: [],
+        canStop: true,
         stopDisabled: false,
         stopping: false,
         onStop: async () => undefined,
