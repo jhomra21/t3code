@@ -282,6 +282,8 @@ const AskUser = Schema.Struct({
       topic: Schema.String,
       question: Schema.String,
       options: Schema.Array(Schema.String),
+      optionDescriptions: Schema.optionalKey(Schema.Array(Schema.String)),
+      multiSelect: Schema.optionalKey(Schema.Boolean),
     }),
   ),
 });
@@ -1714,13 +1716,13 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
                     id: String(question.index),
                     header: question.topic,
                     question: question.question,
-                    options: question.options.map((label) => ({
+                    options: question.options.map((label, index) => ({
                       label,
-                      description: label,
+                      description: question.optionDescriptions?.[index]?.trim() || label,
                       value: label,
                     })),
                     allowCustomAnswer: true,
-                    multiSelect: false,
+                    multiSelect: question.multiSelect ?? false,
                   })),
                 };
           const reply = yield* Deferred.make<DroidRpc.DroidRpcReply>();
