@@ -19,6 +19,7 @@ import {
   RunAttemptId,
   RunId,
   ThreadId,
+  type OrchestrationV2ProviderTurn,
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
@@ -318,34 +319,12 @@ const open = Effect.fnUntraced(function* (
     modelSelection: selection,
     runtimePolicy: { ...policy, cwd },
   });
-  // Snapshots no longer carry provider turns; tests read them from the events the adapter emits.
-  const providerTurns = new Map<
-    string,
-    Extract<
-      ProviderAdapter.ProviderAdapterV2Event,
-      { type: "provider_turn.updated" }
-    >["providerTurn"]
-  >();
-  const forwarded = yield* Queue.unbounded<ProviderAdapter.ProviderAdapterV2Event, Cause.Done>();
-  yield* opened.events.pipe(
-    Stream.runForEach((event) =>
-      Effect.sync(() => {
-        if (event.type === "provider_turn.updated")
-          providerTurns.set(event.providerTurn.id, event.providerTurn);
-      }).pipe(Effect.andThen(Queue.offer(forwarded, event))),
-    ),
-    Effect.ensuring(Queue.end(forwarded)),
-    // Detached so a session-scope close still forwards the adapter's final events.
-    Effect.forkDetach,
-  );
+  const tracked = yield* trackProviderTurns(opened);
   const runtime = {
     ...opened,
-    events: Stream.fromEffectRepeat(Queue.take(forwarded)),
-    readThreadSnapshot: (input: ProviderAdapter.ProviderAdapterV2ReadThreadSnapshotInput) =>
-      Effect.yieldNow.pipe(
-        Effect.andThen(opened.readThreadSnapshot(input)),
-        Effect.map((snapshot) => ({ ...snapshot, providerTurns: [...providerTurns.values()] })),
-      ),
+    events: tracked.events,
+    awaitProviderTurns: tracked.awaitTurns,
+    awaitProviderTurn: tracked.awaitLatestTurn,
   };
   const providerThread = skipEnsureThread
     ? existingProviderThread
@@ -401,6 +380,48 @@ const open = Effect.fnUntraced(function* (
     runtimePolicy: policy,
   };
   return { runtime, providerThread, input };
+});
+
+const trackProviderTurns = Effect.fnUntraced(function* (
+  runtime: Pick<ProviderAdapter.ProviderAdapterV2SessionRuntime, "events">,
+) {
+  const turns = new Map<string, OrchestrationV2ProviderTurn>();
+  const forwarded = yield* Queue.unbounded<ProviderAdapter.ProviderAdapterV2Event, Cause.Done>();
+  const turnUpdates = yield* Queue.unbounded<OrchestrationV2ProviderTurn, Cause.Done>();
+  yield* runtime.events.pipe(
+    Stream.runForEach((event) =>
+      Effect.gen(function* () {
+        if (event.type === "provider_turn.updated") {
+          turns.delete(event.providerTurn.id);
+          turns.set(event.providerTurn.id, event.providerTurn);
+          yield* Queue.offer(turnUpdates, event.providerTurn);
+        }
+        yield* Queue.offer(forwarded, event);
+      }),
+    ),
+    Effect.ensuring(Effect.all([Queue.end(forwarded), Queue.end(turnUpdates)])),
+    Effect.forkDetach,
+  );
+  const events = Stream.fromEffectRepeat(Queue.take(forwarded));
+  const awaitTurns = Effect.fnUntraced(function* (
+    predicate: (seen: ReadonlyArray<OrchestrationV2ProviderTurn>) => boolean,
+  ) {
+    const seen = () => [...turns.values()];
+    if (!predicate(seen())) {
+      yield* Stream.fromQueue(turnUpdates).pipe(
+        Stream.takeUntil(() => predicate(seen())),
+        Stream.runDrain,
+      );
+    }
+    return seen();
+  });
+  const awaitLatestTurn = (
+    predicate: (turn: OrchestrationV2ProviderTurn) => boolean = () => true,
+  ) =>
+    awaitTurns((seen) => seen.length > 0 && predicate(seen.at(-1)!)).pipe(
+      Effect.map((seen) => seen.at(-1)!),
+    );
+  return { events, awaitTurns, awaitLatestTurn };
 });
 
 const provide = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
@@ -760,9 +781,7 @@ describe("Droid adapter", () => {
             turnId: source.input.message.messageId,
           });
           yield* Deferred.await(completed);
-          const sourceTurns = (yield* source.runtime.readThreadSnapshot({
-            providerThread: source.providerThread,
-          })).providerTurns;
+          const sourceTurns = yield* source.runtime.awaitProviderTurns((turns) => turns.length > 0);
           const firstTurn = sourceTurns[0]!;
           const laterTurn = {
             ...firstTurn,
@@ -869,9 +888,7 @@ describe("Droid adapter", () => {
           const forkSettings = yield* fake.takeRequest("droid.update_session_settings");
           assert.deepEqual(Reflect.get(forkSettings.params ?? {}, "disabledToolIds"), ["Task"]);
           assert.deepEqual(
-            (yield* source.runtime.readThreadSnapshot({
-              providerThread: source.providerThread,
-            })).providerTurns,
+            yield* source.runtime.awaitProviderTurns((turns) => turns.length >= sourceTurns.length),
             sourceTurns,
           );
           assert.notInclude(sourceFake.requestedMethods, "droid.execute_rewind");
@@ -951,8 +968,7 @@ describe("Droid adapter", () => {
             turnId: input.message.messageId,
           });
           yield* Deferred.await(completed);
-          const sourceTurn = (yield* runtime.readThreadSnapshot({ providerThread }))
-            .providerTurns[0]!;
+          const sourceTurn = yield* runtime.awaitProviderTurn();
           const persistedTurn = {
             ...sourceTurn,
             id: ProviderTurnId.make("old-turn"),
@@ -1966,7 +1982,7 @@ describe("Droid adapter", () => {
         );
         const start = yield* runtime.startTurn(input).pipe(Effect.forkChild);
         yield* fake.takeRequest("droid.add_user_message");
-        const turn = (yield* runtime.readThreadSnapshot({ providerThread })).providerTurns[0];
+        const turn = yield* runtime.awaitProviderTurn();
         assert.isDefined(turn);
         yield* runtime.interruptTurn({ providerThread, providerTurnId: turn.id });
         yield* fake.takeRequest("droid.interrupt_session");
@@ -2449,9 +2465,9 @@ describe("Droid adapter", () => {
           turnId: "wrong-turn-owner-restart",
         });
         assert.isFalse(yield* Deferred.isDone(f.terminal));
-        const activeTurn = (yield* f.runtime.readThreadSnapshot({
-          providerThread: f.providerThread,
-        })).providerTurns.find((turn) => turn.runAttemptId === f.input.attemptId);
+        const activeTurn = yield* f.runtime.awaitProviderTurn(
+          (turn) => turn.runAttemptId === f.input.attemptId && turn.status === "running",
+        );
         assert.equal(activeTurn?.status, "running");
         yield* f.fake.emitNotification({
           type: "agent_turn_completed",
@@ -2507,9 +2523,7 @@ describe("Droid adapter", () => {
           });
         }
         yield* fake.takeRequest("droid.interrupt_session");
-        const activeTurn = (yield* runtime.readThreadSnapshot({ providerThread })).providerTurns.at(
-          -1,
-        );
+        const activeTurn = yield* runtime.awaitProviderTurn((turn) => turn.status === "running");
         assert.isDefined(activeTurn);
         yield* runtime.interruptTurn({
           providerThread,
@@ -3119,12 +3133,11 @@ describe("Droid adapter", () => {
 
         yield* runtime.compactThread?.(input) ?? Effect.void;
         yield* Deferred.await(terminalSeen);
-        const snapshot = yield* runtime.readThreadSnapshot({
-          providerThread: input.providerThread,
-        });
-
-        assert.equal(snapshot.providerTurns.at(-1)?.tokenUsage?.usedTokens, 18_000);
-        assert.equal(snapshot.providerTurns.at(-1)?.tokenUsage?.maxTokens, 300_000);
+        const turn = yield* runtime.awaitProviderTurn(
+          (turn) => turn.tokenUsage?.usedTokens === 18_000,
+        );
+        assert.equal(turn.tokenUsage?.usedTokens, 18_000);
+        assert.equal(turn.tokenUsage?.maxTokens, 300_000);
       }),
     ),
   );
@@ -3158,12 +3171,11 @@ describe("Droid adapter", () => {
           turnId: input.message.messageId,
         });
         yield* Deferred.await(terminalSeen);
-        const snapshot = yield* runtime.readThreadSnapshot({
-          providerThread: input.providerThread,
-        });
-
-        assert.equal(snapshot.providerTurns.at(-1)?.tokenUsage?.usedTokens, 40_000);
-        assert.equal(snapshot.providerTurns.at(-1)?.tokenUsage?.maxTokens, 300_000);
+        const turn = yield* runtime.awaitProviderTurn(
+          (turn) => turn.tokenUsage?.usedTokens === 40_000,
+        );
+        assert.equal(turn.tokenUsage?.usedTokens, 40_000);
+        assert.equal(turn.tokenUsage?.maxTokens, 300_000);
       }),
     ),
   );
@@ -3245,12 +3257,11 @@ describe("Droid adapter", () => {
           turnId: nextInput.message.messageId,
         });
         yield* Deferred.await(secondTerminal);
-        const snapshot = yield* runtime.readThreadSnapshot({
-          providerThread: input.providerThread,
-        });
-
-        assert.equal(snapshot.providerTurns.at(-1)?.tokenUsage?.usedTokens, 41_000);
-        assert.equal(snapshot.providerTurns.at(-1)?.tokenUsage?.maxTokens, 300_000);
+        const turn = yield* runtime.awaitProviderTurn(
+          (turn) => turn.tokenUsage?.usedTokens === 41_000,
+        );
+        assert.equal(turn.tokenUsage?.usedTokens, 41_000);
+        assert.equal(turn.tokenUsage?.maxTokens, 300_000);
       }),
     ),
   );
@@ -3307,10 +3318,10 @@ describe("Droid adapter", () => {
         assert.lengthOf(new Set(compaction.map((item) => item.id)), 1);
         assert.equal(compaction.at(-1)?.status, "completed");
         assert.equal(compaction.at(-1)?.title, "Context compacted");
-        const snapshot = yield* runtime.readThreadSnapshot({
-          providerThread: input.providerThread,
-        });
-        assert.equal(snapshot.providerTurns.at(-1)?.tokenUsage?.usedTokens, 42_000);
+        const turn = yield* runtime.awaitProviderTurn(
+          (turn) => turn.tokenUsage?.usedTokens === 42_000,
+        );
+        assert.equal(turn.tokenUsage?.usedTokens, 42_000);
         assert.isFalse(
           events.some(
             (event) =>
@@ -3360,12 +3371,11 @@ describe("Droid adapter", () => {
           turnId: input.message.messageId,
         });
         yield* Deferred.await(terminalSeen);
-        const snapshot = yield* runtime.readThreadSnapshot({
-          providerThread: input.providerThread,
-        });
-
-        assert.equal(snapshot.providerTurns.at(-1)?.tokenUsage?.usedTokens, 18_000);
-        assert.equal(snapshot.providerTurns.at(-1)?.tokenUsage?.maxTokens, 300_000);
+        const turn = yield* runtime.awaitProviderTurn(
+          (turn) => turn.tokenUsage?.usedTokens === 18_000,
+        );
+        assert.equal(turn.tokenUsage?.usedTokens, 18_000);
+        assert.equal(turn.tokenUsage?.maxTokens, 300_000);
       }),
     ),
   );
@@ -3888,10 +3898,8 @@ describe("Droid adapter", () => {
         });
         yield* fake.emitRequest("wrong-turn-barrier", "droid.unknown_barrier", {});
         yield* fake.takeReply;
-        const snapshot = yield* runtime.readThreadSnapshot({
-          providerThread: input.providerThread,
-        });
-        assert.equal(snapshot.providerTurns.at(-1)?.status, "running");
+        const turn = yield* runtime.awaitProviderTurn((turn) => turn.status === "running");
+        assert.equal(turn.status, "running");
         yield* fake.emitNotification({
           type: "agent_turn_completed",
           reason: "completed",
@@ -3979,10 +3987,8 @@ describe("Droid adapter", () => {
           });
           yield* fake.emitRequest("late-completion-barrier", "droid.unknown_barrier", {});
           yield* fake.takeReply;
-          const snapshot = yield* runtime.readThreadSnapshot({
-            providerThread: input.providerThread,
-          });
-          assert.equal(snapshot.providerTurns.at(-1)?.status, "running");
+          const turn = yield* runtime.awaitProviderTurn((turn) => turn.status === "running");
+          assert.equal(turn.status, "running");
           yield* fake.emitNotification({
             type: "agent_turn_completed",
             reason: "completed",
@@ -3990,6 +3996,9 @@ describe("Droid adapter", () => {
           });
           yield* Deferred.await(nextTerminal);
           assert.isFalse(yield* runtime.hasPendingBackgroundWork!);
+          const snapshot = yield* runtime.readThreadSnapshot({
+            providerThread: input.providerThread,
+          });
           assert.isTrue(snapshot.messages.some((message) => message.text === "Wake result"));
         }),
       ),
@@ -4011,15 +4020,12 @@ describe("Droid adapter", () => {
         yield* fake.emitRequest(id, "droid.unknown_barrier", {});
         yield* fake.takeReply;
       });
-    const lastStatus = (opened: Opened) =>
+    const lastStatus = (opened: Opened, status: OrchestrationV2ProviderTurn["status"]) =>
       opened.runtime
-        .readThreadSnapshot({ providerThread: opened.input.providerThread })
-        .pipe(Effect.map((snapshot) => snapshot.providerTurns.at(-1)?.status));
+        .awaitProviderTurn((turn) => turn.status === status)
+        .pipe(Effect.map((turn) => turn.status));
     const steer = Effect.fnUntraced(function* (opened: Opened, messageId: string) {
-      const turn = (yield* opened.runtime.readThreadSnapshot({
-        providerThread: opened.input.providerThread,
-      })).providerTurns.at(-1);
-      if (turn === undefined) return yield* Effect.die(new Error("No turn to steer"));
+      const turn = yield* opened.runtime.awaitProviderTurn();
       yield* opened.runtime.steerTurn({
         threadId,
         runId: opened.input.runId,
@@ -4042,7 +4048,7 @@ describe("Droid adapter", () => {
           yield* fake.takeRequest("droid.add_user_message");
           yield* complete(fake, opened.input.message.messageId);
           yield* barrier(fake, "absorbed-steer-barrier");
-          assert.equal(yield* lastStatus(opened), "completed");
+          assert.equal(yield* lastStatus(opened, "completed"), "completed");
         }),
       ),
     );
@@ -4059,7 +4065,7 @@ describe("Droid adapter", () => {
             yield* fake.takeRequest("droid.add_user_message");
             yield* complete(fake, opened.input.message.messageId);
             yield* barrier(fake, "first-turn-barrier");
-            assert.equal(yield* lastStatus(opened), "completed");
+            assert.equal(yield* lastStatus(opened, "completed"), "completed");
 
             const loopId = "script-completion:native-session:tool-1:tool-1";
             yield* fake.emitNotification({
@@ -4077,7 +4083,7 @@ describe("Droid adapter", () => {
             yield* fake.takeRequest("droid.add_user_message");
             yield* complete(fake, loopId);
             yield* barrier(fake, "absorbed-loop-barrier");
-            assert.equal(yield* lastStatus(opened), "completed");
+            assert.equal(yield* lastStatus(opened, "completed"), "completed");
           }),
         ),
     );
@@ -4092,12 +4098,12 @@ describe("Droid adapter", () => {
           yield* complete(fake, "ended-native-loop");
           yield* fake.emitNotification({ type: "droid_working_state_changed", newState: "idle" });
           yield* barrier(fake, "idle-barrier");
-          assert.equal(yield* lastStatus(opened), "running");
+          assert.equal(yield* lastStatus(opened, "running"), "running");
           yield* steer(opened, "idle-steer");
           yield* fake.takeRequest("droid.add_user_message");
           yield* complete(fake, "idle-steer");
           yield* barrier(fake, "idle-steer-barrier");
-          assert.equal(yield* lastStatus(opened), "completed");
+          assert.equal(yield* lastStatus(opened, "completed"), "completed");
         }),
       ),
     );
@@ -4111,16 +4117,12 @@ describe("Droid adapter", () => {
           yield* fake.takeRequest("droid.add_user_message");
           yield* fake.emitNotification({ type: "droid_working_state_changed", newState: "idle" });
           yield* barrier(fake, "idle-interrupt-barrier");
-          const turn = (yield* opened.runtime.readThreadSnapshot({
-            providerThread: opened.input.providerThread,
-          })).providerTurns[0];
-          assert.isDefined(turn);
-          if (turn === undefined) return;
+          const turn = yield* opened.runtime.awaitProviderTurn();
           yield* opened.runtime.interruptTurn({
             providerThread: opened.input.providerThread,
             providerTurnId: turn.id,
           });
-          assert.equal(yield* lastStatus(opened), "interrupted");
+          assert.equal(yield* lastStatus(opened, "interrupted"), "interrupted");
           assert.include(fake.requestedMethods, "droid.interrupt_session");
           yield* opened.runtime.startTurn(followUp(opened.input, "after-idle-interrupt", 2));
           yield* fake.takeRequest("droid.add_user_message");
@@ -4128,10 +4130,7 @@ describe("Droid adapter", () => {
       ),
     );
 
-    const firstTurn = (opened: Opened) =>
-      opened.runtime
-        .readThreadSnapshot({ providerThread: opened.input.providerThread })
-        .pipe(Effect.map((snapshot) => snapshot.providerTurns.at(-1)));
+    const firstTurn = (opened: Opened) => opened.runtime.awaitProviderTurn();
     const interrupt = Effect.fnUntraced(function* (opened: Opened) {
       const turn = yield* firstTurn(opened);
       if (turn === undefined) return yield* Effect.die(new Error("No turn to interrupt"));
@@ -4154,7 +4153,7 @@ describe("Droid adapter", () => {
             yield* fake.takeRequest("droid.add_user_message");
             yield* complete(fake, opened.input.message.messageId);
             yield* barrier(fake, "completed-barrier");
-            assert.equal(yield* lastStatus(opened), "completed");
+            assert.equal(yield* lastStatus(opened, "completed"), "completed");
             yield* opened.runtime.startTurn(followUp(opened.input, "next-turn", 2));
             yield* fake.takeRequest("droid.add_user_message");
             yield* workingState(fake, "idle");
@@ -4162,10 +4161,10 @@ describe("Droid adapter", () => {
             yield* barrier(fake, "stale-idle-barrier");
             yield* interrupt(opened);
             assert.include(fake.requestedMethods, "droid.interrupt_session");
-            assert.equal(yield* lastStatus(opened), "running");
+            assert.equal(yield* lastStatus(opened, "running"), "running");
             yield* complete(fake, "next-turn");
             yield* barrier(fake, "next-turn-barrier");
-            assert.equal(yield* lastStatus(opened), "interrupted");
+            assert.equal(yield* lastStatus(opened, "interrupted"), "interrupted");
           }),
         ),
     );
@@ -4181,10 +4180,10 @@ describe("Droid adapter", () => {
           yield* barrier(fake, "busy-barrier");
           yield* interrupt(opened);
           assert.include(fake.requestedMethods, "droid.interrupt_session");
-          assert.equal(yield* lastStatus(opened), "running");
+          assert.equal(yield* lastStatus(opened, "running"), "running");
           yield* workingState(fake, "idle");
           yield* barrier(fake, "cancelled-idle-barrier");
-          assert.equal(yield* lastStatus(opened), "interrupted");
+          assert.equal(yield* lastStatus(opened, "interrupted"), "interrupted");
         }),
       ),
     );
@@ -4208,11 +4207,11 @@ describe("Droid adapter", () => {
           yield* fake.takeRequest("droid.add_user_message");
           yield* userMessage("busy-steer");
           yield* barrier(fake, "steer-barrier");
-          assert.equal(yield* lastStatus(opened), "running");
+          assert.equal(yield* lastStatus(opened, "running"), "running");
           yield* complete(fake, opened.input.message.messageId);
           yield* workingState(fake, "idle");
           yield* barrier(fake, "loop-completed-barrier");
-          assert.equal(yield* lastStatus(opened), "completed");
+          assert.equal(yield* lastStatus(opened, "completed"), "completed");
         }),
       ),
     );
@@ -4226,10 +4225,10 @@ describe("Droid adapter", () => {
           yield* fake.takeRequest("droid.add_user_message");
           yield* complete(fake, "unrelated-loop");
           yield* barrier(fake, "unrelated-barrier");
-          assert.equal(yield* lastStatus(opened), "running");
+          assert.equal(yield* lastStatus(opened, "running"), "running");
           yield* complete(fake, opened.input.message.messageId);
           yield* barrier(fake, "own-completion-barrier");
-          assert.equal(yield* lastStatus(opened), "completed");
+          assert.equal(yield* lastStatus(opened, "completed"), "completed");
         }),
       ),
     );
@@ -4248,10 +4247,7 @@ describe("Droid adapter", () => {
         );
         yield* runtime.startTurn(input);
         yield* fake.takeRequest("droid.add_user_message");
-        const turn = (yield* runtime.readThreadSnapshot({ providerThread: input.providerThread }))
-          .providerTurns[0];
-        assert.isDefined(turn);
-        if (turn === undefined) return;
+        const turn = yield* runtime.awaitProviderTurn();
         const attachmentId = ChatAttachmentId.make("steer-image");
         yield* runtime.steerTurn({
           threadId,
@@ -4426,10 +4422,11 @@ describe("Droid adapter", () => {
         });
         yield* Deferred.await(terminal);
         assert.isFalse(fake.closed());
+        const turn = yield* runtime.awaitProviderTurn((turn) => turn.status === "completed");
+        assert.equal(turn.status, "completed");
         const snapshot = yield* runtime.readThreadSnapshot({
           providerThread: input.providerThread,
         });
-        assert.equal(snapshot.providerTurns.at(-1)?.status, "completed");
         assert.equal(snapshot.messages.at(-1)?.text, "Still connected");
       }),
     ),
@@ -4931,12 +4928,12 @@ describe("Droid adapter", () => {
           turnId: input.message.messageId,
         });
         yield* Deferred.await(terminalSeen);
-        const snapshot = yield* runtime.readThreadSnapshot({
-          providerThread: input.providerThread,
-        });
-        assert.equal(snapshot.providerTurns.at(-1)?.status, "completed");
-        assert.equal(snapshot.providerTurns.at(-1)?.tokenUsage?.usedTokens, 281_000);
-        assert.equal(snapshot.providerTurns.at(-1)?.tokenUsage?.maxTokens, 300_000);
+        const turn = yield* runtime.awaitProviderTurn(
+          (turn) => turn.status === "completed" && turn.tokenUsage?.usedTokens === 281_000,
+        );
+        assert.equal(turn.status, "completed");
+        assert.equal(turn.tokenUsage?.usedTokens, 281_000);
+        assert.equal(turn.tokenUsage?.maxTokens, 300_000);
       }),
     ),
   );
@@ -4966,11 +4963,9 @@ describe("Droid adapter", () => {
           turnId: input.message.messageId,
         });
         yield* Deferred.await(terminalSeen);
-        const snapshot = yield* runtime.readThreadSnapshot({
-          providerThread: input.providerThread,
-        });
-        assert.equal(snapshot.providerTurns.at(-1)?.status, "completed");
-        assert.isUndefined(snapshot.providerTurns.at(-1)?.tokenUsage);
+        const turn = yield* runtime.awaitProviderTurn((turn) => turn.status === "completed");
+        assert.equal(turn.status, "completed");
+        assert.isUndefined(turn.tokenUsage);
       }),
     ),
   );
@@ -5002,12 +4997,11 @@ describe("Droid adapter", () => {
           turnId: input.message.messageId,
         });
         yield* Deferred.await(terminalSeen);
-        const snapshot = yield* runtime.readThreadSnapshot({
-          providerThread: input.providerThread,
-        });
-
-        assert.equal(snapshot.providerTurns.at(-1)?.tokenUsage?.usedTokens, 18_000);
-        assert.equal(snapshot.providerTurns.at(-1)?.tokenUsage?.maxTokens, 300_000);
+        const turn = yield* runtime.awaitProviderTurn(
+          (turn) => turn.tokenUsage?.usedTokens === 18_000,
+        );
+        assert.equal(turn.tokenUsage?.usedTokens, 18_000);
+        assert.equal(turn.tokenUsage?.maxTokens, 300_000);
       }),
     ),
   );
@@ -5141,8 +5135,7 @@ describe("Droid adapter", () => {
         yield* fake.emitNotification({ type: "llm_retry", attempt: 1, reason: "rate_limited" });
         yield* runtime.interruptTurn({
           providerThread,
-          providerTurnId: (yield* runtime.readThreadSnapshot({ providerThread })).providerTurns[0]!
-            .id,
+          providerTurnId: (yield* runtime.awaitProviderTurn()).id,
         });
         yield* fake.takeRequest("droid.interrupt_session");
         yield* fake.emitNotification({
@@ -5620,8 +5613,8 @@ describe("Droid adapter", () => {
         yield* Deferred.await(childFailed);
         yield* Deferred.await(rosterCleared);
         assert.equal(event.type === "turn.terminal" ? event.status : undefined, "failed");
-        const snapshot = yield* runtime.readThreadSnapshot({ providerThread });
-        assert.equal(snapshot.providerTurns[0]?.status, "failed");
+        const turn = yield* runtime.awaitProviderTurn((turn) => turn.status === "failed");
+        assert.equal(turn.status, "failed");
         assert.isFalse(yield* runtime.hasPendingBackgroundWorkForThread!(providerThread));
       }),
     ),
@@ -5671,8 +5664,7 @@ describe("Droid adapter", () => {
           message: { ...input.message, messageId: MessageId.make("droid-rollback-first-message") },
         };
         yield* finishTurn(firstInput, "droid-rollback-first-assistant");
-        const firstTurn = (yield* runtime.readThreadSnapshot({ providerThread })).providerTurns[0];
-        assert.isDefined(firstTurn);
+        const firstTurn = yield* runtime.awaitProviderTurn();
         const secondInput = {
           ...input,
           providerTurnOrdinal: 2,
@@ -5680,14 +5672,12 @@ describe("Droid adapter", () => {
           message: { ...input.message, messageId: MessageId.make("droid-rollback-second-message") },
         };
         yield* finishTurn(secondInput, "droid-rollback-second-assistant");
-        const secondTurn = (yield* runtime.readThreadSnapshot({ providerThread })).providerTurns[1];
-        assert.isDefined(secondTurn);
+        const turns = yield* runtime.awaitProviderTurns((turns) => turns.length >= 2);
+        const secondTurn = turns[1]!;
         const capabilities = runtime.providerSession.capabilities;
         assert.isTrue(capabilities.threads.canRollbackThread);
         assert.isTrue(capabilities.checkpointing.providerCanRollbackConversation);
         assert.isTrue(capabilities.checkpointing.providerRollbackReturnsSnapshot);
-        if (firstTurn === undefined || secondTurn === undefined) return;
-
         const result = yield* runtime.rollbackThread({
           providerThread,
           target: {
@@ -5769,9 +5759,7 @@ describe("Droid adapter", () => {
           turnId: input.message.messageId,
         });
         yield* Deferred.await(terminal);
-        const turn = (yield* runtime.readThreadSnapshot({ providerThread })).providerTurns[0];
-        assert.isDefined(turn);
-        if (turn === undefined) return;
+        const turn = yield* runtime.awaitProviderTurn();
 
         yield* runtime.rollbackThread({
           providerThread,
@@ -5818,11 +5806,7 @@ describe("Droid adapter", () => {
             turnId: source.input.message.messageId,
           });
           yield* Deferred.await(terminal);
-          const sourceTurn = (yield* source.runtime.readThreadSnapshot({
-            providerThread: source.providerThread,
-          })).providerTurns[0];
-          assert.isDefined(sourceTurn);
-          if (sourceTurn === undefined) return;
+          const sourceTurn = yield* source.runtime.awaitProviderTurn();
 
           const secondTurn = {
             ...sourceTurn,
@@ -5923,9 +5907,7 @@ describe("Droid adapter", () => {
         yield* fake.takeRequest("droid.get_context_breakdown");
         yield* fake.takeRequest("droid.get_context_breakdown");
         yield* fake.takeRequest("droid.add_user_message");
-        const activeTurn = (yield* runtime.readThreadSnapshot({ providerThread })).providerTurns[0];
-        assert.isDefined(activeTurn);
-        if (activeTurn === undefined) return;
+        const activeTurn = yield* runtime.awaitProviderTurn((turn) => turn.status === "running");
         const target = {
           type: "provider_turn",
           checkpointId: CheckpointId.make("droid-active-rollback"),
@@ -5986,9 +5968,7 @@ describe("Droid adapter", () => {
           turnId: input.message.messageId,
         });
         yield* Deferred.await(terminal);
-        const firstTurn = (yield* runtime.readThreadSnapshot({ providerThread })).providerTurns[0];
-        assert.isDefined(firstTurn);
-        if (firstTurn === undefined) return;
+        const firstTurn = yield* runtime.awaitProviderTurn();
         const unmappedTurn = {
           ...firstTurn,
           ordinal: firstTurn.ordinal + 1,
@@ -6048,10 +6028,8 @@ describe("Droid adapter", () => {
           turnId: input.message.messageId,
         });
         yield* Deferred.await(terminal);
-        const turn = (yield* runtime.readThreadSnapshot({ providerThread })).providerTurns[0];
-        assert.isDefined(turn);
+        const turn = yield* runtime.awaitProviderTurn();
         assert.isTrue(yield* runtime.hasPendingBackgroundWorkForThread!(providerThread));
-        if (turn === undefined) return;
         const error = yield* Effect.flip(
           runtime.rollbackThread({
             providerThread,
