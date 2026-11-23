@@ -7,6 +7,10 @@
       "types": "./src/pullRequestDiffFold.ts",
       "default": "./src/pullRequestDiffFold.ts"
     },
+    "./work-log/nested-tools": {
+      "types": "./src/work-log/nestedTools.ts",
+      "default": "./src/work-log/nestedTools.ts"
+    },
     "./assembly-highlighting": {
       "types": "./src/assemblyHighlighting.ts",
       "default": "./src/assemblyHighlighting.ts"

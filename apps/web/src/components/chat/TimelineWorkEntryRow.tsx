@@ -1,4 +1,5 @@
 import { TimelinePendingApprovalRow } from "./TimelinePendingApprovalRow";
+import { ExpandedWorkGroupEntries } from "./TimelineWorkGroupRows";
 import { WorkLogDetails, WorkLogRow } from "./WorkLog";
 import {
   getQuestionAnswerPreview,
@@ -298,9 +299,16 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
       ? notificationChildThreadId(workEntry.projectedItem.item.source)
       : undefined;
   const groupView = use(WorkGroupViewCtx);
-  const [expanded, setExpanded] = useState(
-    () => groupView?.state.expandedEntries.has(workEntry.id) ?? false,
+  const entryViewState =
+    groupView?.state ?? (workEntry.nestedToolEntries ? ctx.workGroupViewState : undefined);
+  const nestedGroupView = groupView ?? {
+    state: ctx.workGroupViewState,
+    onToggleEntry: (collapsed: boolean, _entryId: string) => props.onToggleEntry?.(collapsed),
+  };
+  const [locallyExpanded, setExpanded] = useState(
+    () => entryViewState?.expandedEntries.has(workEntry.id) ?? false,
   );
+  const expanded = locallyExpanded || workEntry.revealNestedTools === true;
   const noticeMessage =
     workEntry.structuredPayload?.type === "system_notice"
       ? workEntry.structuredPayload.message
@@ -323,11 +331,11 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
     const next = !expanded;
     if (groupView) {
       groupView.onToggleEntry(!next, workEntry.id);
-      if (next) groupView.state.expandedEntries.add(workEntry.id);
-      else groupView.state.expandedEntries.delete(workEntry.id);
     } else {
       props.onToggleEntry?.(!next);
     }
+    if (next) entryViewState?.expandedEntries.add(workEntry.id);
+    else entryViewState?.expandedEntries.delete(workEntry.id);
     setExpanded(next);
   };
   const failureItem = workEntry.projectedItem?.item;
@@ -469,6 +477,7 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
           onImageExpand(workGroupImageGallery(groupViewedImages, viewedImagePath, preview))
       : onImageExpand;
   const canExpand =
+    workEntry.nestedToolEntries !== undefined ||
     previewText.trim().length > 0 ||
     (workEntry.itemType === "dynamic_tool" && workEntry.toolData !== undefined) ||
     Boolean(
@@ -496,6 +505,7 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
     turnItemNeedsDetailFetch(workEntry.projectedItem.item);
   // A notice's details repeat its row, so it expands only to show text the row cuts off.
   const canExpandProjectedItem =
+    workEntry.nestedToolEntries !== undefined ||
     (noticeMessage === null || noticeCutOff) &&
     (plainOutput !== undefined
       ? Boolean(plainOutput || viewedImage || workEntry.questionAnswer || plainOutputFetches)
@@ -634,6 +644,11 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
               timestampFormat={timestampFormat}
             />
           ) : null}
+          {workEntry.nestedToolEntries && workEntry.toolLifecycleStatus === "inProgress" ? (
+            <span role="status" className="text-xs text-muted-foreground">
+              <T>Running</T>
+            </span>
+          ) : null}
           {createdThread ? (
             <button
               type="button"
@@ -682,6 +697,18 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
         </>
       }
     >
+      {expanded && workEntry.nestedToolEntries ? (
+        <div className="ms-7" onClick={(event) => event.stopPropagation()}>
+          <ExpandedWorkGroupEntries
+            anchorKey={workEntry.id}
+            disclosureAnchorKey={workEntry.id}
+            entries={workEntry.nestedToolEntries}
+            groupedEntries={workEntry.nestedToolEntries}
+            workspaceRoot={workspaceRoot}
+            onToggleEntry={(collapsed) => nestedGroupView.onToggleEntry(collapsed, workEntry.id)}
+          />
+        </div>
+      ) : null}
       {expanded && viewedImage && threadRef ? (
         <WorkLogDetails kind="media">
           <ChatMarkdownAssetImage
