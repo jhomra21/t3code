@@ -312,12 +312,41 @@ const open = Effect.fnUntraced(function* (
         : { ...providerHost, resolveAttachmentPath },
     ),
   );
-  const runtime = yield* adapter.openSession({
+  const opened = yield* adapter.openSession({
     threadId,
     providerSessionId: ProviderSessionId.make("droid-adapter-test-session"),
     modelSelection: selection,
     runtimePolicy: { ...policy, cwd },
   });
+  // Snapshots no longer carry provider turns; tests read them from the events the adapter emits.
+  const providerTurns = new Map<
+    string,
+    Extract<
+      ProviderAdapter.ProviderAdapterV2Event,
+      { type: "provider_turn.updated" }
+    >["providerTurn"]
+  >();
+  const forwarded = yield* Queue.unbounded<ProviderAdapter.ProviderAdapterV2Event, Cause.Done>();
+  yield* opened.events.pipe(
+    Stream.runForEach((event) =>
+      Effect.sync(() => {
+        if (event.type === "provider_turn.updated")
+          providerTurns.set(event.providerTurn.id, event.providerTurn);
+      }).pipe(Effect.andThen(Queue.offer(forwarded, event))),
+    ),
+    Effect.ensuring(Queue.end(forwarded)),
+    // Detached so a session-scope close still forwards the adapter's final events.
+    Effect.forkDetach,
+  );
+  const runtime = {
+    ...opened,
+    events: Stream.fromEffectRepeat(Queue.take(forwarded)),
+    readThreadSnapshot: (input: ProviderAdapter.ProviderAdapterV2ReadThreadSnapshotInput) =>
+      Effect.yieldNow.pipe(
+        Effect.andThen(opened.readThreadSnapshot(input)),
+        Effect.map((snapshot) => ({ ...snapshot, providerTurns: [...providerTurns.values()] })),
+      ),
+  };
   const providerThread = skipEnsureThread
     ? existingProviderThread
     : yield* runtime.ensureThread({
@@ -5709,10 +5738,6 @@ describe("Droid adapter", () => {
         const snapshot = yield* runtime.readThreadSnapshot({
           providerThread: result.providerThread,
         });
-        assert.deepEqual(
-          snapshot.providerTurns.map((turn) => turn.id),
-          [firstTurn.id],
-        );
         assert.deepEqual(
           snapshot.messages.map((message) => message.text),
           ["droid-rollback-first-assistant"],
