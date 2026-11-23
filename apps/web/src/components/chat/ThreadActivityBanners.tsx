@@ -201,6 +201,7 @@ export function backgroundWorkNowItem(
     readonly threadId: ThreadId;
     readonly tasks: ReadonlyArray<OrchestrationV2PendingBackgroundTask>;
     readonly turnItems: ThreadStructure["turnItems"];
+    readonly canStop: boolean;
     readonly stopDisabled: boolean;
     readonly stopping: boolean;
     readonly onStop: () => Promise<void>;
@@ -237,6 +238,7 @@ export function backgroundWorkNowItem(
     };
   });
   const [only] = rows.length === 1 ? rows : [];
+  const onlyThreadId = only?.task.childThreadId;
   const newest = rows
     .filter((row) => row.activity)
     .toSorted((left, right) => right.updatedAtMs - left.updatedAtMs)[0];
@@ -293,9 +295,20 @@ export function backgroundWorkNowItem(
           turnItems={input.turnItems}
           onOpenThread={onOpenThread}
         />
-        <InlineButton disabled={input.stopDisabled} onClick={() => void input.onStop()}>
-          {input.stopping ? <T>Stopping...</T> : <T context="verb, stops background work">Stop</T>}
-        </InlineButton>
+        {onlyThreadId === undefined ? null : (
+          <InlineButton tone="muted" onClick={() => onOpenThread(onlyThreadId)}>
+            <T>Open</T>
+          </InlineButton>
+        )}
+        {input.canStop ? (
+          <InlineButton disabled={input.stopDisabled} onClick={() => void input.onStop()}>
+            {input.stopping ? (
+              <T>Stopping...</T>
+            ) : (
+              <T context="verb, stops background work">Stop</T>
+            )}
+          </InlineButton>
+        ) : null}
       </>
     ),
   };
