@@ -4102,6 +4102,78 @@ describe("Droid adapter", () => {
     ),
   );
 
+  it.effect("maps multi-select ask_user questions and answers them as a joined string", () =>
+    provide(
+      Effect.gen(function* () {
+        const fake = yield* makeFakeDroid();
+        const { runtime, input } = yield* open(fake);
+        const asked = yield* Deferred.make<{
+          requestId: ProviderAdapter.ProviderAdapterV2RuntimeRequestResponseInput["requestId"];
+          item: Extract<
+            ProviderAdapter.ProviderAdapterV2Event,
+            { type: "turn_item.updated" }
+          >["turnItem"];
+        }>();
+        let requestId:
+          | ProviderAdapter.ProviderAdapterV2RuntimeRequestResponseInput["requestId"]
+          | null = null;
+        const reader = yield* runtime.events.pipe(
+          Stream.runForEach((event) => {
+            if (
+              event.type === "runtime_request.updated" &&
+              event.runtimeRequest.status === "pending"
+            )
+              requestId = event.runtimeRequest.id;
+            return event.type === "turn_item.updated" &&
+              event.turnItem.type === "user_input_request" &&
+              requestId !== null
+              ? Deferred.succeed(asked, { requestId, item: event.turnItem })
+              : Effect.void;
+          }),
+          Effect.forkChild,
+        );
+        yield* runtime.startTurn(input);
+        yield* fake.takeRequest("droid.add_user_message");
+        yield* fake.emitRequest("multi-ask", "droid.ask_user", {
+          toolCallId: "call_ask",
+          questions: [
+            {
+              index: 1,
+              topic: "Pick",
+              question: "Pick two fruits",
+              options: ["Apple", "Banana", "Cherry"],
+              optionDescriptions: ["red", "yellow", "small"],
+              multiSelect: true,
+            },
+          ],
+        });
+        const { requestId: askedId, item } = yield* Deferred.await(asked);
+        assert.equal(item.type, "user_input_request");
+        if (item.type !== "user_input_request") return;
+        assert.deepEqual(item.questions[0]?.multiSelect, true);
+        assert.deepEqual(
+          item.questions[0]?.options.map((option) => [option.label, option.description]),
+          [
+            ["Apple", "red"],
+            ["Banana", "yellow"],
+            ["Cherry", "small"],
+          ],
+        );
+        yield* runtime.respondToRuntimeRequest({
+          requestId: askedId,
+          answers: { "1": ["Apple", "Cherry"] },
+        });
+        const reply = yield* fake.takeReply;
+        assert.equal(reply.id, "multi-ask");
+        assert.deepEqual(reply.result, {
+          cancelled: false,
+          answers: [{ index: 1, question: "Pick two fruits", answer: "Apple, Cherry" }],
+        });
+        yield* Fiber.interrupt(reader);
+      }),
+    ),
+  );
+
   it.effect("skips malformed native notification payloads without losing the live session", () =>
     provide(
       Effect.gen(function* () {
