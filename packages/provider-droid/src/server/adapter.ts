@@ -2594,7 +2594,6 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
         const snapshot = (input: ProviderAdapter.ProviderAdapterV2ReadThreadSnapshotInput) =>
           Effect.succeed({
             providerThread: input.providerThread,
-            providerTurns: [...turns.values()],
             messages: [...messages.values()],
             runtimeRequests: [...pending.values()].map((entry) => entry.request),
           } satisfies ProviderAdapter.ProviderAdapterV2ThreadSnapshot);
@@ -2898,7 +2897,6 @@ export const makeDroidAdapterV2 = Effect.fn("makeDroidAdapterV2")(function* (
               });
               return {
                 providerThread,
-                providerTurns: [],
                 messages: [],
                 runtimeRequests: [],
               } satisfies ProviderAdapter.ProviderAdapterV2ThreadSnapshot;
