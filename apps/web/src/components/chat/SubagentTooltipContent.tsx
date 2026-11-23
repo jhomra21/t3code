@@ -34,6 +34,7 @@ import { deriveProviderInstanceEntries, shouldShowInstanceBadge } from "../../pr
 export function SubagentTooltipContent(props: {
   title: string;
   model: string | null;
+  reportedEffort?: string | null | undefined;
   providerInstanceId: ProviderInstanceId;
   origin: OrchestrationV2Subagent["origin"];
   modelSelection?: OrchestrationV2Subagent["modelSelection"];
@@ -79,10 +80,9 @@ export function SubagentTooltipContent(props: {
     childModel === modelSlug && childSelection?.instanceId === props.providerInstanceId
       ? childSelection
       : undefined;
-  const effort = readSelectedEffortValue(
-    matchingSelection,
-    providerModel?.capabilities?.optionDescriptors,
-  );
+  const effort =
+    readSelectedEffortValue(matchingSelection, providerModel?.capabilities?.optionDescriptors) ??
+    props.reportedEffort;
   const speed = provider
     ? providerModel?.capabilities?.optionDescriptors
         ?.map((descriptor) => {
