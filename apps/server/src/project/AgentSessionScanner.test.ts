@@ -1740,7 +1740,8 @@ it.layer(NodeServices.layer)("AgentSessionScanner", (it) => {
         expect(outcomes.filter((outcome) => outcome._tag === "Importable")).toMatchObject([
           { _tag: "Importable", thread: { providerSessionId: "parent-session" } },
         ]);
-        expect(outcomes.filter((outcome) => outcome._tag === "Skipped")).toHaveLength(0);
+        // Only the malformed transcript is skipped; child, empty and T3-managed ones produce nothing.
+        expect(outcomes.filter((outcome) => outcome._tag === "Skipped")).toHaveLength(1);
         const imported = outcomes.find((outcome) => outcome._tag === "Importable");
         if (imported?._tag !== "Importable") throw new Error("Expected importable fixture");
         const repeated = yield* runRecentThreadOutcomes({
@@ -1755,7 +1756,7 @@ it.layer(NodeServices.layer)("AgentSessionScanner", (it) => {
             },
           },
         }).pipe(Effect.provideService(HostProcess.HomeDirectory, home));
-        expect(repeated.map((outcome) => outcome._tag)).toEqual(["AlreadyImported"]);
+        expect(repeated.map((outcome) => outcome._tag)).toEqual(["Skipped", "AlreadyImported"]);
       }),
     );
     it.effect("skips Droid transcripts with a valid cwd but no user message", () =>
