@@ -103,6 +103,7 @@ export function useCommandPaletteThreadItems(input: {
   const gt = useGT();
   const navigate = useNavigate();
   const threads = useVisibleThreadShells();
+  const providersByEnvironment = useEnvironmentProviders();
   const delegatedUnderParent = useDelegatedUnderParent();
   const { projectEnvironmentLocationById } = useEnvironmentLookups();
   const providerEntryByEnvironmentAndInstanceId = useProviderEntryByEnvironmentAndInstanceId();
@@ -116,6 +117,7 @@ export function useCommandPaletteThreadItems(input: {
   const threadItems = buildThreadActionItems(
     {
       threads,
+      providersByEnvironment,
       delegatedUnderParent,
       ...(environments.length > 1
         ? {

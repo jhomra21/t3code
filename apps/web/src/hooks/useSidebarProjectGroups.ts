@@ -6,7 +6,11 @@ import {
   selectProjectGroupingSettings,
 } from "@t3tools/client-runtime/state/project-grouping";
 import { buildSidebarProjectSnapshots } from "../sidebarProjectGrouping";
-import { useEnvironmentIdentities, usePrimaryEnvironmentId } from "../state/environments";
+import {
+  useEnvironmentIdentities,
+  useEnvironmentProviders,
+  usePrimaryEnvironmentId,
+} from "../state/environments";
 import { useDelegatedUnderParent, useProjects, useQuietThreadShells } from "../state/entities";
 import { legacyProjectCwdPreferenceKey, useUiStateStore } from "../uiStateStore";
 import { useClientSettings } from "./useSettings";
@@ -21,6 +25,7 @@ export function useSidebarProjectGroups() {
   const sortOrder = useClientSettings((s) => s.sidebarProjectSortOrder);
   const groupingSettings = useClientSettings(selectProjectGroupingSettings);
   const environments = useEnvironmentIdentities();
+  const providersByEnvironment = useEnvironmentProviders();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const resolve = useMessages();
   const orderedProjects = orderItemsByPreferredIds({
@@ -45,5 +50,11 @@ export function useSidebarProjectGroups() {
     },
     resolve,
   );
-  return sortSidebarV2ProjectGroups(unsortedGroups, threads, sortOrder, delegatedUnderParent);
+  return sortSidebarV2ProjectGroups(
+    unsortedGroups,
+    threads,
+    sortOrder,
+    delegatedUnderParent,
+    providersByEnvironment,
+  );
 }
