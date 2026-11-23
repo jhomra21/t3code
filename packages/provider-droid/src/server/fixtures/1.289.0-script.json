@@ -1,0 +1,1033 @@
+[
+  {
+    "type": "notification",
+    "notification": {
+      "type": "settings_updated"
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "mcp_status_changed"
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "droid_working_state_changed",
+      "newState": "streaming_assistant_message"
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "create_message",
+      "message": {
+        "id": "context-603da186-60ae-4583-86ed-0938371865f2",
+        "role": "user",
+        "content": [],
+        "visibility": "llm_only",
+        "createdAt": 1793472466243,
+        "updatedAt": 1793472466243,
+        "parentId": "root",
+        "seq": 0
+      }
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "create_message",
+      "message": {
+        "id": "603da186-60ae-4583-86ed-0938371865f2",
+        "role": "user",
+        "content": [],
+        "createdAt": 1793472466243,
+        "updatedAt": 1793472466243,
+        "interactionMode": "auto",
+        "userMessageSource": "sdk",
+        "parentId": "context-603da186-60ae-4583-86ed-0938371865f2",
+        "seq": 1
+      },
+      "requestId": "batch-1"
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "droid_working_state_changed",
+      "newState": "thinking"
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "mcp_status_changed"
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "droid_working_state_changed",
+      "newState": "streaming_assistant_message"
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "tool_call",
+      "toolUse": {
+        "type": "tool_use",
+        "id": "call_DYpS5eJWSdiUvijtzs8yOmWn",
+        "name": "Script",
+        "input": {}
+      }
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "tool_call",
+      "toolUse": {
+        "type": "tool_use",
+        "id": "call_DYpS5eJWSdiUvijtzs8yOmWn",
+        "name": "Script",
+        "input": {
+          "script": "// @input"
+        }
+      }
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "tool_call",
+      "toolUse": {
+        "type": "tool_use",
+        "id": "call_DYpS5eJWSdiUvijtzs8yOmWn",
+        "name": "Script",
+        "input": {
+          "script": "// @input:"
+        }
+      }
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "session_title_updated"
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "tool_call",
+      "toolUse": {
+        "type": "tool_use",
+        "id": "call_DYpS5eJWSdiUvijtzs8yOmWn",
+        "name": "Script",
+        "input": {
+          "script": "// @input: patch <<'EOF"
+        }
+      }
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "session_token_usage_changed"
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "tool_call",
+      "toolUse": {
+        "type": "tool_use",
+        "id": "call_DYpS5eJWSdiUvijtzs8yOmWn",
+        "name": "Script",
+        "input": {
+          "script": "// @input: patch <<'EOF'\n"
+        }
+      }
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "tool_call",
+      "toolUse": {
+        "type": "tool_use",
+        "id": "call_DYpS5eJWSdiUvijtzs8yOmWn",
+        "name": "Script",
+        "input": {
+          "script": "// @input: patch <<'EOF'\n*** Begin Patch\n*** Add File: C"
+        }
+      }
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "tool_call",
+      "toolUse": {
+        "type": "tool_use",
+        "id": "call_DYpS5eJWSdiUvijtzs8yOmWn",
+        "name": "Script",
+        "input": {
+          "script": "// @input: patch <<'EOF'\n*** Begin Patch\n*** Add File: /workspace/..."
+        }
+      }
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "tool_call",
+      "toolUse": {
+        "type": "tool_use",
+        "id": "call_DYpS5eJWSdiUvijtzs8yOmWn",
+        "name": "Script",
+        "input": {
+          "script": "// @input: patch <<'EOF'\n*** Begin Patch\n*** Add File: /workspace/..."
+        }
+      }
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "tool_call",
+      "toolUse": {
+        "type": "tool_use",
+        "id": "call_DYpS5eJWSdiUvijtzs8yOmWn",
+        "name": "Script",
+        "input": {
+          "script": "// @input: patch <<'EOF'\n*** Begin Patch\n*** Add File: /workspace/..."
+        }
+      }
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "tool_call",
+      "toolUse": {
+        "type": "tool_use",
+        "id": "call_DYpS5eJWSdiUvijtzs8yOmWn",
+        "name": "Script",
+        "input": {
+          "script": "// @input: patch <<'EOF'\n*** Begin Patch\n*** Add File: /workspace/..."
+        }
+      }
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "tool_call",
+      "toolUse": {
+        "type": "tool_use",
+        "id": "call_DYpS5eJWSdiUvijtzs8yOmWn",
+        "name": "Script",
+        "input": {
+          "script": "// @input: patch <<'EOF'\n*** Begin Patch\n*** Add File: /workspace/..."
+        }
+      }
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "tool_call",
+      "toolUse": {
+        "type": "tool_use",
+        "id": "call_DYpS5eJWSdiUvijtzs8yOmWn",
+        "name": "Script",
+        "input": {
+          "script": "// @input: patch <<'EOF'\n*** Begin Patch\n*** Add File: /workspace/..."
+        }
+      }
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "tool_call",
+      "toolUse": {
+        "type": "tool_use",
+        "id": "call_DYpS5eJWSdiUvijtzs8yOmWn",
+        "name": "Script",
+        "input": {
+          "script": "// @input: patch <<'EOF'\n*** Begin Patch\n*** Add File: /workspace/..."
+        }
+      }
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "tool_call",
+      "toolUse": {
+        "type": "tool_use",
+        "id": "call_DYpS5eJWSdiUvijtzs8yOmWn",
+        "name": "Script",
+        "input": {
+          "script": "// @input: patch <<'EOF'\n*** Begin Patch\n*** Add File: /workspace/probe.txt\n+probe"
+        }
+      }
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "tool_call",
+      "toolUse": {
+        "type": "tool_use",
+        "id": "call_DYpS5eJWSdiUvijtzs8yOmWn",
+        "name": "Script",
+        "input": {
+          "script": "// @input: patch <<'EOF'\n*** Begin Patch\n*** Add File: /workspace/probe.txt\n+probe\n*** End"
+        }
+      }
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "tool_call",
+      "toolUse": {
+        "type": "tool_use",
+        "id": "call_DYpS5eJWSdiUvijtzs8yOmWn",
+        "name": "Script",
+        "input": {
+          "script": "// @input: patch <<'EOF'\n*** Begin Patch\n*** Add File: /workspace/probe.txt\n+probe\n*** End Patch\nEOF"
+        }
+      }
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "tool_call",
+      "toolUse": {
+        "type": "tool_use",
+        "id": "call_DYpS5eJWSdiUvijtzs8yOmWn",
+        "name": "Script",
+        "input": {
+          "script": "// @input: patch <<'EOF'\n*** Begin Patch\n*** Add File: /workspace/probe.txt\n+probe\n*** End Patch\nEOF\nconst results ="
+        }
+      }
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "tool_call",
+      "toolUse": {
+        "type": "tool_use",
+        "id": "call_DYpS5eJWSdiUvijtzs8yOmWn",
+        "name": "Script",
+        "input": {
+          "script": "// @input: patch <<'EOF'\n*** Begin Patch\n*** Add File: /workspace/probe.txt\n+probe\n*** End Patch\nEOF\nconst results = await Promise.all"
+        }
+      }
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "tool_call",
+      "toolUse": {
+        "type": "tool_use",
+        "id": "call_DYpS5eJWSdiUvijtzs8yOmWn",
+        "name": "Script",
+        "input": {
+          "script": "// @input: patch <<'EOF'\n*** Begin Patch\n*** Add File: /workspace/probe.txt\n+probe\n*** End Patch\nEOF\nconst results = await Promise.allSettled([\n"
+        }
+      }
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "tool_call",
+      "toolUse": {
+        "type": "tool_use",
+        "id": "call_DYpS5eJWSdiUvijtzs8yOmWn",
+        "name": "Script",
+        "input": {
+          "script": "// @input: patch <<'EOF'\n*** Begin Patch\n*** Add File: /workspace/probe.txt\n+probe\n*** End Patch\nEOF\nconst results = await Promise.allSettled([\n  tools.Execute({"
+        }
+      }
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "tool_call",
+      "toolUse": {
+        "type": "tool_use",
+        "id": "call_DYpS5eJWSdiUvijtzs8yOmWn",
+        "name": "Script",
+        "input": {
+          "script": "// @input: patch <<'EOF'\n*** Begin Patch\n*** Add File: /workspace/probe.txt\n+probe\n*** End Patch\nEOF\nconst results = await Promise.allSettled([\n  tools.Execute({ command: \""
+        }
+      }
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "tool_call",
+      "toolUse": {
+        "type": "tool_use",
+        "id": "call_DYpS5eJWSdiUvijtzs8yOmWn",
+        "name": "Script",
+        "input": {
+          "script": "// @input: patch <<'EOF'\n*** Begin Patch\n*** Add File: /workspace/probe.txt\n+probe\n*** End Patch\nEOF\nconst results = await Promise.allSettled([\n  tools.Execute({ command: \"git --version"
+        }
+      }
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "tool_call",
+      "toolUse": {
+        "type": "tool_use",
+        "id": "call_DYpS5eJWSdiUvijtzs8yOmWn",
+        "name": "Script",
+        "input": {
+          "script": "// @input: patch <<'EOF'\n*** Begin Patch\n*** Add File: /workspace/probe.txt\n+probe\n*** End Patch\nEOF\nconst results = await Promise.allSettled([\n  tools.Execute({ command: \"git --version\", summary"
+        }
+      }
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "tool_call",
+      "toolUse": {
+        "type": "tool_use",
+        "id": "call_DYpS5eJWSdiUvijtzs8yOmWn",
+        "name": "Script",
+        "input": {
+          "script": "// @input: patch <<'EOF'\n*** Begin Patch\n*** Add File: /workspace/probe.txt\n+probe\n*** End Patch\nEOF\nconst results = await Promise.allSettled([\n  tools.Execute({ command: \"git --version\", summary: \"Read Git version"
+        }
+      }
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "tool_call",
+      "toolUse": {
+        "type": "tool_use",
+        "id": "call_DYpS5eJWSdiUvijtzs8yOmWn",
+        "name": "Script",
+        "input": {
+          "script": "// @input: patch <<'EOF'\n*** Begin Patch\n*** Add File: /workspace/probe.txt\n+probe\n*** End Patch\nEOF\nconst results = await Promise.allSettled([\n  tools.Execute({ command: \"git --version\", summary: \"Read Git version\", riskLevel"
+        }
+      }
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "tool_call",
+      "toolUse": {
+        "type": "tool_use",
+        "id": "call_DYpS5eJWSdiUvijtzs8yOmWn",
+        "name": "Script",
+        "input": {
+          "script": "// @input: patch <<'EOF'\n*** Begin Patch\n*** Add File: /workspace/probe.txt\n+probe\n*** End Patch\nEOF\nconst results = await Promise.allSettled([\n  tools.Execute({ command: \"git --version\", summary: \"Read Git version\", riskLevel: \"low"
+        }
+      }
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "tool_call",
+      "toolUse": {
+        "type": "tool_use",
+        "id": "call_DYpS5eJWSdiUvijtzs8yOmWn",
+        "name": "Script",
+        "input": {
+          "script": "// @input: patch <<'EOF'\n*** Begin Patch\n*** Add File: /workspace/probe.txt\n+probe\n*** End Patch\nEOF\nconst results = await Promise.allSettled([\n  tools.Execute({ command: \"git --version\", summary: \"Read Git version\", riskLevel: \"low\" }),\n"
+        }
+      }
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "tool_call",
+      "toolUse": {
+        "type": "tool_use",
+        "id": "call_DYpS5eJWSdiUvijtzs8yOmWn",
+        "name": "Script",
+        "input": {
+          "script": "// @input: patch <<'EOF'\n*** Begin Patch\n*** Add File: /workspace/probe.txt\n+probe\n*** End Patch\nEOF\nconst results = await Promise.allSettled([\n  tools.Execute({ command: \"git --version\", summary: \"Read Git version\", riskLevel: \"low\" }),\n  tools.ApplyPatch(inputs"
+        }
+      }
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "tool_call",
+      "toolUse": {
+        "type": "tool_use",
+        "id": "call_DYpS5eJWSdiUvijtzs8yOmWn",
+        "name": "Script",
+        "input": {
+          "script": "// @input: patch <<'EOF'\n*** Begin Patch\n*** Add File: /workspace/probe.txt\n+probe\n*** End Patch\nEOF\nconst results = await Promise.allSettled([\n  tools.Execute({ command: \"git --version\", summary: \"Read Git version\", riskLevel: \"low\" }),\n  tools.ApplyPatch(inputs.patch)\n"
+        }
+      }
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "tool_call",
+      "toolUse": {
+        "type": "tool_use",
+        "id": "call_DYpS5eJWSdiUvijtzs8yOmWn",
+        "name": "Script",
+        "input": {
+          "script": "// @input: patch <<'EOF'\n*** Begin Patch\n*** Add File: /workspace/probe.txt\n+probe\n*** End Patch\nEOF\nconst results = await Promise.allSettled([\n  tools.Execute({ command: \"git --version\", summary: \"Read Git version\", riskLevel: \"low\" }),\n  tools.ApplyPatch(inputs.patch)\n]);\nresults.forEach((result"
+        }
+      }
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "tool_call",
+      "toolUse": {
+        "type": "tool_use",
+        "id": "call_DYpS5eJWSdiUvijtzs8yOmWn",
+        "name": "Script",
+        "input": {
+          "script": "// @input: patch <<'EOF'\n*** Begin Patch\n*** Add File: /workspace/probe.txt\n+probe\n*** End Patch\nEOF\nconst results = await Promise.allSettled([\n  tools.Execute({ command: \"git --version\", summary: \"Read Git version\", riskLevel: \"low\" }),\n  tools.ApplyPatch(inputs.patch)\n]);\nresults.forEach((result, index"
+        }
+      }
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "tool_call",
+      "toolUse": {
+        "type": "tool_use",
+        "id": "call_DYpS5eJWSdiUvijtzs8yOmWn",
+        "name": "Script",
+        "input": {
+          "script": "// @input: patch <<'EOF'\n*** Begin Patch\n*** Add File: /workspace/probe.txt\n+probe\n*** End Patch\nEOF\nconst results = await Promise.allSettled([\n  tools.Execute({ command: \"git --version\", summary: \"Read Git version\", riskLevel: \"low\" }),\n  tools.ApplyPatch(inputs.patch)\n]);\nresults.forEach((result, index) => text({"
+        }
+      }
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "tool_call",
+      "toolUse": {
+        "type": "tool_use",
+        "id": "call_DYpS5eJWSdiUvijtzs8yOmWn",
+        "name": "Script",
+        "input": {
+          "script": "// @input: patch <<'EOF'\n*** Begin Patch\n*** Add File: /workspace/probe.txt\n+probe\n*** End Patch\nEOF\nconst results = await Promise.allSettled([\n  tools.Execute({ command: \"git --version\", summary: \"Read Git version\", riskLevel: \"low\" }),\n  tools.ApplyPatch(inputs.patch)\n]);\nresults.forEach((result, index) => text({ tool: index ==="
+        }
+      }
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "tool_call",
+      "toolUse": {
+        "type": "tool_use",
+        "id": "call_DYpS5eJWSdiUvijtzs8yOmWn",
+        "name": "Script",
+        "input": {
+          "script": "// @input: patch <<'EOF'\n*** Begin Patch\n*** Add File: /workspace/probe.txt\n+probe\n*** End Patch\nEOF\nconst results = await Promise.allSettled([\n  tools.Execute({ command: \"git --version\", summary: \"Read Git version\", riskLevel: \"low\" }),\n  tools.ApplyPatch(inputs.patch)\n]);\nresults.forEach((result, index) => text({ tool: index === 0 ?"
+        }
+      }
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "tool_call",
+      "toolUse": {
+        "type": "tool_use",
+        "id": "call_DYpS5eJWSdiUvijtzs8yOmWn",
+        "name": "Script",
+        "input": {
+          "script": "// @input: patch <<'EOF'\n*** Begin Patch\n*** Add File: /workspace/probe.txt\n+probe\n*** End Patch\nEOF\nconst results = await Promise.allSettled([\n  tools.Execute({ command: \"git --version\", summary: \"Read Git version\", riskLevel: \"low\" }),\n  tools.ApplyPatch(inputs.patch)\n]);\nresults.forEach((result, index) => text({ tool: index === 0 ? \"Execute\""
+        }
+      }
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "tool_call",
+      "toolUse": {
+        "type": "tool_use",
+        "id": "call_DYpS5eJWSdiUvijtzs8yOmWn",
+        "name": "Script",
+        "input": {
+          "script": "// @input: patch <<'EOF'\n*** Begin Patch\n*** Add File: /workspace/probe.txt\n+probe\n*** End Patch\nEOF\nconst results = await Promise.allSettled([\n  tools.Execute({ command: \"git --version\", summary: \"Read Git version\", riskLevel: \"low\" }),\n  tools.ApplyPatch(inputs.patch)\n]);\nresults.forEach((result, index) => text({ tool: index === 0 ? \"Execute\" : \"ApplyPatch"
+        }
+      }
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "tool_call",
+      "toolUse": {
+        "type": "tool_use",
+        "id": "call_DYpS5eJWSdiUvijtzs8yOmWn",
+        "name": "Script",
+        "input": {
+          "script": "// @input: patch <<'EOF'\n*** Begin Patch\n*** Add File: /workspace/probe.txt\n+probe\n*** End Patch\nEOF\nconst results = await Promise.allSettled([\n  tools.Execute({ command: \"git --version\", summary: \"Read Git version\", riskLevel: \"low\" }),\n  tools.ApplyPatch(inputs.patch)\n]);\nresults.forEach((result, index) => text({ tool: index === 0 ? \"Execute\" : \"ApplyPatch\", ...result"
+        }
+      }
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "tool_call",
+      "toolUse": {
+        "type": "tool_use",
+        "id": "call_DYpS5eJWSdiUvijtzs8yOmWn",
+        "name": "Script",
+        "input": {
+          "script": "// @input: patch <<'EOF'\n*** Begin Patch\n*** Add File: /workspace/probe.txt\n+probe\n*** End Patch\nEOF\nconst results = await Promise.allSettled([\n  tools.Execute({ command: \"git --version\", summary: \"Read Git version\", riskLevel: \"low\" }),\n  tools.ApplyPatch(inputs.patch)\n]);\nresults.forEach((result, index) => text({ tool: index === 0 ? \"Execute\" : \"ApplyPatch\", ...result }));\n"
+        }
+      }
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "create_message",
+      "message": {
+        "id": "4094a0dc-4dda-4d10-be59-22393efbc11f",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "call_DYpS5eJWSdiUvijtzs8yOmWn",
+            "name": "Script",
+            "input": {
+              "script": "// @input: patch <<'EOF'\n*** Begin Patch\n*** Add File: /workspace/probe.txt\n+probe\n*** End Patch\nEOF\nconst results = await Promise.allSettled([\n  tools.Execute({ command: \"git --version\", summary: \"Read Git version\", riskLevel: \"low\" }),\n  tools.ApplyPatch(inputs.patch)\n]);\nresults.forEach((result, index) => text({ tool: index === 0 ? \"Execute\" : \"ApplyPatch\", ...result }));\n"
+            }
+          }
+        ],
+        "createdAt": 1793472472009,
+        "updatedAt": 1793472472009,
+        "modelId": "custom:GPT-6.1 Sol-13",
+        "reasoningEffort": "low",
+        "userMessageSource": "sdk",
+        "parentId": "603da186-60ae-4583-86ed-0938371865f2",
+        "seq": 2
+      }
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "droid_working_state_changed",
+      "newState": "executing_tool"
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "tool_execution_phase_changed",
+      "toolUseId": "call_DYpS5eJWSdiUvijtzs8yOmWn",
+      "toolName": "Script",
+      "phase": "queued"
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "droid_working_state_changed",
+      "newState": "waiting_for_tool_confirmation"
+    }
+  },
+  {
+    "type": "request",
+    "id": "cba3a8e5-d6ab-4b26-87f9-f200855c257a",
+    "method": "droid.request_permission",
+    "params": {
+      "toolUses": [
+        {
+          "toolUse": {
+            "type": "tool_use",
+            "id": "call_DYpS5eJWSdiUvijtzs8yOmWn",
+            "name": "Script",
+            "input": {
+              "script": "// @input: patch <<'EOF'\n*** Begin Patch\n*** Add File: /workspace/probe.txt\n+probe\n*** End Patch\nEOF\nconst results = await Promise.allSettled([\n  tools.Execute({ command: \"git --version\", summary: \"Read Git version\", riskLevel: \"low\" }),\n  tools.ApplyPatch(inputs.patch)\n]);\nresults.forEach((result, index) => text({ tool: index === 0 ? \"Execute\" : \"ApplyPatch\", ...result }));\n"
+            }
+          },
+          "confirmationType": "script",
+          "details": {
+            "type": "script",
+            "impactLevel": "low",
+            "calls": [
+              {
+                "toolName": "Execute",
+                "line": 2,
+                "column": 2,
+                "toolInput": {
+                  "command": "git --version",
+                  "summary": "Read Git version",
+                  "riskLevel": "low"
+                },
+                "confirmation": {
+                  "type": "exec",
+                  "fullCommand": "git --version",
+                  "command": "git",
+                  "extractedCommands": ["git"],
+                  "impactLevel": "low"
+                }
+              },
+              {
+                "toolName": "ApplyPatch",
+                "line": 3,
+                "column": 2,
+                "toolInput": {
+                  "input": "*** Begin Patch\n*** Add File: /workspace/probe.txt\n+probe\n*** End Patch"
+                },
+                "confirmation": {
+                  "type": "apply_patch",
+                  "filePath": "/workspace/probe.txt",
+                  "fileName": "probe.txt",
+                  "patchContent": "*** Begin Patch\n*** Add File: /workspace/probe.txt\n+probe\n*** End Patch",
+                  "oldContent": "",
+                  "newContent": "probe",
+                  "files": [
+                    {
+                      "filePath": "/workspace/probe.txt",
+                      "fileName": "probe.txt",
+                      "operation": "create",
+                      "oldContent": "",
+                      "newContent": "probe"
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "options": [
+        {
+          "label": "Yes, allow all",
+          "value": "proceed_once",
+          "selectedColor": "#d78700"
+        },
+        {
+          "label": "Yes, and always allow low impact commands (file edits and read-only commands)",
+          "value": "proceed_always",
+          "selectedColor": "#d78700"
+        },
+        {
+          "label": "No, cancel all",
+          "value": "cancel",
+          "selectedColor": "#d75f5f",
+          "selectedPrefix": "✕ "
+        }
+      ]
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "session_token_usage_changed"
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "droid_working_state_changed",
+      "newState": "executing_tool"
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "permission_resolved",
+      "requestId": "cba3a8e5-d6ab-4b26-87f9-f200855c257a",
+      "toolUseIds": ["call_DYpS5eJWSdiUvijtzs8yOmWn"],
+      "selectedOption": "proceed_once"
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "tool_execution_phase_changed",
+      "toolUseId": "call_DYpS5eJWSdiUvijtzs8yOmWn",
+      "toolName": "Script",
+      "phase": "executing"
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "create_message",
+      "message": {
+        "id": "repl-tool-call:f392b426-1200-435b-8cf8-cf8d340f9cbd-1",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "f392b426-1200-435b-8cf8-cf8d340f9cbd-1",
+            "name": "Execute",
+            "input": {
+              "command": "git --version",
+              "summary": "Read Git version",
+              "riskLevel": "low"
+            },
+            "scriptExecution": {
+              "runId": "call_DYpS5eJWSdiUvijtzs8yOmWn",
+              "outerToolUseId": "call_DYpS5eJWSdiUvijtzs8yOmWn"
+            }
+          }
+        ],
+        "createdAt": 1793472472058,
+        "updatedAt": 1793472472058,
+        "visibility": "user_only",
+        "parentId": "4094a0dc-4dda-4d10-be59-22393efbc11f",
+        "seq": 3,
+        "userMessageSource": "sdk"
+      }
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "create_message",
+      "message": {
+        "id": "repl-tool-call:f392b426-1200-435b-8cf8-cf8d340f9cbd-2",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "f392b426-1200-435b-8cf8-cf8d340f9cbd-2",
+            "name": "ApplyPatch",
+            "input": {
+              "input": "*** Begin Patch\n*** Add File: /workspace/probe.txt\n+probe\n*** End Patch"
+            },
+            "scriptExecution": {
+              "runId": "call_DYpS5eJWSdiUvijtzs8yOmWn",
+              "outerToolUseId": "call_DYpS5eJWSdiUvijtzs8yOmWn"
+            }
+          }
+        ],
+        "createdAt": 1793472472058,
+        "updatedAt": 1793472472058,
+        "visibility": "user_only",
+        "parentId": "repl-tool-call:f392b426-1200-435b-8cf8-cf8d340f9cbd-1",
+        "seq": 4,
+        "userMessageSource": "sdk"
+      }
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "tool_progress_update",
+      "toolUseId": "f392b426-1200-435b-8cf8-cf8d340f9cbd-1",
+      "toolName": "Execute",
+      "update": {
+        "type": "status",
+        "text": "",
+        "timestamp": 1793472472080,
+        "terminalId": "1ae2d2a7-3809-4221-9f54-efcf46789cf1"
+      }
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "tool_result",
+      "toolUseId": "f392b426-1200-435b-8cf8-cf8d340f9cbd-2",
+      "messageId": "repl-tool-result:f392b426-1200-435b-8cf8-cf8d340f9cbd-2",
+      "content": "{\"success\":true,\"files\":[{\"file_path\":\"/workspace/probe.txt\",\"display_operation\":\"create\",\"content\":\"probe\"}],\"file_path\":\"/workspace/probe.txt\",\"display_operation\":\"create\",\"content\":\"probe\"}",
+      "isError": false
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "tool_progress_update",
+      "toolUseId": "f392b426-1200-435b-8cf8-cf8d340f9cbd-1",
+      "toolName": "Execute",
+      "update": {
+        "type": "status",
+        "text": "\ngit version 2.51.2.windows.1",
+        "timestamp": 1793472472239,
+        "terminalId": "1ae2d2a7-3809-4221-9f54-efcf46789cf1",
+        "fullOutput": "git version 2.51.2.windows.1\n"
+      }
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "tool_progress_update",
+      "toolUseId": "f392b426-1200-435b-8cf8-cf8d340f9cbd-1",
+      "toolName": "Execute",
+      "update": {
+        "type": "status",
+        "text": "",
+        "timestamp": 1793472472240,
+        "terminalId": "1ae2d2a7-3809-4221-9f54-efcf46789cf1",
+        "fullOutput": "git version 2.51.2.windows.1\n",
+        "exitCode": 0,
+        "signal": null
+      }
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "tool_result",
+      "toolUseId": "f392b426-1200-435b-8cf8-cf8d340f9cbd-1",
+      "messageId": "repl-tool-result:f392b426-1200-435b-8cf8-cf8d340f9cbd-1",
+      "content": "git version 2.51.2.windows.1\n\n\n[Process exited with code 0]",
+      "isError": false
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "tool_result",
+      "toolUseId": "call_DYpS5eJWSdiUvijtzs8yOmWn",
+      "messageId": "be41d7e9-9d85-43b8-ac10-ad06833ac0a1",
+      "content": [
+        {
+          "type": "text",
+          "text": "{\"tool\":\"Execute\",\"status\":\"fulfilled\",\"value\":{\"output\":\"git version 2.51.2.windows.1\\n\",\"exitCode\":0}}\n{\"tool\":\"ApplyPatch\",\"status\":\"fulfilled\",\"value\":\"Success. Applied changes to the following files:\\nA /workspace/...\"}"
+        },
+        {
+          "type": "text",
+          "text": "[Script completed · 0.5 s elapsed · 2 calls · log: <log>]"
+        }
+      ],
+      "isError": false
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "create_message",
+      "message": {
+        "id": "tool-catalog-update-f91c1f0c-7915-41a7-bac2-78ed0793fb13",
+        "role": "user",
+        "content": [],
+        "visibility": "llm_only",
+        "createdAt": 1793472472579,
+        "updatedAt": 1793472472579,
+        "parentId": "be41d7e9-9d85-43b8-ac10-ad06833ac0a1",
+        "seq": 8
+      }
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "droid_working_state_changed",
+      "newState": "streaming_assistant_message"
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "droid_working_state_changed",
+      "newState": "thinking"
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "droid_working_state_changed",
+      "newState": "streaming_assistant_message"
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "assistant_text_delta",
+      "messageId": "a7760e88-1b09-48a2-81bd-968a53149ab5",
+      "blockIndex": 0,
+      "textDelta": "done"
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "assistant_text_complete",
+      "messageId": "a7760e88-1b09-48a2-81bd-968a53149ab5",
+      "blockIndex": 0
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "create_message",
+      "message": {
+        "id": "a7760e88-1b09-48a2-81bd-968a53149ab5",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "text",
+            "text": "done"
+          }
+        ],
+        "createdAt": 1793472475348,
+        "updatedAt": 1793472475348,
+        "modelId": "custom:GPT-6.1 Sol-13",
+        "reasoningEffort": "low",
+        "userMessageSource": "sdk",
+        "openaiMessageId": "msg_076ef59653588a4e016ae637dac1f087d1a2b940775ec249cb",
+        "openaiPhase": "final_answer",
+        "parentId": "tool-catalog-update-f91c1f0c-7915-41a7-bac2-78ed0793fb13",
+        "seq": 9
+      }
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "session_token_usage_changed"
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "agent_turn_completed",
+      "reason": "completed",
+      "turnId": "603da186-60ae-4583-86ed-0938371865f2",
+      "durationMs": 9251
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "droid_working_state_changed",
+      "newState": "idle",
+      "backgroundWork": 0
+    }
+  }
+]

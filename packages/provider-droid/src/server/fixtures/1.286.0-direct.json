@@ -1,0 +1,408 @@
+[
+  {
+    "type": "settings_updated"
+  },
+  {
+    "type": "mcp_status_changed"
+  },
+  {
+    "type": "droid_working_state_changed",
+    "newState": "streaming_assistant_message"
+  },
+  {
+    "type": "create_message",
+    "message": {
+      "id": "context-e391baff-8a07-4d0b-ac5f-e8625781735b",
+      "role": "user",
+      "content": []
+    }
+  },
+  {
+    "type": "create_message",
+    "requestId": "capture-1",
+    "message": {
+      "id": "e391baff-8a07-4d0b-ac5f-e8625781735b",
+      "role": "user",
+      "content": []
+    }
+  },
+  {
+    "type": "droid_working_state_changed",
+    "newState": "thinking"
+  },
+  {
+    "type": "mcp_status_changed"
+  },
+  {
+    "type": "session_title_updated"
+  },
+  {
+    "type": "session_token_usage_changed"
+  },
+  {
+    "type": "droid_working_state_changed",
+    "newState": "streaming_assistant_message"
+  },
+  {
+    "type": "tool_call",
+    "toolUse": {
+      "type": "tool_use",
+      "id": "call_hCcC7LxmqUiq0B5W0vteii8t",
+      "name": "Execute",
+      "input": {}
+    }
+  },
+  {
+    "type": "tool_call",
+    "toolUse": {
+      "type": "tool_use",
+      "id": "call_iczhI7feJgZn1nM6HoKwjQ7t",
+      "name": "Execute",
+      "input": {}
+    }
+  },
+  {
+    "type": "tool_call",
+    "toolUse": {
+      "type": "tool_use",
+      "id": "call_hCcC7LxmqUiq0B5W0vteii8t",
+      "name": "Execute",
+      "input": {
+        "command": "git --version",
+        "summary": "Read Git runtime version",
+        "riskLevel": "low"
+      }
+    }
+  },
+  {
+    "type": "tool_call",
+    "toolUse": {
+      "type": "tool_use",
+      "id": "call_iczhI7feJgZn1nM6HoKwjQ7t",
+      "name": "Execute",
+      "input": {
+        "command": "bun --version",
+        "summary": "Read Bun runtime version",
+        "riskLevel": "low"
+      }
+    }
+  },
+  {
+    "type": "create_message",
+    "message": {
+      "id": "eb98798f-eae3-4816-8913-104e1eea0d7f",
+      "role": "assistant",
+      "content": [
+        {
+          "type": "tool_use",
+          "id": "call_hCcC7LxmqUiq0B5W0vteii8t",
+          "name": "Execute",
+          "input": {
+            "command": "git --version",
+            "summary": "Read Git runtime version",
+            "riskLevel": "low"
+          }
+        },
+        {
+          "type": "tool_use",
+          "id": "call_iczhI7feJgZn1nM6HoKwjQ7t",
+          "name": "Execute",
+          "input": {
+            "command": "bun --version",
+            "summary": "Read Bun runtime version",
+            "riskLevel": "low"
+          }
+        }
+      ]
+    }
+  },
+  {
+    "type": "droid_working_state_changed",
+    "newState": "executing_tool"
+  },
+  {
+    "type": "tool_execution_phase_changed",
+    "toolUseId": "call_hCcC7LxmqUiq0B5W0vteii8t",
+    "toolName": "Execute",
+    "phase": "queued"
+  },
+  {
+    "type": "tool_execution_phase_changed",
+    "toolUseId": "call_iczhI7feJgZn1nM6HoKwjQ7t",
+    "toolName": "Execute",
+    "phase": "queued"
+  },
+  {
+    "type": "droid_working_state_changed",
+    "newState": "waiting_for_tool_confirmation"
+  },
+  {
+    "type": "session_token_usage_changed"
+  },
+  {
+    "type": "droid_working_state_changed",
+    "newState": "executing_tool"
+  },
+  {
+    "type": "permission_resolved",
+    "requestId": "683e36b2-0d8b-49b0-8750-5d7e391e5182",
+    "toolUseIds": ["call_hCcC7LxmqUiq0B5W0vteii8t", "call_iczhI7feJgZn1nM6HoKwjQ7t"],
+    "selectedOption": "proceed_once"
+  },
+  {
+    "type": "tool_execution_phase_changed",
+    "toolUseId": "call_hCcC7LxmqUiq0B5W0vteii8t",
+    "toolName": "Execute",
+    "phase": "executing"
+  },
+  {
+    "type": "tool_progress_update",
+    "toolUseId": "call_hCcC7LxmqUiq0B5W0vteii8t",
+    "toolName": "Execute",
+    "update": {
+      "type": "status",
+      "text": "",
+      "timestamp": 1793399433464,
+      "terminalId": "113566e7-e18d-4a1d-8b3b-21d843494c43"
+    }
+  },
+  {
+    "type": "tool_progress_update",
+    "toolUseId": "call_hCcC7LxmqUiq0B5W0vteii8t",
+    "toolName": "Execute",
+    "update": {
+      "type": "status",
+      "text": "",
+      "timestamp": 1793399433651,
+      "terminalId": "113566e7-e18d-4a1d-8b3b-21d843494c43",
+      "fullOutput": "git version 2.51.2.windows.1\n",
+      "exitCode": 0,
+      "signal": null
+    }
+  },
+  {
+    "type": "tool_result",
+    "toolUseId": "call_hCcC7LxmqUiq0B5W0vteii8t",
+    "messageId": "b5d57086-b32e-430d-bd13-79034f3782a7",
+    "content": "git version 2.51.2.windows.1\n\n\n[Process exited with code 0]",
+    "isError": false
+  },
+  {
+    "type": "tool_execution_phase_changed",
+    "toolUseId": "call_iczhI7feJgZn1nM6HoKwjQ7t",
+    "toolName": "Execute",
+    "phase": "executing"
+  },
+  {
+    "type": "tool_progress_update",
+    "toolUseId": "call_iczhI7feJgZn1nM6HoKwjQ7t",
+    "toolName": "Execute",
+    "update": {
+      "type": "status",
+      "text": "",
+      "timestamp": 1793399433994,
+      "terminalId": "4f64a2c7-2341-45ad-99d8-a776f1f8bdd4"
+    }
+  },
+  {
+    "type": "tool_progress_update",
+    "toolUseId": "call_iczhI7feJgZn1nM6HoKwjQ7t",
+    "toolName": "Execute",
+    "update": {
+      "type": "status",
+      "text": "\n1.4.4",
+      "timestamp": 1793399434156,
+      "terminalId": "4f64a2c7-2341-45ad-99d8-a776f1f8bdd4",
+      "fullOutput": "1.4.4\n"
+    }
+  },
+  {
+    "type": "tool_progress_update",
+    "toolUseId": "call_iczhI7feJgZn1nM6HoKwjQ7t",
+    "toolName": "Execute",
+    "update": {
+      "type": "status",
+      "text": "",
+      "timestamp": 1793399434156,
+      "terminalId": "4f64a2c7-2341-45ad-99d8-a776f1f8bdd4",
+      "fullOutput": "1.4.4\n",
+      "exitCode": 0,
+      "signal": null
+    }
+  },
+  {
+    "type": "tool_result",
+    "toolUseId": "call_iczhI7feJgZn1nM6HoKwjQ7t",
+    "messageId": "b5d57086-b32e-430d-bd13-79034f3782a7",
+    "content": "1.4.4\n\n\n[Process exited with code 0]",
+    "isError": false
+  },
+  {
+    "type": "droid_working_state_changed",
+    "newState": "streaming_assistant_message"
+  },
+  {
+    "type": "droid_working_state_changed",
+    "newState": "thinking"
+  },
+  {
+    "type": "droid_working_state_changed",
+    "newState": "streaming_assistant_message"
+  },
+  {
+    "type": "tool_call",
+    "toolUse": {
+      "type": "tool_use",
+      "id": "call_4WEBnOGVYvkW0wx0L4jEtgEC",
+      "name": "ApplyPatch",
+      "input": {}
+    }
+  },
+  {
+    "type": "tool_call",
+    "toolUse": {
+      "type": "tool_use",
+      "id": "call_4WEBnOGVYvkW0wx0L4jEtgEC",
+      "name": "ApplyPatch",
+      "input": {
+        "input": "*** Begin Patch\n***"
+      }
+    }
+  },
+  {
+    "type": "tool_call",
+    "toolUse": {
+      "type": "tool_use",
+      "id": "call_4WEBnOGVYvkW0wx0L4jEtgEC",
+      "name": "ApplyPatch",
+      "input": {
+        "input": "*** Begin Patch\n*** Add File: capture"
+      }
+    }
+  },
+  {
+    "type": "tool_call",
+    "toolUse": {
+      "type": "tool_use",
+      "id": "call_4WEBnOGVYvkW0wx0L4jEtgEC",
+      "name": "ApplyPatch",
+      "input": {
+        "input": "*** Begin Patch\n*** Add File: capture-a.txt\n+probe\n*** End"
+      }
+    }
+  },
+  {
+    "type": "tool_call",
+    "toolUse": {
+      "type": "tool_use",
+      "id": "call_4WEBnOGVYvkW0wx0L4jEtgEC",
+      "name": "ApplyPatch",
+      "input": {
+        "input": "*** Begin Patch\n*** Add File: capture-a.txt\n+probe\n*** End Patch\n"
+      }
+    }
+  },
+  {
+    "type": "create_message",
+    "message": {
+      "id": "ca6a4032-896e-4cdf-a613-6e4f3b7fec05",
+      "role": "assistant",
+      "content": [
+        {
+          "type": "tool_use",
+          "id": "call_4WEBnOGVYvkW0wx0L4jEtgEC",
+          "name": "ApplyPatch",
+          "input": {
+            "input": "*** Begin Patch\n*** Add File: capture-a.txt\n+probe\n*** End Patch\n"
+          }
+        }
+      ]
+    }
+  },
+  {
+    "type": "droid_working_state_changed",
+    "newState": "executing_tool"
+  },
+  {
+    "type": "tool_execution_phase_changed",
+    "toolUseId": "call_4WEBnOGVYvkW0wx0L4jEtgEC",
+    "toolName": "ApplyPatch",
+    "phase": "queued"
+  },
+  {
+    "type": "droid_working_state_changed",
+    "newState": "waiting_for_tool_confirmation"
+  },
+  {
+    "type": "session_token_usage_changed"
+  },
+  {
+    "type": "droid_working_state_changed",
+    "newState": "executing_tool"
+  },
+  {
+    "type": "permission_resolved",
+    "requestId": "bde7a3fe-c982-43fc-be1b-b4f889ef542b",
+    "toolUseIds": ["call_4WEBnOGVYvkW0wx0L4jEtgEC"],
+    "selectedOption": "proceed_once"
+  },
+  {
+    "type": "tool_execution_phase_changed",
+    "toolUseId": "call_4WEBnOGVYvkW0wx0L4jEtgEC",
+    "toolName": "ApplyPatch",
+    "phase": "executing"
+  },
+  {
+    "type": "tool_result",
+    "toolUseId": "call_4WEBnOGVYvkW0wx0L4jEtgEC",
+    "messageId": "6bceca81-e861-476d-8139-f77e47cefefd",
+    "content": "{\"success\":true,\"files\":[{\"file_path\":\"/workspace/capture-a.txt\",\"display_operation\":\"create\",\"content\":\"probe\"}],\"file_path\":\"/workspace/capture-a.txt\",\"display_operation\":\"create\",\"content\":\"probe\"}",
+    "isError": false
+  },
+  {
+    "type": "droid_working_state_changed",
+    "newState": "streaming_assistant_message"
+  },
+  {
+    "type": "droid_working_state_changed",
+    "newState": "thinking"
+  },
+  {
+    "type": "droid_working_state_changed",
+    "newState": "streaming_assistant_message"
+  },
+  {
+    "type": "assistant_text_delta",
+    "messageId": "090a6535-65a7-4349-aadb-4ba027e8a99e",
+    "textDelta": "done"
+  },
+  {
+    "type": "assistant_text_complete",
+    "messageId": "090a6535-65a7-4349-aadb-4ba027e8a99e"
+  },
+  {
+    "type": "create_message",
+    "message": {
+      "id": "090a6535-65a7-4349-aadb-4ba027e8a99e",
+      "role": "assistant",
+      "content": [
+        {
+          "type": "text",
+          "text": "done"
+        }
+      ]
+    }
+  },
+  {
+    "type": "session_token_usage_changed"
+  },
+  {
+    "type": "agent_turn_completed",
+    "reason": "completed",
+    "turnId": "e391baff-8a07-4d0b-ac5f-e8625781735b"
+  },
+  {
+    "type": "droid_working_state_changed",
+    "newState": "idle"
+  }
+]

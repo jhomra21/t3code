@@ -31,6 +31,7 @@ const DRIVERS_WITH_REPLAY_FIXTURE_FILES = new Set([
   "claudeAgent",
   "codex",
   "cursor",
+  "droid",
   "fx",
   "grok",
   "kiro",

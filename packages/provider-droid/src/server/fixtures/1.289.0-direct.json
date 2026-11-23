@@ -1,0 +1,658 @@
+[
+  {
+    "type": "notification",
+    "notification": {
+      "type": "settings_updated"
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "mcp_status_changed"
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "droid_working_state_changed",
+      "newState": "streaming_assistant_message"
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "create_message",
+      "message": {
+        "id": "context-c1419a52-2eb2-49da-ab55-48e459b2c6a7",
+        "role": "user",
+        "content": [],
+        "visibility": "llm_only",
+        "createdAt": 1793472456492,
+        "updatedAt": 1793472456492,
+        "parentId": "root",
+        "seq": 0
+      }
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "create_message",
+      "message": {
+        "id": "c1419a52-2eb2-49da-ab55-48e459b2c6a7",
+        "role": "user",
+        "content": [],
+        "createdAt": 1793472456492,
+        "updatedAt": 1793472456492,
+        "interactionMode": "auto",
+        "userMessageSource": "sdk",
+        "parentId": "context-c1419a52-2eb2-49da-ab55-48e459b2c6a7",
+        "seq": 1
+      },
+      "requestId": "batch-1"
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "droid_working_state_changed",
+      "newState": "thinking"
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "mcp_status_changed"
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "session_token_usage_changed"
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "session_title_updated"
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "session_token_usage_changed"
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "droid_working_state_changed",
+      "newState": "streaming_assistant_message"
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "tool_call",
+      "toolUse": {
+        "type": "tool_use",
+        "id": "call_9Ca7dL1qd6io8Ii4BN2px1ur",
+        "name": "Execute",
+        "input": {}
+      }
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "tool_call",
+      "toolUse": {
+        "type": "tool_use",
+        "id": "call_9Ca7dL1qd6io8Ii4BN2px1ur",
+        "name": "Execute",
+        "input": {
+          "summary": "Read Git version"
+        }
+      }
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "tool_call",
+      "toolUse": {
+        "type": "tool_use",
+        "id": "call_9Ca7dL1qd6io8Ii4BN2px1ur",
+        "name": "Execute",
+        "input": {
+          "summary": "Read Git version",
+          "command": "git --version"
+        }
+      }
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "tool_call",
+      "toolUse": {
+        "type": "tool_use",
+        "id": "call_9Ca7dL1qd6io8Ii4BN2px1ur",
+        "name": "Execute",
+        "input": {
+          "summary": "Read Git version",
+          "command": "git --version",
+          "riskLevel": "low"
+        }
+      }
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "create_message",
+      "message": {
+        "id": "ef1bb76e-df82-4c53-b414-a2c4cd4c58ed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "call_9Ca7dL1qd6io8Ii4BN2px1ur",
+            "name": "Execute",
+            "input": {
+              "summary": "Read Git version",
+              "command": "git --version",
+              "riskLevel": "low"
+            }
+          }
+        ],
+        "createdAt": 1793472458619,
+        "updatedAt": 1793472458619,
+        "modelId": "custom:GPT-6 Luna-12",
+        "reasoningEffort": "low",
+        "userMessageSource": "sdk",
+        "parentId": "c1419a52-2eb2-49da-ab55-48e459b2c6a7",
+        "seq": 2
+      }
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "droid_working_state_changed",
+      "newState": "executing_tool"
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "tool_execution_phase_changed",
+      "toolUseId": "call_9Ca7dL1qd6io8Ii4BN2px1ur",
+      "toolName": "Execute",
+      "phase": "queued"
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "droid_working_state_changed",
+      "newState": "waiting_for_tool_confirmation"
+    }
+  },
+  {
+    "type": "request",
+    "id": "3e183f91-b88d-4efd-a9a3-5f07989a0cf3",
+    "method": "droid.request_permission",
+    "params": {
+      "toolUses": [
+        {
+          "toolUse": {
+            "type": "tool_use",
+            "id": "call_9Ca7dL1qd6io8Ii4BN2px1ur",
+            "name": "Execute",
+            "input": {
+              "summary": "Read Git version",
+              "command": "git --version",
+              "riskLevel": "low"
+            }
+          },
+          "confirmationType": "exec",
+          "details": {
+            "type": "exec",
+            "fullCommand": "git --version",
+            "command": "git",
+            "extractedCommands": ["git"],
+            "impactLevel": "low"
+          }
+        }
+      ],
+      "options": [
+        {
+          "label": "Yes, allow",
+          "value": "proceed_once",
+          "selectedColor": "#d78700"
+        },
+        {
+          "label": "Yes, and always allow low impact commands (file edits and read-only commands)",
+          "value": "proceed_always",
+          "selectedColor": "#d78700"
+        },
+        {
+          "label": "No, cancel",
+          "value": "cancel",
+          "selectedColor": "#d75f5f",
+          "selectedPrefix": "✕ "
+        }
+      ]
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "session_token_usage_changed"
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "droid_working_state_changed",
+      "newState": "executing_tool"
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "permission_resolved",
+      "requestId": "3e183f91-b88d-4efd-a9a3-5f07989a0cf3",
+      "toolUseIds": ["call_9Ca7dL1qd6io8Ii4BN2px1ur"],
+      "selectedOption": "proceed_once"
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "tool_execution_phase_changed",
+      "toolUseId": "call_9Ca7dL1qd6io8Ii4BN2px1ur",
+      "toolName": "Execute",
+      "phase": "executing"
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "tool_progress_update",
+      "toolUseId": "call_9Ca7dL1qd6io8Ii4BN2px1ur",
+      "toolName": "Execute",
+      "update": {
+        "type": "status",
+        "text": "",
+        "timestamp": 1793472458641,
+        "terminalId": "607077f5-db49-4da1-91b3-0b2449c4db88"
+      }
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "tool_progress_update",
+      "toolUseId": "call_9Ca7dL1qd6io8Ii4BN2px1ur",
+      "toolName": "Execute",
+      "update": {
+        "type": "status",
+        "text": "",
+        "timestamp": 1793472458814,
+        "terminalId": "607077f5-db49-4da1-91b3-0b2449c4db88",
+        "fullOutput": "git version 2.51.2.windows.1\n",
+        "exitCode": 0,
+        "signal": null
+      }
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "tool_result",
+      "toolUseId": "call_9Ca7dL1qd6io8Ii4BN2px1ur",
+      "messageId": "86393a3f-6b1d-4729-bf25-e6a3984ef842",
+      "content": "git version 2.51.2.windows.1\n\n\n[Process exited with code 0]",
+      "isError": false
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "create_message",
+      "message": {
+        "id": "tool-catalog-update-011731d5-492e-4988-b42b-79b5b24fafa3",
+        "role": "user",
+        "content": [],
+        "visibility": "llm_only",
+        "createdAt": 1793472459136,
+        "updatedAt": 1793472459136,
+        "parentId": "86393a3f-6b1d-4729-bf25-e6a3984ef842",
+        "seq": 4
+      }
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "droid_working_state_changed",
+      "newState": "streaming_assistant_message"
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "droid_working_state_changed",
+      "newState": "thinking"
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "droid_working_state_changed",
+      "newState": "streaming_assistant_message"
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "tool_call",
+      "toolUse": {
+        "type": "tool_use",
+        "id": "call_Z3HspriSWbbBPth9wffnl00p",
+        "name": "ApplyPatch",
+        "input": {}
+      }
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "tool_call",
+      "toolUse": {
+        "type": "tool_use",
+        "id": "call_Z3HspriSWbbBPth9wffnl00p",
+        "name": "ApplyPatch",
+        "input": {
+          "input": "*** Begin Patch\n*** Add"
+        }
+      }
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "tool_call",
+      "toolUse": {
+        "type": "tool_use",
+        "id": "call_Z3HspriSWbbBPth9wffnl00p",
+        "name": "ApplyPatch",
+        "input": {
+          "input": "*** Begin Patch\n*** Add File: probe.txt\n"
+        }
+      }
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "tool_call",
+      "toolUse": {
+        "type": "tool_use",
+        "id": "call_Z3HspriSWbbBPth9wffnl00p",
+        "name": "ApplyPatch",
+        "input": {
+          "input": "*** Begin Patch\n*** Add File: probe.txt\n+probe\n*** End Patch"
+        }
+      }
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "tool_call",
+      "toolUse": {
+        "type": "tool_use",
+        "id": "call_Z3HspriSWbbBPth9wffnl00p",
+        "name": "ApplyPatch",
+        "input": {
+          "input": "*** Begin Patch\n*** Add File: probe.txt\n+probe\n*** End Patch\n"
+        }
+      }
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "create_message",
+      "message": {
+        "id": "b66ee30d-0a66-47d1-b430-7e7c1424a701",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "call_Z3HspriSWbbBPth9wffnl00p",
+            "name": "ApplyPatch",
+            "input": {
+              "input": "*** Begin Patch\n*** Add File: probe.txt\n+probe\n*** End Patch\n"
+            }
+          }
+        ],
+        "createdAt": 1793472461989,
+        "updatedAt": 1793472461989,
+        "modelId": "custom:GPT-6 Luna-12",
+        "reasoningEffort": "low",
+        "userMessageSource": "sdk",
+        "parentId": "tool-catalog-update-011731d5-492e-4988-b42b-79b5b24fafa3",
+        "seq": 5
+      }
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "droid_working_state_changed",
+      "newState": "executing_tool"
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "tool_execution_phase_changed",
+      "toolUseId": "call_Z3HspriSWbbBPth9wffnl00p",
+      "toolName": "ApplyPatch",
+      "phase": "queued"
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "droid_working_state_changed",
+      "newState": "waiting_for_tool_confirmation"
+    }
+  },
+  {
+    "type": "request",
+    "id": "857efcac-be5e-4fe6-a830-ff189aa30cd4",
+    "method": "droid.request_permission",
+    "params": {
+      "toolUses": [
+        {
+          "toolUse": {
+            "type": "tool_use",
+            "id": "call_Z3HspriSWbbBPth9wffnl00p",
+            "name": "ApplyPatch",
+            "input": {
+              "input": "*** Begin Patch\n*** Add File: probe.txt\n+probe\n*** End Patch\n"
+            }
+          },
+          "confirmationType": "apply_patch",
+          "details": {
+            "type": "apply_patch",
+            "filePath": "/workspace/probe.txt",
+            "fileName": "probe.txt",
+            "patchContent": "*** Begin Patch\n*** Add File: probe.txt\n+probe\n*** End Patch\n",
+            "oldContent": "",
+            "newContent": "probe",
+            "files": [
+              {
+                "filePath": "/workspace/probe.txt",
+                "fileName": "probe.txt",
+                "operation": "create",
+                "oldContent": "",
+                "newContent": "probe"
+              }
+            ]
+          }
+        }
+      ],
+      "options": [
+        {
+          "label": "Yes, allow",
+          "value": "proceed_once",
+          "selectedColor": "#d78700"
+        },
+        {
+          "label": "Yes, and always allow low impact commands (file edits and read-only commands)",
+          "value": "proceed_always",
+          "selectedColor": "#d78700"
+        },
+        {
+          "label": "No, cancel",
+          "value": "cancel",
+          "selectedColor": "#d75f5f",
+          "selectedPrefix": "✕ "
+        }
+      ]
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "session_token_usage_changed"
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "droid_working_state_changed",
+      "newState": "executing_tool"
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "permission_resolved",
+      "requestId": "857efcac-be5e-4fe6-a830-ff189aa30cd4",
+      "toolUseIds": ["call_Z3HspriSWbbBPth9wffnl00p"],
+      "selectedOption": "proceed_once"
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "tool_execution_phase_changed",
+      "toolUseId": "call_Z3HspriSWbbBPth9wffnl00p",
+      "toolName": "ApplyPatch",
+      "phase": "executing"
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "tool_result",
+      "toolUseId": "call_Z3HspriSWbbBPth9wffnl00p",
+      "messageId": "cd8be8d3-fe29-448f-bf7e-8ef49c8ce8f7",
+      "content": "{\"success\":true,\"files\":[{\"file_path\":\"/workspace/probe.txt\",\"display_operation\":\"create\",\"content\":\"probe\"}],\"file_path\":\"/workspace/probe.txt\",\"display_operation\":\"create\",\"content\":\"probe\"}",
+      "isError": false
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "droid_working_state_changed",
+      "newState": "streaming_assistant_message"
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "droid_working_state_changed",
+      "newState": "thinking"
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "droid_working_state_changed",
+      "newState": "streaming_assistant_message"
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "assistant_text_delta",
+      "messageId": "23525bc0-21a1-42af-8be7-9fe529316106",
+      "blockIndex": 0,
+      "textDelta": "done"
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "assistant_text_complete",
+      "messageId": "23525bc0-21a1-42af-8be7-9fe529316106",
+      "blockIndex": 0
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "create_message",
+      "message": {
+        "id": "23525bc0-21a1-42af-8be7-9fe529316106",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "text",
+            "text": "done"
+          }
+        ],
+        "createdAt": 1793472464330,
+        "updatedAt": 1793472464330,
+        "modelId": "custom:GPT-6 Luna-12",
+        "reasoningEffort": "low",
+        "userMessageSource": "sdk",
+        "openaiMessageId": "msg_05d456d9bb2db123016ae637cfbe4c87d1900d8b5b6ad31c8a",
+        "openaiPhase": "final_answer",
+        "parentId": "cd8be8d3-fe29-448f-bf7e-8ef49c8ce8f7",
+        "seq": 7
+      }
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "session_token_usage_changed"
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "agent_turn_completed",
+      "reason": "completed",
+      "turnId": "c1419a52-2eb2-49da-ab55-48e459b2c6a7",
+      "durationMs": 7985
+    }
+  },
+  {
+    "type": "notification",
+    "notification": {
+      "type": "droid_working_state_changed",
+      "newState": "idle",
+      "backgroundWork": 0
+    }
+  }
+]

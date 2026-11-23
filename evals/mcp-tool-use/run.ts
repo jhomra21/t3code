@@ -85,6 +85,7 @@ import {
   CLAUDE_PROVIDER,
   makeClaudeQueryOptions,
 } from "../../apps/server/src/orchestration-v2/Adapters/ClaudeAdapterV2.ts";
+import { droidSystemPromptAppend } from "../../packages/provider-droid/src/server/adapter.ts";
 import { proxyConfig } from "../shared/proxy.ts";
 import { changeRequestsCreatedBy } from "../../apps/server/src/orchestration-v2/PullRequestSyncReactor.ts";
 import { type BackgroundWait, makeBackgroundWait } from "./backgroundWait.ts";
@@ -132,6 +133,7 @@ const PROXY_SHELL_MODELS = ["gpt-6-luna", "gpt-6.1-terra"] as const;
 type ShellModel = PricedModel | (typeof PROXY_SHELL_MODELS)[number];
 const isPricedModel = (model: ShellModel): model is PricedModel => model in PRICES;
 const T3_PREFIX = "mcp__t3-code__";
+const DROID_PREFIX = "t3-code___";
 const RUNTIME_MARKER = "<runtime_info>";
 const TOOL_LOADED = "Tool loaded.";
 
@@ -349,7 +351,7 @@ export const McpToolUseCase = Schema.Struct({
   setup: Schema.Struct({
     role: Schema.Literals(["top", "delegated-child", "native-subagent"]),
     /** Runs only on this harness, for cases whose right answer depends on it. */
-    harness: Schema.optional(Schema.Literals(["claude", "codex"])),
+    harness: Schema.optional(Schema.Literals(["claude", "codex", "droid"])),
     /** The Linked environments beta is on, so T3 lists its link tools. */
     linkedEnvironments: Schema.optional(Schema.Boolean),
     /** false: the project is on no forge T3 reads, so T3 hides its forge tools. */
@@ -462,7 +464,8 @@ const toolResult = (id: string, content: unknown): Block => ({
 });
 const texts = (content: typeof Content.Type) =>
   typeof content === "string" ? [content] : content.flatMap((block) => block.text ?? []);
-const isT3Name = (name: string) => name.startsWith(T3_PREFIX) || name.startsWith("mcp__t3_code__");
+const isT3Name = (name: string) =>
+  name.startsWith(T3_PREFIX) || name.startsWith("mcp__t3_code__") || name.startsWith(DROID_PREFIX);
 const hasTool = (tools: ReadonlyArray<ApiTool>, name: string) =>
   tools.some((tool) => tool.name === name);
 
@@ -481,7 +484,7 @@ const CODEX_NAMES: Readonly<Record<string, string>> = {
 export const normalizeToolName = (name: string) => {
   const bare = name.slice(name.lastIndexOf(".") + 1);
   return isT3Name(bare)
-    ? bare.slice(T3_PREFIX.length)
+    ? bare.slice(bare.startsWith(DROID_PREFIX) ? DROID_PREFIX.length : T3_PREFIX.length)
     : (CODEX_NAMES[bare] ?? bare.slice(bare.lastIndexOf("_") + 1));
 };
 export const normalizeToolInput = (name: string, input: unknown) => {
@@ -726,12 +729,15 @@ export const buildBase = (
     readonly deviceAccess?: boolean;
     /** false: the thread has no agent browser access, so T3's text leaves the browser out. */
     readonly browserAccess?: boolean;
+    readonly droid?: boolean;
     /** The Agent feedback mode: on, T3 lists its tools and its text includes the mode's line. */
     readonly agentFeedback?: Contracts.AgentFeedbackMode;
     readonly arm?: Arm;
   },
 ) => {
-  const t3 = visibleT3Tools(options);
+  const t3 = visibleT3Tools(options).map((tool) =>
+    options.droid ? { ...tool, name: `${DROID_PREFIX}${normalizeToolName(tool.name)}` } : tool,
+  );
   const firstAssistant = template.messages.findIndex((message) => message.role === "assistant");
   const head = template.messages.slice(0, firstAssistant === -1 ? undefined : firstAssistant);
   const systemTexts = [
@@ -744,7 +750,9 @@ export const buildBase = (
   if (systemTexts.filter((value) => value.includes(RUNTIME_MARKER)).length !== 1 || !deferredList) {
     throw new Error(`The template needs one ${RUNTIME_MARKER} block and a deferred tool list.`);
   }
-  const nativeDeferred = deferredList.split("\n").filter((name) => name && !isT3Name(name));
+  const nativeDeferred = deferredList
+    .split("\n")
+    .filter((name) => name && !isT3Name(name) && !(options.droid && name === "Agent"));
   const names = [
     ...nativeDeferred,
     ...t3.filter((tool) => !alwaysLoaded.has(tool.name)).map((tool) => tool.name),
@@ -754,10 +762,12 @@ export const buildBase = (
   const { model } = options;
   const append = options.nativeSubagent
     ? ""
-    : forArm(
-        t3SystemAppend(model, options.deviceAccess, options.browserAccess, options.agentFeedback),
-        options.arm,
-      );
+    : options.droid
+      ? droidSystemPromptAppend(true)
+      : forArm(
+          t3SystemAppend(model, options.deviceAccess, options.browserAccess, options.agentFeedback),
+          options.arm,
+        );
   const modelLine = `You are powered by the model named ${MODELS[model]}. The exact model ID is ${model}.`;
   const joined = systemTexts.join("\n");
   // The capture's home directory names its user. Cases use `/home/user` paths instead.
@@ -798,7 +808,26 @@ export const buildBase = (
       date: /Today's date is ([\d-]+)/.exec(reminders.join("\n"))?.[1],
     },
     nativeTools: [
-      ...template.tools.filter((tool) => !isT3Name(tool.name)),
+      ...template.tools.filter(
+        (tool) => !isT3Name(tool.name) && !(options.droid && tool.name === "Agent"),
+      ),
+      ...(options.droid
+        ? [
+            {
+              name: "Task",
+              description: "Launch a subagent for a bounded task.",
+              input_schema: {
+                type: "object",
+                properties: {
+                  subagent_type: stringProperty("The subagent type"),
+                  description: stringProperty("A short description"),
+                  prompt: stringProperty("The task to perform"),
+                },
+                required: ["subagent_type", "description", "prompt"],
+              },
+            },
+          ]
+        : []),
       ...t3.filter((tool) => alwaysLoaded.has(tool.name)),
     ],
     /** Tools ToolSearch loads: T3 tools from source, and native tools the template only names. */
@@ -3233,7 +3262,9 @@ const main = Effect.gen(function* () {
   const selectedCases = cases.filter(
     ({ id, setup }) =>
       (wanted === undefined || wanted.includes(id)) &&
-      (setup.harness === undefined || setup.harness === harness),
+      (setup.harness === undefined ||
+        setup.harness === harness ||
+        (setup.harness === "droid" && !codex)),
   );
   if (selectedCases.length === 0) return yield* Effect.die(new Error("No case matches --case."));
   // The raw arm has no PR or issue tools, so a case whose prior turns call one cannot be replayed.
@@ -3291,6 +3322,7 @@ const main = Effect.gen(function* () {
     browserAccess: boolean,
     links: boolean,
     forge: boolean,
+    droid = false,
     agentFeedback: Contracts.AgentFeedbackMode = "off",
   ): Effect.Effect<Base, Schema.SchemaError> =>
     codex
@@ -3323,6 +3355,7 @@ const main = Effect.gen(function* () {
               browserAccess,
               agentFeedback,
               arm: flags.arm,
+              droid,
             });
             return role === "native-subagent"
               ? Effect.promise(() =>
@@ -3333,14 +3366,15 @@ const main = Effect.gen(function* () {
         );
   // Codex has no native subagents; its cases with that role run as top-level threads.
   const baseKey = ({ setup }: McpToolUseCase) =>
-    `${codex && setup.role === "native-subagent" ? "top" : setup.role}:${setup.world?.deviceAgentAccess !== false}:${setup.world?.browserAgentAccess !== false}:${setup.linkedEnvironments === true}:${setup.forge !== false}:${setup.world?.agentFeedback ?? "off"}`;
+    `${codex && setup.role === "native-subagent" ? "top" : setup.role}:${setup.world?.deviceAgentAccess !== false}:${setup.world?.browserAgentAccess !== false}:${setup.linkedEnvironments === true}:${setup.forge !== false}:${setup.harness === "droid"}:${setup.world?.agentFeedback ?? "off"}`;
   const base = yield* buildFor("top", true, true, false, true);
-  const bases = new Map<string, Base>([["top:true:true:false:true:off", base]]);
+  const bases = new Map<string, Base>([["top:true:true:false:true:false:off", base]]);
   for (const testCase of selected) {
     const key = baseKey(testCase);
     if (bases.has(key)) continue;
-    const [role = "top", device, browser, links, forge, feedback] = key.split(":") as [
+    const [role = "top", device, browser, links, forge, droid, feedback] = key.split(":") as [
       McpToolUseCase["setup"]["role"],
+      string,
       string,
       string,
       string,
@@ -3355,6 +3389,7 @@ const main = Effect.gen(function* () {
         browser === "true",
         links === "true",
         forge === "true",
+        droid === "true",
         feedback as Contracts.AgentFeedbackMode,
       ),
     );

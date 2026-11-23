@@ -38,6 +38,10 @@ including some personal Google accounts, do not. Without it, an Antigravity thre
 Muse Code offers only **Supervised** and **Full access**. A Muse thread already set to another mode
 runs in **Supervised**.
 
+Factory Droid supports all four modes and maps them to its native autonomy levels:
+**Supervised** to **Off**, **Auto-accept edits** to **Low**, **Auto** to **Medium**,
+and **Full access** to **High**.
+
 T3 Code offers no **Auto-accept edits** for fx, and **Full access** only with fx 0.0.14 or later. An fx
 thread set to a mode its fx lacks runs in **Supervised**.
 
